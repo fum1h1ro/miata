@@ -1,0 +1,40 @@
+require 'rake/clean'
+
+BUILD_DIR = "_build"
+BUILD_DIR_DEBUG = "#{BUILD_DIR}/debug"
+BUILD_DIR_XCODE = "#{BUILD_DIR}/xcode"
+
+CLEAN.include(BUILD_DIR)
+
+directory BUILD_DIR
+directory BUILD_DIR_DEBUG
+directory BUILD_DIR_XCODE
+
+namespace :cmake do
+  desc "Generate Debug build files"
+  task :debug => [BUILD_DIR_DEBUG] do
+    cd BUILD_DIR_DEBUG do
+      sh "cmake ../.."
+    end
+  end
+  desc "Generate Xcode build files"
+  task :xcode => [BUILD_DIR_XCODE] do
+    cd BUILD_DIR_XCODE do
+      sh "cmake -G Xcode ../.."
+      sh "open ."
+    end
+  end
+end
+
+namespace :build do
+  desc "Build Debug"
+  task :debug => ["cmake:debug"] do
+    cd BUILD_DIR_DEBUG do
+      sh "make"
+    end
+  end
+end
+
+
+
+

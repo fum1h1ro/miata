@@ -1,0 +1,10 @@
+@COMPILE_FLAGS@
+-xc++
+-ObjC
+-I.
+-Wall
+-Wstrict-prototypes
+-Wno-unknown-pragmas
+-Wconversion
+-std=c++23
+-fobjc-arc
