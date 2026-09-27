@@ -5,6 +5,7 @@
 #include "platform.h"
 #include "models/Model.h"
 #include "views/View.h"
+#include "views/FilterListDialog.h"
 #include "Script.h"
 #include "KeyBinding.h"
 #include "Application.h"
@@ -669,6 +670,35 @@ namespace miata {
             app.view_->RequestDialog(dialog_ptr);
             return 1;
         }
+        else if (type_string == "filterlist") {
+            auto title = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "title", "");
+            auto message = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "message", "");
+
+            std::vector<std::string> items;
+            lua_getfield(L, 2, "items");
+            if (lua_istable(L, -1)) {
+                int n = (int)lua_rawlen(L, -1);
+                items.reserve((size_t)n);
+                for (int i = 1; i <= n; i++) {
+                    lua_rawgeti(L, -1, i);
+                    if (lua_isstring(L, -1)) items.push_back(lua_tostring(L, -1));
+                    lua_pop(L, 1);
+                }
+            }
+            lua_pop(L, 1);
+
+            auto dialog = std::make_shared<views::FilterListDialog>(
+                [](views::IDialog&) {},
+                views::FilterListDialog::arguments{
+                    .title_ = title,
+                    .message_ = message,
+                    .items_ = std::move(items),
+                }
+            );
+            auto dialog_ptr = Script::PushSharedUserdata<views::FilterListDialog>(L, dialog);
+            app.view_->RequestDialog(dialog_ptr);
+            return 1;
+        }
 
         luaL_error(L, "unknown dialog type");
         return 0;
@@ -734,6 +764,16 @@ namespace miata {
             }
             lua_setfield(L, -2, "selects");
 
+            return 1;
+        }
+        else if (type_string == "filterlist") {
+            auto ud = static_cast<std::shared_ptr<views::FilterListDialog>*>(lua_touserdata(L, 1));
+            auto& result = (*ud)->Result();
+            if (result) {
+                lua_pushstring(L, result->c_str());
+            } else {
+                lua_pushnil(L);
+            }
             return 1;
         }
         return 0;

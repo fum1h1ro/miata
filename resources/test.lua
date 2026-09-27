@@ -106,6 +106,22 @@ Miata.command.bind("n", "s", function()
     end
 end)
 
+Miata.command.bind("n", "H", function()
+    local items = {}
+    for i = 1, 3000 do
+        items[i] = string.format("/path/to/some/file_%d.txt", i)
+    end
+    table.insert(items, "/Users/example/デスクトップ/日本語のファイル名.txt")
+    local picked = Miata.command.dialog_filter_list({
+        items = items, title = "テスト", message = "選択してください"
+    })
+    if picked then
+        print("picked: " .. picked)
+    else
+        print("cancelled")
+    end
+end)
+
 
 
 

@@ -16,58 +16,65 @@ rake run:debug        # Debug ビルドして実行
 rake run:release      # Release ビルドして実行
 ```
 
-成果物は `_build/debug/miata.app` および `_build/release/miata.app` に生成される。
+成果物は `_build/debug/Miata.app` および `_build/release/Miata.app` に生成される。
 
 ## アーキテクチャ概要
 
-macOS 専用のファイルブラウザアプリケーション「Miata」。sokol + Dear ImGui でレンダリングし、Lua スクリプトでキーバインドとコマンドを定義する。
+macOS 専用のファイルブラウザアプリケーション「Miata」。**フルネイティブ AppKit**（`NSWindow`/`NSView`/`NSScrollView`/`NSTextField`/`NSButton`/`NSPopUpButton` 等）で描画し、Lua スクリプトでキーバインドとコマンドを定義する。
+
+以前は sokol + Dear ImGui でレンダリングしていたが、**現在は完全にネイティブ AppKit へ移行済み**。`packages/sokol`・`packages/imgui` は Git submodule として存在するが、`CMakeLists.txt` はどちらもビルド・リンク対象に含めていない（`add_subdirectory(packages)` は `lua` のみをビルドする）。sokol/ImGui 関連の API（`simgui_*`、`sapp_*`、`MTKView`、`CADisplayLink` 等）はコードベース中に一切登場しない。
 
 **技術スタック:**
-- C++23、Objective-C++（macOS バインディング）
-- レンダリング: sokol（Metal バックエンド）+ Dear ImGui
+- C++23、Objective-C++（`.mm`。macOS バインディングとAppKitを直接扱う層はすべて `.mm`）
+- レンダリング: フルネイティブ AppKit（`drawRect:` によるカスタム描画、`NSScrollView` 等の標準コントロール）
 - スクリプト: Lua（コルーチンベースのダイアログ制御）
-- リアクティブ: RxCpp（`ReactiveProperty` 等のユーティリティ）
-- 外部依存はすべて `packages/` に Git submodule として存在
+- リアクティブ: RxCpp（`ReactiveProperty` 等のユーティリティ、`FileListModel` のパス変更通知などに使用）
+- 外部依存はすべて `packages/` に Git submodule として存在（実際にビルドされるのは `lua` のみ）
 
-**MVC 構成:**
-- `src/models/` — データモデル（ファイルリスト、ブラウザ状態）
-- `src/views/` — UI レイヤー（`View`、`BrowserView`、`Dialog`）
-- `src/widgets/` — 汎用 UI ウィジェット
+**構成:**
+- `src/models/` — データモデル（`FileListModel`、`FileEntryModel`、`BrowserModel`）
+- `src/views/` — UI レイヤー。`View`（ダイアログキュー管理・ブラウザ操作の起点）、`BrowserView`（左右ペインの `NSSplitView` コンテナ）、`FileListView`（ファイル一覧本体。`NSScrollView` + 自前 `NSView.drawRect` で描画）、`Dialog`（`IDialog`/`DialogPanel` によるダイアログ基盤）
+- `src/widgets/` は存在しない（過去のドキュメントの残骸。汎用ウィジェットは今のところ `views/` 直下に個別実装されている）
+- `platforms/` — OS 固有実装（`.mm`）。現状 macOS 用の `osx.mm` と `main.mm` のみ
 
 **主要クラスの役割:**
 
 | ファイル | 役割 |
 |---------|------|
-| `Application.cc/h` | フレームループ、イベント処理、コマンド登録（シングルトン） |
-| `Script.cc/h` | Lua VM 管理、C++ 関数登録、`resources/` の読み込み |
+| `Application.cc/h` | `pl_start_timer` による 0.05 秒周期の更新処理（`Update()`。旧 `FrameImpl` 相当だが実際のフレームループではない）、キーイベント処理、`Miata.command.*`/`Miata._private.*` のコマンド登録（シングルトン） |
+| `Script.cc/h` | Lua VM 管理、C++ 関数登録（`RegisterFunctions`）、`resources/` の読み込み、コルーチン駆動（`InvokeRefFunctionOnThread`/`Update`） |
 | `KeyBinding.h` | キーストローク解析、モード別（Normal/Dialog）キーマップ管理 |
-| `views/View.h` | ビューコンテナ、ダイアログスタック管理 |
-| `views/Dialog.cc/h` | ダイアログ基底クラス（confirm/yes_no/input/custom） |
+| `views/View.h/.mm` | ダイアログキュー管理（`RequestDialog`/`CheckDialogState`）、ブラウザ操作へのキー入力ルーティング |
+| `views/Dialog.h/.mm` | ダイアログ基盤。`IDialog`（confirm/yesno/inputtext/custom/filterlist の基底）と `DialogPanel`（実体となる非モーダル NSView オーバーレイ）。詳細は後述 |
+| `views/FileListView.h/.mm` | ファイル一覧の描画・スクロール・キーボードカーソル移動（`NSScrollView` + 自前描画） |
 | `misc.h` | `Flags`、`ReactiveProperty`、`MessageBroker` などのユーティリティ |
-| `platform.h` | macOS 固有のフォント検索・ファイル読み込み |
+| `platform.h` | OS 依存処理の抽象境界（`pl_*` 関数群の宣言）。色・フォント・ダイアログ用構造体・ファイル操作・プロセス起動など |
+| `platforms/osx.mm` | `platform.h` の macOS 実装。AppKit 型はこの層（と `views/*.mm`）にのみ閉じ込め、ヘッダ（`.h`）には持ち込まない規約 |
 
 **Lua スクリプト:**
 - `resources/base.lua` — コアユーティリティとダイアログヘルパー定義
 - `resources/test.lua` — キーバインド設定とコマンド定義
 
-C++ 側は `Miata.command.*`、`Miata.keymap.*` 等の名前空間で Lua 関数を登録し、スクリプト側から呼び出す。ダイアログはコルーチンで非同期制御される。
+C++ 側は `Miata.command.*`（`Application.cc` の `commands[]`）と `Miata._private.*`（同 `privates[]`）の名前空間で Lua 関数を登録し、スクリプト側から呼び出す。ダイアログはコルーチンで非同期制御される（後述）。
 
-## sokol アップデート時の注意点
+## ダイアログの仕組み（NSAlert は使っていない）
 
-sokol を更新すると破壊的変更が入る場合がある。確認済みの変更点：
+ダイアログは `NSAlert`/`runModal` を一切使わない。実体は `DialogPanel`（`views/Dialog.h/.mm`）が生成する、角丸背景つきの**非モーダルな `NSView`** で、メインウィンドウの `contentView` に直接 `addSubview` される（OS のイベントループは奪わないため、ネストしたイベントループ用の再入ガードは不要）。
 
-- **MTKView の廃止（Metal バックエンド）**：`contentView` は `NSView` + `CADisplayLink` になった。`mtk_view()` は削除済み。`ns_content_view()` を使う。
-- **フォント API の変更**：`simgui_destroy_fonts_texture` / `simgui_create_fonts_texture` は廃止。`simgui_setup` で `.no_default_font = true` を指定し、`AddFontFromFileTTF()` を呼ぶだけでよい。
-- **FPS / 一時停止制御**：`pl_start_update` / `pl_stop_update` / `pl_force_update` は sokol 内部の CADisplayLink にアクセスできないため現在 no-op。
+**Lua ⇔ C++ の連携パターン**（`resources/base.lua` の各 `dialog_*` 関数、`Application.cc` の `lua_private_dialog_*` を参照）:
+1. Lua が `Miata._private.dialog_open(type, opts)` を呼ぶと、対応する `IDialog` 派生（`ConfirmDialog`/`YesNoDialog`/`InputTextDialog`/`CustomDialog`/`FilterListDialog`）が生成され、`View` のキューに積まれ、Lua には userdata の「ハンドル」が返る。
+2. Lua 側は `coroutine.yield()` を挟みつつ `Miata._private.dialog_is_open(handle)` をポーリングし続ける。これは `Application::Update()`（0.05 秒タイマー駆動）が毎ティック `Script::Update()` でコルーチンを再開することで進む、**タイマー駆動の疑似同期**であり、C++/OS レベルでは非同期。
+3. ダイアログが閉じると `Miata._private.dialog_result(handle, type)` で結果（文字列・真偽値・テーブル・nil 等）を取得する。
 
-## ネイティブダイアログ（NSAlert ベース）
+**既存のダイアログ種別:**
 
-ImGui の InputText は macOS IME（日本語入力）が正常動作しないため、テキスト入力・カスタムダイアログは `NSAlert` ネイティブ実装に移行済み。
-
-| 関数（Lua） | 実装 | 説明 |
-|------------|------|------|
-| `Miata.command.dialog_input(message, initial)` | `pl_show_input_dialog()` | NSAlert + NSTextField。コルーチン不要 |
-| `Miata.command.dialog_custom(spec)` | `pl_show_custom_dialog()` | NSAlert + チェックボックス・ポップアップ |
+| 関数（Lua） | type 文字列 | 説明 |
+|------------|------------|------|
+| `dialog_confirm(message, button_text)` | `"confirm"` | OK ボタンのみ |
+| `dialog_yes_no(message, default_focus, yes_text, no_text)` | `"yesno"` | YES/NO ボタン |
+| `dialog_input(message, initial)` | `"inputtext"` | `NSTextField` 1つ。戻り値は文字列 or nil |
+| `dialog_custom(spec)` | `"custom"` | チェックボックス・ポップアップ・複数ボタン |
+| `dialog_filter_list(spec)` | `"filterlist"` | 大量の文字列(`items`)から `fzf` 絞り込みで1件選択。戻り値は文字列 or nil |
 
 `dialog_custom` の `spec` テーブル形式：
 ```lua
@@ -81,10 +88,10 @@ ImGui の InputText は macOS IME（日本語入力）が正常動作しない�
 -- 戻り値: { button=1, checkboxes={false}, selects={2} } または nil
 ```
 
-**注意**：`[NSAlert runModal]` はネストされたイベントループを起動するため、`Application::FrameImpl()` に再入ガード（`frame_running_`）が入っている。
+**注意（テキストフィールドとキー入力の関係）**：`NSTextField` がダイアログ内で first responder になっている間（`dialog_input`/`dialog_filter_list` 表示中など）、`MiataRootView::keyDown:`（`platforms/osx.mm`）は一切呼ばれない。つまり通常のキーバインド経路（`KeyBindingMap::Dialog` → `IDialog::Navigate()` → `DialogPanel::NavigateUp/Down/...`）はテキストフィールドには効かない。矢印キー/Enter/Escape をテキスト入力と共存させる必要がある場合は、`FilterListDialog.mm` のように `NSTextFieldDelegate` の `control:textView:doCommandBySelector:`（IME 変換中は呼ばれないため日本語入力と安全に共存できる）で個別に横取りする。
 
 ## C++ から Lua へ関数を登録する手順
 
-1. `Application.h` に `static int lua_XXX(lua_State* L)` を追加
-2. `Application.cc` の `privates[]` または `commands[]` に `{ "name", lua_XXX }` を追加
-3. `platform.h` / `osx.mm` にプラットフォーム実装を追加（Objective-C++ は `.mm`）
+1. `Application.h` の `Application` クラスに `static int lua_command_XXX(lua_State* L)`（`Miata.command.*` 用）または `static int lua_private_XXX(lua_State* L)`（`Miata._private.*` 用）を追加
+2. `Application.cc` の `commands[]`（`Miata.command` 用）または `privates[]`（`Miata._private` 用）に `{ "name", lua_command_XXX }` を追加
+3. OS 依存の実装が必要な場合は `platform.h` に `pl_*` 関数を宣言し、`platforms/osx.mm` に実装を追加（AppKit 型はここか `views/*.mm` にのみ閉じ込め、`.h` には持ち込まない）

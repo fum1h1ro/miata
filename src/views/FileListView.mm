@@ -4,6 +4,7 @@
 #include "FileListView.h"
 #include "../platform.h"
 #include "../Config.h"
+#include "NSColorUtil.h"
 
 @interface _MiataFileListNSView : NSView
 @property (nonatomic, assign) miata::views::FileListView* owner;
@@ -77,11 +78,6 @@ namespace {
     CGFloat HeaderHeight()
     {
         return Config::FontSize() + 1 + kHeaderVerticalMargin;
-    }
-
-    NSColor* ToNSColor(const Color4f& c)
-    {
-        return [NSColor colorWithRed:c.r green:c.g blue:c.b alpha:c.a];
     }
 
     // Miata.config.set_font(name) で指定されたフォントを使う。未指定、または

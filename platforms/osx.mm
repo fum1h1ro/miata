@@ -142,6 +142,72 @@ void pl_start_timer(double interval_seconds, std::function<void()> callback)
     }];
 }
 
+std::optional<std::filesystem::path> pl_find_executable(const std::string& name)
+{
+    @autoreleasepool {
+        NSFileManager* fm = [NSFileManager defaultManager];
+        auto is_executable = [&](const std::filesystem::path& candidate) {
+            return (bool)[fm isExecutableFileAtPath:@(candidate.c_str())];
+        };
+
+        NSString* path_env = [[NSProcessInfo processInfo].environment objectForKey:@"PATH"];
+        if (path_env) {
+            for (NSString* dir in [path_env componentsSeparatedByString:@":"]) {
+                if (dir.length == 0) continue;
+                std::filesystem::path candidate = std::filesystem::path(dir.UTF8String) / name;
+                if (is_executable(candidate)) return candidate;
+            }
+        }
+
+        // GUIアプリ起動時はログインシェルのPATH(Homebrew等)を継承しないことが多いため、
+        // 主要なインストール先を直接確認する。
+        for (const char* dir : {"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"}) {
+            std::filesystem::path candidate = std::filesystem::path(dir) / name;
+            if (is_executable(candidate)) return candidate;
+        }
+        return std::nullopt;
+    }
+}
+
+std::expected<ProcessRunResult, std::string> pl_run_process(
+    const std::filesystem::path& executable,
+    const std::vector<std::string>& args,
+    const std::filesystem::path& stdin_file)
+{
+    @autoreleasepool {
+        NSFileHandle* input = [NSFileHandle fileHandleForReadingAtPath:@(stdin_file.c_str())];
+        if (!input) {
+            return std::unexpected(std::format("stdin file not readable: {}", stdin_file.string()));
+        }
+
+        NSTask* task = [[NSTask alloc] init];
+        task.executableURL = [NSURL fileURLWithPath:@(executable.c_str())];
+        NSMutableArray<NSString*>* ns_args = [NSMutableArray arrayWithCapacity:args.size()];
+        for (auto& a : args) [ns_args addObject:@(a.c_str())];
+        task.arguments = ns_args;
+        task.standardInput = input;
+        NSPipe* output_pipe = [NSPipe pipe];
+        task.standardOutput = output_pipe;
+        task.standardError = [NSFileHandle fileHandleWithNullDevice];
+
+        NSError* error = nil;
+        if (![task launchAndReturnError:&error]) {
+            return std::unexpected(std::string(error.localizedDescription.UTF8String));
+        }
+
+        // 標準出力を先に読み切ってから waitUntilExit する。
+        // 先に待ってしまうと、出力がパイプのバッファを超えた場合に
+        // 子プロセスと親プロセスが互いを待ち続けて止まる(デッドロック)。
+        NSData* output_data = [output_pipe.fileHandleForReading readDataToEndOfFile];
+        [task waitUntilExit];
+
+        ProcessRunResult result;
+        result.exit_code = task.terminationStatus;
+        result.stdout_text = std::string((const char*)output_data.bytes, output_data.length);
+        return result;
+    }
+}
+
 std::filesystem::path pl_find_font_filename(const std::string& font_name)
 {
     @autoreleasepool {

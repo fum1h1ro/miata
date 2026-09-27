@@ -45,6 +45,18 @@ Miata = {
             end
             return Miata._private.dialog_result(handle, "custom")
         end,
+        -- items: 文字列の配列(必須)。title/message: 省略可。
+        -- 例: Miata.command.dialog_filter_list({ items = history, title = "履歴" })
+        -- 戻り値は選択した文字列、キャンセル時はnil。
+        dialog_filter_list = function(spec)
+            local handle = Miata._private.dialog_open("filterlist", spec)
+            coroutine.yield()
+            coroutine.yield()
+            while Miata._private.dialog_is_open(handle) do
+                coroutine.yield()
+            end
+            return Miata._private.dialog_result(handle, "filterlist")
+        end,
         make_folder = function()
             local name = Miata.command.dialog_input("新しいフォルダ名を入力してください", "")
             if name and name ~= "" then

@@ -292,6 +292,22 @@ void DialogPanel::AddTextField(const std::string& initial)
     impl_->text_field = field;
 }
 
+void DialogPanel::SetTextFieldDelegate(void* delegate)
+{
+    if (!impl_->text_field) return;
+    impl_->text_field.delegate = (__bridge id<NSTextFieldDelegate>)delegate;
+}
+
+void DialogPanel::AddCustomView(void* native_view, float height)
+{
+    impl_->EnsureBackground();
+    NSView* view = (__bridge NSView*)native_view;
+    CGFloat avail = impl_->panel_width - kPadding * 2;
+    view.frame = NSMakeRect(kPadding, impl_->cursor_y, avail, (CGFloat)height);
+    [impl_->background addSubview:view];
+    impl_->cursor_y += (CGFloat)height + kRowSpacing;
+}
+
 bool DialogPanel::GetCheckbox(int id) const
 {
     for (auto& f : impl_->focusables) {
