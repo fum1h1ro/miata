@@ -28,6 +28,10 @@ namespace miata::models {
         {
             return name_;
         }
+        inline std::filesystem::path Path() const
+        {
+            return raw_.path();
+        }
         inline const std::string& Basename() const
         {
             return basename_;

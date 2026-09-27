@@ -7,8 +7,6 @@
 
 
 namespace miata {
-    Script* Script::instance_ = nullptr;
-
     Script::Script()
     {
         L_ = lua_newstate(lua_Alloc, nullptr, 0);
@@ -21,8 +19,6 @@ namespace miata {
     Script::~Script()
     {
         lua_close(L_);
-        SOKOL_ASSERT(instance_ != nullptr);
-        instance_ = nullptr;
     }
 
     void* Script::lua_Alloc(void* ud, void* ptr, size_t osize, size_t nsize)

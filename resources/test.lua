@@ -3,63 +3,106 @@ Miata.config.color.normal_text = "#aaff55ff"
 Miata.config.color.normal_file = "#ffffffff"
 Miata.config.color.directory = "#00ffaaff"
 
-
-
-
-print("HOGE")
-print("FUGA")
-local a = 1
-print(a)
+local command <const> = Miata.command
 
 Miata.util.pp("HOGE")
 Miata.util.pp(Miata)
 
-Miata.command.bind("", "j", function()
+command.bind("nd", "j", function()
     Miata.command.navigate_down()
 end)
-Miata.command.bind("", "k", function()
+Miata.command.bind("nd", "k", function()
     Miata.command.navigate_up()
 end)
-Miata.command.bind("", "h", function()
+Miata.command.bind("nd", "h", function()
     Miata.command.navigate_left()
 end)
-Miata.command.bind("", "l", function()
+Miata.command.bind("nd", "l", function()
     Miata.command.navigate_right()
 end)
-Miata.command.bind("", "<C-d>", function()
+Miata.command.bind("n", "<C-d>", function()
     Miata.command.navigate_down(10)
 end)
-Miata.command.bind("", "<C-u>", function()
+Miata.command.bind("n", "<C-u>", function()
     Miata.command.navigate_up(10)
 end)
-Miata.command.bind("", "<down>", function()
+Miata.command.bind("n", "<down>", function()
     Miata.command.navigate_down()
 end)
-Miata.command.bind("", "<up>", function()
+Miata.command.bind("N", "<up>", function()
     Miata.command.navigate_up()
 end)
-Miata.command.bind("", "<left>", function()
+Miata.command.bind("n", "<left>", function()
     Miata.command.navigate_left()
 end)
-Miata.command.bind("", "<right>", function()
+Miata.command.bind("n", "<right>", function()
     Miata.command.navigate_right()
 end)
-Miata.command.bind("", "<enter>", function()
+Miata.command.bind("nd", "<enter>", function()
     Miata.command.navigate_ok()
 end)
-Miata.command.bind("", "<esc>", function()
+Miata.command.bind("nd", "<esc>", function()
     Miata.command.navigate_cancel()
 end)
-Miata.command.bind("", "<tab>", function()
-    Miata.command.toggle_focus()
+Miata.command.bind("n", "<tab>", function()
+    --Miata.command.toggle_focus()
+
+    --Miata.command.dialog_confirm("マジですか？", "yatta-")
+
+    --local result = Miata.command.dialog_yes_no("マジですか？", true, "はい", "いいえ")
+    --print("result:"..tostring(result))
+
+    local result = Miata.command.dialog_custom({
+        title = "設定",
+        message = "詳細を選択してください", -- optional
+        buttons = {"OK", "キャンセル"},
+        checkboxes = {
+            { label = "オプションA", checked = true },
+            { label = "オプションB", checked = false },
+        },
+        selects = {
+            { label = "方法", options = {"高速", "標準", "低速"}, selected = 1 },
+        },
+    })
+
+    if result then
+        print(result.button)          -- 1=OK, 2=キャンセル
+        print(result.checkboxes[1])   -- true/false
+        print(result.selects[1])      -- 1-based 選択インデックス
+    end
+
+    local text = Miata.command.dialog_input("入力してください", "")
+    print(text)
+
+    --Miata.command.dialog_custom("マジですか？", "yatta-")
 end)
-Miata.command.bind("", " ", function()
+Miata.command.bind("n", " ", function()
     Miata.command.toggle_mark()
     Miata.command.navigate_down()
 end)
-Miata.command.bind("", "m", function()
-    Miata.command.toggle_mark()
-    Miata.command.navigate_down()
+Miata.command.bind("n", "c", function()
+    Miata.command.copy_marked()
+end)
+Miata.command.bind("n", "m", function()
+    Miata.command.move_marked()
+end)
+Miata.command.bind("n", "<S-k>", function()
+    Miata.command.make_folder()
+end)
+Miata.command.bind("n", "dd", function()
+    Miata.command.delete_marked()
+end)
+Miata.command.bind("n", "s", function()
+    local result = Miata.command.dialog_custom({
+        title = "ソート",
+        buttons = {"OK", "キャンセル"},
+        checkboxes = { { label = "降順", checked = false } },
+        selects = { { label = "基準", options = {"名前", "サイズ", "更新日時", "拡張子"}, selected = 1 } },
+    })
+    if result and result.button == 1 then
+        local keys = { "name", "size", "mtime", "ext" }
+        Miata.command.sort(keys[result.selects[1]], result.checkboxes[1])
+    end
 end)
 
 
@@ -76,7 +119,7 @@ Miata.command.bind("", "<S-up>", function()
     print("S-up")
 end)
 
-Miata.command.unbind("", "<S-up>")
+--Miata.command.unbind("n", "<S-up>")
 
 
 

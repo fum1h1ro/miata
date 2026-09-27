@@ -1,9 +1,12 @@
 #ifndef WIDGET_HPP__
 #define WIDGET_HPP__
 
+
 #include <any>
 #include <functional>
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
+#include <imgui_internal.h>
 #include "../misc.h"
 
 namespace miata::widgets {
@@ -132,6 +135,52 @@ namespace miata::widgets {
         void OnGuiImpl(bool parent_resized) override;
     };
 
+    class ItemFocus {
+        enum class Flags : uint8_t {
+            Ok = 1<<0,
+            Cancel = 1<<1,
+        };
+        enum class Dir : uint8_t {
+            None = 0,
+            Up,
+            Down,
+            Left,
+            Right,
+        };
+    public:
+        ItemFocus(int32_t index);
+        void Begin();
+        void End();
+        bool Focus();
+        void NextItemIsDefault();
+        void NavigateUp();
+        void NavigateDown();
+        void NavigateLeft();
+        void NavigateRight();
+        void NavigateOk();
+        void NavigateCancel();
+        bool Button(const char* label, const ImVec2& size = ImVec2(0, 0));
+        bool Checkbox(const std::string& label, bool value);
+        bool Selectable(const std::string& label, bool selected);
+
+        bool IsOk()
+        {
+            auto r = flags_.is(Flags::Ok);
+            flags_.off(Flags::Ok);
+            return r;
+        }
+        bool IsCancel()
+        {
+            auto r = flags_.is(Flags::Cancel);
+            flags_.off(Flags::Cancel);
+            return r;
+        }
+    private:
+        std::vector<ImRect> items_;
+        int32_t index_;
+        Dir dir_;
+        misc::Flags<Flags> flags_;
+    };
 
 
 

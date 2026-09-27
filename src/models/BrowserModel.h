@@ -9,10 +9,8 @@ namespace miata::models {
     public:
         static inline BrowserModel& Instance()
         {
-            if (instance_ == nullptr) {
-                instance_ = new BrowserModel();
-            }
-            return *instance_;
+            static BrowserModel instance;
+            return instance;
         }
 
         inline FileListModel& Left()
@@ -33,7 +31,6 @@ namespace miata::models {
         FileListModel left_;
         FileListModel right_;
 
-        static BrowserModel* instance_;
     };
 }
 

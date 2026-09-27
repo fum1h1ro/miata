@@ -17,6 +17,7 @@ namespace miata::models {
         void Unmark(int idx);
         bool IsMarked(int idx);
         void ToggleMark(int idx);
+        void ClearMarks();
         std::filesystem::path Path() const
         {
             return path_.Value();

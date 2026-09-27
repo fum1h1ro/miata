@@ -8,6 +8,7 @@
 #include "misc.h"
 #include "KeyBinding.h"
 #include "views/View.h"
+#include "FileOperation.h"
 
 namespace miata {
     class Application {
@@ -19,10 +20,8 @@ namespace miata {
         };
         static inline Application& Instance()
         {
-            if (instance_ == nullptr) {
-                instance_ = new Application();
-            }
-            return *instance_;
+            static Application instance;
+            return instance;
         }
 
 
@@ -30,7 +29,6 @@ namespace miata {
         static void Frame();
         static void Shutdown();
         static void Event(const sapp_event* event);
-
 
 
 
@@ -46,6 +44,11 @@ namespace miata {
         void KeyUp(sapp_keycode key_code, uint32_t mods);
         void CheckUpdate();
         void RequestUpdate();
+        std::expected<KeyBindingMap, std::string> GetKeyBinding(const char map_c);
+        void StartFileOperation(FileOpType type);
+        void DeleteMarked();
+        void OnFileOperationCompleted(FileOperationCompleted& event);
+        void CheckFileOperations();
 
 
         static int lua_command_bind(lua_State* L);
@@ -60,6 +63,17 @@ namespace miata {
         static int lua_command_mark(lua_State* L);
         static int lua_command_unmark(lua_State* L);
         static int lua_command_toggle_mark(lua_State* L);
+        static int lua_command_copy_marked(lua_State* L);
+        static int lua_command_move_marked(lua_State* L);
+        static int lua_command_make_directory(lua_State* L);
+        static int lua_command_delete_marked(lua_State* L);
+        static int lua_command_sort(lua_State* L);
+
+        static int lua_private_dialog_open(lua_State* L);
+        static int lua_private_dialog_is_open(lua_State* L);
+        static int lua_private_dialog_result(lua_State* L);
+        static int lua_private_show_input_dialog(lua_State* L);
+        static int lua_private_show_custom_dialog(lua_State* L);
 
         static int lua_color_index(lua_State* L);
         static int lua_color_newindex(lua_State* L);
@@ -70,6 +84,7 @@ namespace miata {
 
 
 
+        bool frame_running_ = false;
         int update_count_;
         std::unique_ptr<views::View> view_;
         //KeyBinding key_binding_;
@@ -81,8 +96,9 @@ namespace miata {
         misc::ReactiveProperty<int> height_;
         std::vector<misc::SubscriptionGuard> subscriptions_;
 
+        FileOperationManager file_operations_;
 
-        static Application* instance_;
+
     };
 }
 

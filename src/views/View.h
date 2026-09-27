@@ -1,6 +1,7 @@
 #ifndef VIEW_H__
 #define VIEW_H__
 
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
 #include "Dialog.h"
 #include "FileListView.h"
@@ -41,6 +42,10 @@ namespace miata::views {
         void Mark();
         void Unmark();
         void ToggleMark();
+        models::FileListModel& CurrentList();
+        models::FileListModel& OtherList();
+        models::FileEntryModel& CurrentEntry();
+        FileListView& CurrentFileListView();
 
         //void KeyDown(int key, constants::osx_modifier_flags flags);
 
@@ -48,7 +53,6 @@ namespace miata::views {
     private:
         void OnGuiDialogs(int width, int height);
         std::shared_ptr<views::IDialog>& CurrentDialog();
-        models::FileListModel& CurrentList();
 
 
 

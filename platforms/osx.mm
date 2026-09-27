@@ -6,15 +6,68 @@
 #include <sokol_app.h>
 #include "../src/platform.h"
 #include <fstream>
+#include <format>
+
+// NSView の座標系はデフォルトで下原点なので、上から順に配置するために flipped にする
+@interface _MiataDialogView : NSView
+@end
+@implementation _MiataDialogView
+- (BOOL)isFlipped { return YES; }
+@end
+
+@interface ImeInputHandler : NSView<NSTextInputClient>
+@end
+
+@implementation ImeInputHandler {
+    NSString* _markedText;
+    BOOL _insertedText;
+}
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    _markedText = @"";
+    _insertedText = NO;
+    return self;
+}
+
+- (void)clearInsertedText { _insertedText = NO; }
+- (BOOL)didInsertText { return _insertedText; }
+
+- (void)insertText:(id)aString replacementRange:(NSRange)replacementRange {
+    NSString* str = [aString isKindOfClass:[NSAttributedString class]]
+        ? [(NSAttributedString*)aString string] : (NSString*)aString;
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddInputCharactersUTF8(str.UTF8String);
+    _insertedText = YES;
+}
+
+- (void)setMarkedText:(id)string selectedRange:(NSRange)selectedRange replacementRange:(NSRange)replacementRange {
+    _markedText = [string isKindOfClass:[NSAttributedString class]]
+        ? [(NSAttributedString*)string string] : (NSString*)string;
+}
+- (void)unmarkText { _markedText = @""; }
+- (BOOL)hasMarkedText { return _markedText.length > 0; }
+- (NSRange)markedRange { return _markedText.length > 0 ? NSMakeRange(0, _markedText.length) : NSMakeRange(NSNotFound, 0); }
+- (NSRange)selectedRange { return NSMakeRange(0, 0); }
+- (nullable NSAttributedString*)attributedSubstringForProposedRange:(NSRange)range actualRange:(nullable NSRangePointer)actualRange { return nil; }
+- (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(nullable NSRangePointer)actualRange { return NSZeroRect; }
+- (NSUInteger)characterIndexForPoint:(NSPoint)point { return 0; }
+- (NSArray<NSAttributedStringKey>*)validAttributesForMarkedText { return @[]; }
+- (void)doCommandBySelector:(SEL)selector {}
+
+@end
+
+static ImeInputHandler* g_ime_handler = nil;
+static NSTextInputContext* g_text_input_context = nil;
 
 static NSWindow* ns_window()
 {
     return (__bridge NSWindow*)sapp_macos_get_window();
 }
 
-static MTKView* mtk_view()
+static NSView* ns_content_view()
 {
-    return (MTKView*)ns_window().contentView;
+    return ns_window().contentView;
 }
 
 std::string pl_normalize_string(const std::string& input)
@@ -42,11 +95,160 @@ void pl_app_post_initialize()
     NSMenuItem* quit_item = [[NSMenuItem alloc] initWithTitle:quit_title action:@selector(terminate:) keyEquivalent:@"q"];
     [app_menu addItem:quit_item];
     app_menu_item.submenu = app_menu;
+
+    g_ime_handler = [[ImeInputHandler alloc] initWithFrame:NSZeroRect];
+    [ns_content_view() addSubview:g_ime_handler];
+    g_text_input_context = [[NSTextInputContext alloc] initWithClient:g_ime_handler];
+
+    [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                         handler:^NSEvent* _Nullable(NSEvent* event) {
+        if (ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput) {
+            BOOL hadMarkedText = [g_ime_handler hasMarkedText];
+            [g_ime_handler clearInsertedText];
+            // activate により、システムIMEがこのコンテキストを通じて変換処理を行えるようにする
+            [g_text_input_context activate];
+            BOOL handled = [g_text_input_context handleEvent:event];
+            BOOL nowHasMarkedText = [g_ime_handler hasMarkedText];
+            // IMEがイベントを処理した、文字が確定した、または変換中ならキャンセル
+            if (handled || [g_ime_handler didInsertText] || hadMarkedText || nowHasMarkedText) {
+                return nil;
+            }
+        }
+        return event;
+    }];
+}
+
+std::optional<CustomDialogResult> pl_show_custom_dialog(const CustomDialogSpec& spec)
+{
+    const CGFloat kRowHeight    = 22;
+    const CGFloat kPopupHeight  = 26;
+    const CGFloat kSpacing      = 8;
+    const CGFloat kGroupSpacing = 16;
+    const CGFloat kWidth        = 320;
+    const CGFloat kLabelWidth   = 100;
+
+    // 合計高さを計算
+    CGFloat totalHeight = 0;
+    for (int i = 0; i < (int)spec.checkboxes.size(); i++) {
+        totalHeight += kRowHeight;
+        if (i < (int)spec.checkboxes.size() - 1) totalHeight += kSpacing;
+    }
+    if (!spec.checkboxes.empty() && !spec.selects.empty()) totalHeight += kGroupSpacing;
+    for (int i = 0; i < (int)spec.selects.size(); i++) {
+        totalHeight += kPopupHeight;
+        if (i < (int)spec.selects.size() - 1) totalHeight += kSpacing;
+    }
+    if (totalHeight == 0) totalHeight = 1;
+
+    _MiataDialogView* container = [[_MiataDialogView alloc] initWithFrame:NSMakeRect(0, 0, kWidth, totalHeight)];
+
+    CGFloat y = 0; // flipped なので y=0 が上端
+
+    // チェックボックス
+    NSMutableArray<NSButton*>* checkboxViews = [NSMutableArray array];
+    for (int i = 0; i < (int)spec.checkboxes.size(); i++) {
+        auto& cb = spec.checkboxes[i];
+        NSButton* btn = [NSButton checkboxWithTitle:@(cb.label.c_str()) target:nil action:nil];
+        btn.frame = NSMakeRect(0, y, kWidth, kRowHeight);
+        btn.state = cb.checked ? NSControlStateValueOn : NSControlStateValueOff;
+        [container addSubview:btn];
+        [checkboxViews addObject:btn];
+        y += kRowHeight;
+        if (i < (int)spec.checkboxes.size() - 1) y += kSpacing;
+    }
+    if (!spec.checkboxes.empty() && !spec.selects.empty()) y += kGroupSpacing;
+
+    // セレクト（ラベル + ポップアップ）
+    NSMutableArray<NSPopUpButton*>* selectViews = [NSMutableArray array];
+    for (int i = 0; i < (int)spec.selects.size(); i++) {
+        auto& sel = spec.selects[i];
+        CGFloat popupWidth = kWidth - kLabelWidth - kSpacing;
+
+        NSTextField* label = [NSTextField labelWithString:@(sel.label.c_str())];
+        label.frame = NSMakeRect(0, y + 2, kLabelWidth, kPopupHeight - 4);
+        label.alignment = NSTextAlignmentRight;
+        [container addSubview:label];
+
+        NSPopUpButton* popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(kLabelWidth + kSpacing, y, popupWidth, kPopupHeight) pullsDown:NO];
+        for (auto& opt : sel.options) {
+            [popup addItemWithTitle:@(opt.c_str())];
+        }
+        if (sel.selected >= 0 && sel.selected < (int)sel.options.size()) {
+            [popup selectItemAtIndex:sel.selected];
+        }
+        [container addSubview:popup];
+        [selectViews addObject:popup];
+        y += kPopupHeight;
+        if (i < (int)spec.selects.size() - 1) y += kSpacing;
+    }
+
+    // アラート設定
+    NSAlert* alert = [[NSAlert alloc] init];
+    alert.messageText = @(spec.title.c_str());
+    if (!spec.message.empty()) {
+        alert.informativeText = @(spec.message.c_str());
+    }
+    for (auto& btn : spec.buttons) {
+        [alert addButtonWithTitle:@(btn.c_str())];
+    }
+    if (spec.buttons.empty()) {
+        [alert addButtonWithTitle:@"OK"];
+    }
+    alert.accessoryView = container;
+
+    NSInteger returnCode = [alert runModal];
+    int buttonIndex = (int)(returnCode - NSAlertFirstButtonReturn);
+    if (buttonIndex < 0) return std::nullopt;
+
+    CustomDialogResult result;
+    result.button_index = buttonIndex;
+    for (NSButton* cb : checkboxViews) {
+        result.checkboxes.push_back(cb.state == NSControlStateValueOn);
+    }
+    for (NSPopUpButton* popup : selectViews) {
+        result.selects.push_back((int)popup.indexOfSelectedItem);
+    }
+    return result;
+}
+
+std::optional<std::string> pl_show_input_dialog(const std::string& message, const std::string& initial)
+{
+    NSAlert* alert = [[NSAlert alloc] init];
+    alert.messageText = @(message.c_str());
+    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:@"キャンセル"];
+
+    NSTextField* textField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 300, 24)];
+    textField.stringValue = @(initial.c_str());
+    alert.accessoryView = textField;
+    // alert.window にアクセスするとウィンドウがレイアウトされ、初期フォーカスを設定できる
+    [alert.window makeFirstResponder:textField];
+
+    NSInteger returnCode = [alert runModal];
+    [textField validateEditing];
+
+    if (returnCode == NSAlertFirstButtonReturn) {
+        return std::string(textField.stringValue.UTF8String);
+    }
+    return std::nullopt;
+}
+
+void pl_update_ime(bool want_text_input)
+{
+    // WantTextInput が false になったら IME コンテキストを deactivate する
+    // （候補ウィンドウを閉じ、変換中状態をキャンセルする）
+    static bool prev_want_text_input = false;
+    if (!want_text_input && prev_want_text_input) {
+        [g_text_input_context deactivate];
+    }
+    prev_want_text_input = want_text_input;
 }
 
 void pl_set_fps(int fps)
 {
-    mtk_view().preferredFramesPerSecond = fps;
+    // sokol now uses CADisplayLink internally (no longer MTKView),
+    // and defaults to the screen's max refresh rate.
+    (void)fps;
 }
 
 float pl_get_default_fps()
@@ -66,19 +268,17 @@ float pl_get_default_fps()
 
 void pl_start_update()
 {
-    mtk_view().paused = NO;
+    // sokol's CADisplayLink runs continuously; pause/resume not exposed externally.
 }
 
 void pl_stop_update()
 {
-    mtk_view().paused = YES;
+    // sokol's CADisplayLink runs continuously; pause/resume not exposed externally.
 }
 
 void pl_force_update()
 {
-    auto view = mtk_view();
-    view.enableSetNeedsDisplay = YES;
-    [view setNeedsDisplay:YES];
+    // sokol's CADisplayLink handles display scheduling internally.
 }
 
 std::filesystem::path pl_find_font_filename(const std::string& font_name)
@@ -123,6 +323,19 @@ std::filesystem::path pl_get_config_dir()
     }
 }
 
+std::expected<void, std::string> pl_trash_file(const std::filesystem::path& path)
+{
+    @autoreleasepool {
+        NSURL* url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
+        NSError* error = nil;
+        BOOL ok = [[NSFileManager defaultManager] trashItemAtURL:url resultingItemURL:nil error:&error];
+        if (!ok) {
+            return std::unexpected(std::string(error.localizedDescription.UTF8String));
+        }
+        return {};
+    }
+}
+
 std::string pl_read_file(const char* path)
 {
     std::ifstream file(path, std::ios::binary);
@@ -137,7 +350,7 @@ std::string pl_read_file(const char* path)
     {
         file.read(ptr, file_size);
         ptr[file_size] = '\0';
-        return file_size;
+        return (size_t)file_size;
     });
     return data;
 #else
@@ -167,7 +380,7 @@ void pl_osx_set_visual_effect_view()
     visualEffectView.blendingMode = NSVisualEffectBlendingModeBehindWindow;
     visualEffectView.material = NSVisualEffectMaterialHUDWindow;
     visualEffectView.state = NSVisualEffectStateActive;
-    auto mtkview = mtk_view();
+    auto mtkview = ns_content_view();
     ns_window().contentView = visualEffectView;
     [visualEffectView addSubview:mtkview positioned:NSWindowBelow relativeTo:nil];
     ns_window().opaque = NO;

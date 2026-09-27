@@ -240,4 +240,143 @@ namespace miata::widgets {
         ImGui::PopStyleVar(5);
     }
 
+
+    ItemFocus::ItemFocus(int32_t index) : index_(-1), dir_(Dir::None)
+    {
+    }
+    void ItemFocus::Begin()
+    {
+        items_.clear();
+    }
+    void ItemFocus::End()
+    {
+        int32_t max = (int32_t)items_.size();
+        index_ = std::clamp(index_, 0, max - 1);
+
+        if (dir_ != Dir::None && items_.size() > 0uz) {
+            auto current = items_[(size_t)index_];
+            auto current_center = current.GetCenter();
+            ImRect hitbox = current;
+            const auto width = current.GetSize().x;
+            const auto height = current.GetSize().y;
+            const int dist = 10;
+
+            switch (dir_) {
+            case Dir::Up:
+                hitbox.Translate(ImVec2(0, height * -dist));
+                hitbox.Max.y += height * (dist - 1);
+                //hitbox.Expand(ImVec2(0, height * (dist - 1)));
+                break;
+            case Dir::Down:
+                hitbox.Translate(ImVec2(0, height));
+                hitbox.Max.y += height * (dist - 1);
+                //hitbox.Expand(ImVec2(0, height * (dist - 1)));
+                break;
+            case Dir::Left:
+                hitbox.Translate(ImVec2(width * -dist, 0));
+                hitbox.Max.x += width * (dist - 1);
+                //hitbox.Expand(ImVec2(width * (dist - 1), 0));
+                break;
+            case Dir::Right:
+                hitbox.Translate(ImVec2(width, 0));
+                hitbox.Max.x += width * (dist - 1);
+                //hitbox.Expand(ImVec2(width * (dist - 1), 0));
+                break;
+            default:
+                break;
+            }
+
+            float min_dist = FLT_MAX;
+            int32_t next = -1;
+
+            for (int32_t i = 0; i < max; ++i) {
+                if (i == index_) continue;
+                auto& item = items_[(size_t)i];
+
+                if (hitbox.Overlaps(item)) {
+                    auto center = item.GetCenter();
+                    auto dist = center - current_center;
+                    auto d = dist.x * dist.x + dist.y * dist.y;
+                    if (d < min_dist) {
+                        min_dist = d;
+                        next = i;
+                    }
+                }
+            }
+            if (next >= 0) index_ = std::clamp(next, 0, max - 1);
+        }
+        dir_ = Dir::None;
+    }
+    bool ItemFocus::Focus()
+    {
+        auto min = ImGui::GetItemRectMin();
+        auto max = ImGui::GetItemRectMax();
+        int32_t idx = (int32_t)items_.size();
+        items_.emplace_back(min, max);
+
+        if (index_ == idx) {
+            auto draw_list = ImGui::GetWindowDrawList();
+            auto col = IM_COL32(0, 255, 255, 255);
+            draw_list->AddRect(min, max, col, 0.0f, 0, 2.0f);
+            if (IsOk()) {
+                return true;
+            }
+        }
+        return false;
+    }
+    void ItemFocus::NextItemIsDefault()
+    {
+        if (index_ < 0) {
+            index_ = (int32_t)items_.size();
+        }
+    }
+    void ItemFocus::NavigateUp()
+    {
+        dir_ = Dir::Up;
+    }
+    void ItemFocus::NavigateDown()
+    {
+        dir_ = Dir::Down;
+    }
+    void ItemFocus::NavigateLeft()
+    {
+        dir_ = Dir::Left;
+    }
+    void ItemFocus::NavigateRight()
+    {
+        dir_ = Dir::Right;
+    }
+    void ItemFocus::NavigateOk()
+    {
+        flags_.on(Flags::Ok);
+    }
+    void ItemFocus::NavigateCancel()
+    {
+        flags_.on(Flags::Cancel);
+    }
+    bool ItemFocus::Button(const char* label, const ImVec2& size)
+    {
+        return ImGui::Button(label, size) || Focus();
+    }
+    bool ItemFocus::Checkbox(const std::string& label, bool value)
+    {
+        ImGui::Checkbox(label.c_str(), &value);
+        if (Focus()) {
+            value = !value;
+        }
+        return value;
+    }
+    bool ItemFocus::Selectable(const std::string& label, bool selected)
+    {
+        return ImGui::Selectable(label.c_str(), &selected) || Focus();
+    }
+
+
+
+
+
+
+
+
+
 } // namespace miata::widgets

@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <string>
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
 #include "../widgets/Widget.h"
 #include "../models/Model.h"
@@ -26,8 +27,16 @@ namespace miata::views {
 
     class FileListView : public widgets::Pane {
     public:
+        enum class SortKey {
+            Name,
+            Size,
+            ModifiedTime,
+            Extension,
+        };
+
         FileListView(const char* id, int w, int h, models::FileListModel& list);
         void OnGuiImpl(bool window_resized) override;
+        void SetSort(SortKey key, bool reverse);
 
         void Clear()
         {
@@ -69,6 +78,8 @@ namespace miata::views {
         //
         int cursorIndex_;
         bool focus_;
+        SortKey sort_key_ = SortKey::Name;
+        bool sort_reverse_ = false;
         models::FileListModel& model_;
         std::vector<FileEntryView*> list_;
         std::vector<FileEntryView> entries_;

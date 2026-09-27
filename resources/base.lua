@@ -1,5 +1,44 @@
 Miata = {
-    command = {},
+    command = {
+        dialog_confirm = function(message, button_text)
+            button_text = button_text or "OK"
+            local handle = Miata._private.dialog_open("confirm", {
+                message = message, button_text = button_text
+            })
+            coroutine.yield()
+            coroutine.yield()
+            while Miata._private.dialog_is_open(handle) do
+                coroutine.yield()
+            end
+            return Miata._private.dialog_result(handle, "confirm")
+        end,
+        dialog_yes_no = function(message, default_focus, yes_text, no_text)
+            yes_text = yes_text or "YES"
+            no_text = no_text or "NO"
+            local handle = Miata._private.dialog_open("yesno", {
+                message = (message or "Are you sure?"), default_focus = default_focus, yes_text = yes_text, no_text = no_text
+            })
+            coroutine.yield()
+            coroutine.yield()
+            while Miata._private.dialog_is_open(handle) do
+                coroutine.yield()
+            end
+            return Miata._private.dialog_result(handle, "yesno")
+        end,
+        dialog_input = function(message, initial_text)
+            return Miata._private.show_input_dialog(message, initial_text or "")
+        end,
+        dialog_custom = function(spec)
+            return Miata._private.show_custom_dialog(spec)
+        end,
+        make_folder = function()
+            local name = Miata.command.dialog_input("新しいフォルダ名を入力してください", "")
+            if name and name ~= "" then
+                Miata.command.make_directory(name)
+            end
+        end,
+    },
+    _private = {},
     util = {
         inspect = function(val, indent)
             -- インデントの初期化

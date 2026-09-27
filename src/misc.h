@@ -4,6 +4,7 @@
 #include <iterator>
 #include <rxcpp/rx.hpp>
 #include <type_traits>
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
 #include <typeinfo>
 
@@ -398,13 +399,12 @@ namespace misc {
         }
         static inline MessageBroker& Instance()
         {
-            if (instance_ == nullptr) instance_ = new MessageBroker();
-            return *instance_;
+            static MessageBroker instance;
+            return instance;
         }
 
         std::map<size_t, std::vector<std::tuple<uint32_t, std::function<void(void*)>>>> observers_;
         uint32_t id_;
-        static MessageBroker* instance_;
     };
 
 

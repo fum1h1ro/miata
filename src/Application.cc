@@ -15,6 +15,7 @@
 #include <sokol_time.h>
 #include <sokol_log.h>
 #include <sokol_glue.h>
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
 #include <backends/imgui_impl_metal.h>
 #define SOKOL_METAL
@@ -27,7 +28,7 @@
 
 #include <string>
 #include <vector>
-#include <thread>
+#include <ranges>
 #include <filesystem>
 
 #include "platform.h"
@@ -68,14 +69,7 @@ static ImFont* font = nullptr;
 
 
 
-misc::MessageBroker* misc::MessageBroker::instance_ = nullptr;
-
-
-
-
 namespace miata {
-    Application* Application::instance_ = nullptr;
-
     Application::Application()
     {
         update_count_ = 0;
@@ -102,6 +96,11 @@ namespace miata {
     {
         update_count_ = 100;
         pl_force_update();
+    }
+
+    void Application::CheckFileOperations()
+    {
+        file_operations_.Update();
     }
 
     void Application::Initialize()
@@ -136,7 +135,7 @@ namespace miata {
         sg_setup(&desc);
         stm_setup();
         const simgui_desc_t simgui_desc = {
-            //.no_default_font = true,
+            .no_default_font = true,
             //.disable_set_mouse_cursor = true,
             .logger = {
                 .func = slog_func,
@@ -163,10 +162,27 @@ namespace miata {
             { "mark", lua_command_mark },
             { "unmark", lua_command_unmark },
             { "toggle_mark", lua_command_toggle_mark },
+            { "copy_marked", lua_command_copy_marked },
+            { "move_marked", lua_command_move_marked },
+            { "make_directory", lua_command_make_directory },
+            { "delete_marked", lua_command_delete_marked },
+            { "sort", lua_command_sort },
         };
         script.RegisterFunctions(
             "Miata.command",
             std::vector<luaL_Reg>(std::begin(commands), std::end(commands))
+        );
+
+        static luaL_Reg privates[] = {
+            { "dialog_open", lua_private_dialog_open },
+            { "dialog_is_open", lua_private_dialog_is_open },
+            { "dialog_result", lua_private_dialog_result },
+            { "show_input_dialog", lua_private_show_input_dialog },
+            { "show_custom_dialog", lua_private_show_custom_dialog },
+        };
+        script.RegisterFunctions(
+            "Miata._private",
+            std::vector<luaL_Reg>(std::begin(privates), std::end(privates))
         );
 
         Config::ScriptInitialize();
@@ -176,20 +192,10 @@ namespace miata {
         auto home = pl_get_home_dir();
         printf("home: %s\n", home.c_str());
 #if 1
-        simgui_destroy_fonts_texture();
-        io.Fonts->Clear();
         auto font_path = pl_find_font_filename("ヒラギノ丸ゴ ProN W4");
         //auto font_path = "/Users/k-ya/Downloads/Fonts/Kiwi_Maru/KiwiMaru-Regular.ttf";
         font = io.Fonts->AddFontFromFileTTF(font_path.c_str(), 20.0f, nullptr, io.Fonts->GetGlyphRangesJapanese());
         printf("font: %p\n", font);
-        //::free((void*)font_path);
-        //ImGui_ImplMetal_CreateFontsTexture(osx_mtl_device());
-        io.Fonts->Build();
-        simgui_font_tex_desc_t font_desc;
-        //_simgui_clear(&simgui_font_smp_desc, sizeof(simgui_font_smp_desc));
-        font_desc.min_filter = SG_FILTER_LINEAR;
-        font_desc.mag_filter = SG_FILTER_LINEAR;
-        simgui_create_fonts_texture(&font_desc);
 #endif
 
         // setup the imgui environment
@@ -244,6 +250,10 @@ namespace miata {
 
         view_ = std::make_unique<views::View>(sapp_width(), sapp_height());
 
+        file_operations_.SetCallback([this](FileOperationCompleted& e) {
+            OnFileOperationCompleted(e);
+        });
+
         pl_app_post_initialize();
 
         key_binding_map_[(int)KeyBindingMap::Normal]->DumpAll();
@@ -293,7 +303,12 @@ namespace miata {
 
     void Application::FrameImpl()
     {
+        if (frame_running_) return;
+        frame_running_ = true;
+        struct FrameGuard { bool& f; ~FrameGuard() { f = false; } } guard{frame_running_};
+
         CheckUpdate();
+        CheckFileOperations();
         if (Script::Instance().Update()) {
             RequestUpdate();
         }
@@ -302,6 +317,7 @@ namespace miata {
         const int height = sapp_height();
         //printf("width: %d, height: %d\n", width, height);
         simgui_new_frame({ width, height, stm_sec(stm_laptime(&last_time)), 1.0f });
+        pl_update_ime(ImGui::GetIO().WantTextInput);
 #if 0
         // 1. Show a simple window
         // Tip: if we don't call ImGui::Begin()/ImGui::End() the widgets appears in a window automatically called "Debug"
@@ -392,6 +408,7 @@ namespace miata {
 
     void Application::KeyDown(sapp_keycode key_code, uint32_t mods)
     {
+        if (ImGui::GetIO().WantTextInput) return;
         auto& script = Script::Instance();
         auto& kb = (view_->IsAnyDialogOpened())? key_binding_map_[(int)KeyBindingMap::Dialog] : key_binding_map_[(int)KeyBindingMap::Normal];
 
@@ -404,8 +421,8 @@ namespace miata {
         auto key_setting = kb->Has(key_stroke_);
         if (key_setting) {
             //printf("match key stroke: %d\n", key_setting.value());
+            auto result = script.InvokeRefFunctionOnThread(key_stroke_.ToString(), key_setting.value());
             key_stroke_.Clear();
-            auto result = script.InvokeRefFunctionOnThread("key_bind_function", key_setting.value());
             if (!result) {
                 printf("error: %s\n", result.error().c_str());
             }
@@ -421,6 +438,148 @@ namespace miata {
         //printf("key_up: %d\n", key);
     }
 
+    std::expected<Application::KeyBindingMap, std::string> Application::GetKeyBinding(const char map_c)
+    {
+        switch (std::tolower(map_c)) {
+        case 'n':
+            return KeyBindingMap::Normal;
+        case 'd':
+            return KeyBindingMap::Dialog;
+        default:
+            return std::unexpected("unknown map");
+        }
+    }
+
+    void Application::StartFileOperation(FileOpType type)
+    {
+        auto& src_model = view_->CurrentList();
+        auto& dest_model = view_->OtherList();
+
+        std::vector<std::filesystem::path> sources;
+        for (auto i = 0; i < src_model.Size(); ++i) {
+            auto& entry = src_model.GetEntry(i);
+            if (entry.IsMarked()) sources.push_back(entry.Path());
+        }
+        if (sources.empty() && src_model.Size() > 0) {
+            sources.push_back(view_->CurrentEntry().Path());
+        }
+        if (sources.empty()) return;
+
+        auto src_dir = src_model.Path();
+        auto dest_dir = dest_model.Path();
+
+        auto conflicts = 0;
+        for (auto& src : sources) {
+            std::error_code ec;
+            if (std::filesystem::exists(dest_dir / src.filename(), ec)) ++conflicts;
+        }
+
+        auto start = [this, type, sources, src_dir, dest_dir, &src_model, &dest_model](bool overwrite) {
+            file_operations_.Start(type, sources, src_dir, dest_dir, overwrite, &src_model, &dest_model);
+        };
+
+        if (conflicts > 0) {
+            auto message = std::format("{}個のファイルが既に存在します。上書きしますか？", conflicts);
+            view_->RequestDialog(std::make_shared<views::YesNoDialog>(
+                [start](views::IDialog& dialog) {
+                    auto& yes_no_dialog = dynamic_cast<views::YesNoDialog&>(dialog);
+                    start(yes_no_dialog.Result());
+                },
+                views::YesNoDialog::arguments{
+                    .message_ = message,
+                    .default_select_ = false,
+                    .yes_text_ = "上書き",
+                    .no_text_ = "スキップ",
+                }
+            ));
+        }
+        else {
+            start(false);
+        }
+    }
+
+    void Application::OnFileOperationCompleted(FileOperationCompleted& event)
+    {
+        // バックグラウンド実行中にペインが別ディレクトリへ移動されている場合があるため、
+        // 操作開始時点のパスを今も表示している場合に限って再スキャンする。
+        if (event.dest_model && event.dest_model->Path() == event.dest_dir) {
+            event.dest_model->JumpTo(event.dest_dir);
+        }
+        if (event.src_model && event.src_model->Path() == event.src_dir) {
+            if (event.type == FileOpType::Move) {
+                event.src_model->JumpTo(event.src_dir); // 消えたファイルを一覧に反映（マークも自然に消える）
+            }
+            else {
+                event.src_model->ClearMarks(); // 中身は変わらないのでマークだけ解除する
+            }
+        }
+
+        auto message = event.success
+            ? std::string("完了しました")
+            : std::format("エラーが発生しました（{}件失敗）: {}", event.failed_count, event.error_message);
+        view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
+            [](views::IDialog&) {},
+            views::ConfirmDialog::arguments{
+                .message_ = message,
+                .button_text_ = "OK",
+            }
+        ));
+    }
+
+    void Application::DeleteMarked()
+    {
+        auto& list = view_->CurrentList();
+
+        std::vector<std::filesystem::path> targets;
+        for (auto i = 0; i < list.Size(); ++i) {
+            auto& entry = list.GetEntry(i);
+            if (entry.IsMarked()) targets.push_back(entry.Path());
+        }
+        if (targets.empty()) return; // マークが無ければ何もしない
+
+        auto dir = list.Path();
+        auto message = std::format("{}件をゴミ箱に移動しますか？", targets.size());
+
+        view_->RequestDialog(std::make_shared<views::YesNoDialog>(
+            [this, targets, dir, &list](views::IDialog& dialog) {
+                auto& yes_no_dialog = dynamic_cast<views::YesNoDialog&>(dialog);
+                if (!yes_no_dialog.Result()) return;
+
+                auto failed_count = 0;
+                std::string last_error;
+                for (auto& target : targets) {
+                    auto result = pl_trash_file(target);
+                    if (!result) {
+                        ++failed_count;
+                        last_error = result.error();
+                    }
+                }
+
+                // 確認ダイアログはモーダルで開いている間ペイン移動できないため、
+                // ここでは常に操作対象だったディレクトリのままのはずだが、念のため確認する。
+                if (list.Path() == dir) {
+                    list.JumpTo(dir);
+                }
+
+                if (failed_count > 0) {
+                    view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
+                        [](views::IDialog&) {},
+                        views::ConfirmDialog::arguments{
+                            .message_ = std::format("エラーが発生しました（{}件失敗）: {}", failed_count, last_error),
+                            .button_text_ = "OK",
+                        }
+                    ));
+                }
+            },
+            views::YesNoDialog::arguments{
+                .message_ = message,
+                .default_select_ = false,
+                .yes_text_ = "ゴミ箱へ",
+                .no_text_ = "キャンセル",
+            }
+        ));
+    }
+
     int Application::lua_command_bind(lua_State* L)
     {
         //auto& script = miata::Script::Instance();
@@ -430,19 +589,28 @@ namespace miata {
         Script::CheckArgType(L, 2, LUA_TSTRING);
         Script::CheckArgType(L, 3, LUA_TFUNCTION);
 
-        const char* map_string = lua_tostring(L, 1);
+        const std::string map_string = lua_tostring(L, 1);
         const char* key_string = lua_tostring(L, 2);
         //std::println("key_stroke: {}\n", key_string);
         lua_pushvalue(L, 3);
         int ref = luaL_ref(L, LUA_REGISTRYINDEX);
         //std::println("lua_command_bind {}\n", ref);
 
-
-        auto& kb = app.key_binding_map_[(int)KeyBindingMap::Normal];
-        auto r = kb->Register(key_string, ref);
-        if (!r) {
-            luaL_unref(L, LUA_REGISTRYINDEX, ref);
-            luaL_error(L, "key binding error: %d", r.error());
+        for (size_t i = 0; i < map_string.size(); ++i) {
+            auto map_c = map_string[i];
+            auto map_index = app.GetKeyBinding((char)map_c);
+            if (map_index) {
+                auto& kb = app.key_binding_map_[(size_t)map_index.value()];
+                auto r = kb->Register(key_string, ref);
+                if (!r) {
+                    luaL_unref(L, LUA_REGISTRYINDEX, ref);
+                    luaL_error(L, "key binding error: %d", r.error());
+                }
+            }
+            else {
+                luaL_unref(L, LUA_REGISTRYINDEX, ref);
+                luaL_error(L, "unknown map");
+            }
         }
         return 0;
     }
@@ -455,11 +623,26 @@ namespace miata {
         Script::CheckArgType(L, 1, LUA_TSTRING);
         Script::CheckArgType(L, 2, LUA_TSTRING);
 
-        const char* map_string = lua_tostring(L, 1);
+        const std::string map_string = lua_tostring(L, 1);
         const char* key_string = lua_tostring(L, 2);
-        auto& kb = app.key_binding_map_[(int)KeyBindingMap::Normal];
-        auto r = kb->Unregister(key_string);
-        luaL_unref(L, LUA_REGISTRYINDEX, r.value());
+
+        for (size_t i = 0; i < map_string.size(); ++i) {
+            auto map_c = map_string[i];
+            auto map_index = app.GetKeyBinding((char)map_c);
+            if (map_index) {
+                auto& kb = app.key_binding_map_[(size_t)map_index.value()];
+                auto r = kb->Unregister(key_string);
+                if (r) {
+                    luaL_unref(L, LUA_REGISTRYINDEX, r.value());
+                }
+                else {
+                    luaL_error(L, "key binding error: %d", r.error());
+                }
+            }
+            else {
+                luaL_error(L, "unknown map");
+            }
+        }
         return 0;
     }
 
@@ -567,7 +750,327 @@ namespace miata {
         return 0;
     }
 
+    int Application::lua_command_copy_marked(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        app.StartFileOperation(FileOpType::Copy);
+        return 0;
+    }
 
+    int Application::lua_command_move_marked(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        app.StartFileOperation(FileOpType::Move);
+        return 0;
+    }
+
+    int Application::lua_command_make_directory(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        Script::CheckArgType(L, 1, LUA_TSTRING);
+        const std::string name = lua_tostring(L, 1);
+
+        auto& list = app.view_->CurrentList();
+        auto dest = list.Path() / name;
+
+        std::error_code ec;
+        std::filesystem::create_directory(dest, ec);
+
+        if (!ec) {
+            list.JumpTo(list.Path());
+            lua_pushboolean(L, true);
+        }
+        else {
+            app.view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
+                [](views::IDialog&) {},
+                views::ConfirmDialog::arguments{
+                    .message_ = std::format("フォルダを作成できませんでした: {}", ec.message()),
+                    .button_text_ = "OK",
+                }
+            ));
+            lua_pushboolean(L, false);
+        }
+        return 1;
+    }
+
+    int Application::lua_command_delete_marked(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        app.DeleteMarked();
+        return 0;
+    }
+
+    int Application::lua_command_sort(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        Script::CheckArgType(L, 1, LUA_TSTRING);
+        const std::string key_string = lua_tostring(L, 1);
+
+        auto reverse = false;
+        if (lua_gettop(L) >= 2) {
+            Script::CheckArgType(L, 2, LUA_TBOOLEAN);
+            reverse = lua_toboolean(L, 2);
+        }
+
+        views::FileListView::SortKey key;
+        if (key_string == "name") key = views::FileListView::SortKey::Name;
+        else if (key_string == "size") key = views::FileListView::SortKey::Size;
+        else if (key_string == "mtime") key = views::FileListView::SortKey::ModifiedTime;
+        else if (key_string == "ext") key = views::FileListView::SortKey::Extension;
+        else {
+            luaL_error(L, "unknown sort key");
+            return 0;
+        }
+
+        app.view_->CurrentFileListView().SetSort(key, reverse);
+        return 0;
+    }
+
+    // Miata._private.dialog_open(type, options)
+    int Application::lua_private_dialog_open(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        Script::CheckArgType(L, 1, LUA_TSTRING);
+        Script::CheckArgType(L, 2, LUA_TTABLE);
+
+        const std::string type_string = lua_tostring(L, 1);
+        if (type_string == "confirm") {
+            auto message = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "message", "Are you sure?");
+            auto button_text = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "button_text", "OK");
+
+            auto dialog = std::make_shared<views::ConfirmDialog>(
+                [](views::IDialog& dialog) {
+                    std::print("confirm\n");
+                },
+                views::ConfirmDialog::arguments{
+                    .message_ = message,
+                    .button_text_ = button_text,
+                }
+            );
+            auto dialog_ptr = Script::PushSharedUserdata<views::ConfirmDialog>(L, dialog);
+            app.view_->RequestDialog(dialog_ptr);
+            return 1;
+        }
+        else if (type_string == "yesno") {
+            auto message = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "message", "Are you sure?");
+            auto default_focus = Script::GetTableField<bool, LUA_TBOOLEAN>(L, 2, "default_focus", true);
+            auto yes_text = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "yes_text", "YES");
+            auto no_text = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "no_text", "NO");
+
+            auto dialog = std::make_shared<views::YesNoDialog>(
+                [](views::IDialog& dialog) {
+                    auto& yes_no_dialog = dynamic_cast<views::YesNoDialog&>(dialog);
+                    if (yes_no_dialog.Result()) {
+                        std::print("yes\n");
+                    }
+                    else {
+                        std::print("no\n");
+                    }
+                },
+                views::YesNoDialog::arguments{
+                    .message_ = message,
+                    .default_select_ = default_focus,
+                    .yes_text_ = yes_text,
+                    .no_text_ = no_text,
+                }
+            );
+            auto dialog_ptr = Script::PushSharedUserdata<views::YesNoDialog>(L, dialog);
+            app.view_->RequestDialog(dialog_ptr);
+            return 1;
+        }
+        else if (type_string == "inputtext") {
+            auto message = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "message", "");
+            auto initial_text = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "initial_text", "");
+
+            auto dialog = std::make_shared<views::InputTextDialog>(
+                [](views::IDialog& dialog) {
+                    std::print("inputtext\n");
+                },
+                views::InputTextDialog::arguments{
+                    .message_ = message,
+                    .initial_text_ = initial_text,
+                }
+            );
+            auto dialog_ptr = Script::PushSharedUserdata<views::InputTextDialog>(L, dialog);
+            app.view_->RequestDialog(dialog_ptr);
+            return 1;
+        }
+        else if (type_string == "custom") {
+            auto message = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "message", "");
+
+
+
+
+            auto dialog = std::make_shared<views::CustomDialog>(
+                [](views::IDialog& dialog) {
+                    std::print("custom\n");
+                },
+                views::CustomDialog::arguments{
+                    .message_ = "custom",
+                    .button_text_ = "OK",
+                    .on_button = []() {
+                        std::print("on_button\n");
+                    }
+                }
+            );
+            dialog->SetTitle(message);
+            dialog->AddCheckbox("checkbox", true);
+            dialog->AddCheckbox("checkbox", false);
+            dialog->AddCheckbox("checkbox", false);
+            dialog->AddSelectables({ "1", "2", "3" });
+            dialog->AddSelectables({ "1", "2", "3" });
+
+            auto dialog_ptr = Script::PushSharedUserdata<views::CustomDialog>(L, dialog);
+            app.view_->RequestDialog(dialog_ptr);
+            return 1;
+        }
+
+        luaL_error(L, "unknown dialog type");
+        return 0;
+    }
+
+    int Application::lua_private_dialog_is_open(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        Script::CheckArgType(L, 1, LUA_TUSERDATA);
+        auto ud = static_cast<std::shared_ptr<views::IDialog>*>(lua_touserdata(L, 1));
+        lua_pushboolean(L, (*ud)->IsOpened());
+        return 1;
+    }
+
+    int Application::lua_private_dialog_result(lua_State* L)
+    {
+        Script::CheckArgType(L, 1, LUA_TUSERDATA);
+        Script::CheckArgType(L, 2, LUA_TSTRING);
+
+        const std::string type_string = lua_tostring(L, 2);
+        if (type_string == "confirm") {
+            lua_pushboolean(L, true);
+            return 1;
+        }
+        else if (type_string == "yesno") {
+            auto ud = static_cast<std::shared_ptr<views::YesNoDialog>*>(lua_touserdata(L, 1));
+            lua_pushboolean(L, (*ud)->Result());
+            return 1;
+        }
+        return 0;
+    }
+
+    int Application::lua_private_show_input_dialog(lua_State* L)
+    {
+        const char* message = luaL_checkstring(L, 1);
+        const char* initial = luaL_optstring(L, 2, "");
+        auto result = pl_show_input_dialog(message, initial);
+        if (result) {
+            lua_pushstring(L, result->c_str());
+        } else {
+            lua_pushnil(L);
+        }
+        return 1;
+    }
+
+    int Application::lua_private_show_custom_dialog(lua_State* L)
+    {
+        Script::CheckArgType(L, 1, LUA_TTABLE);
+
+        auto get_str = [&](int tidx, const char* key) -> std::string {
+            lua_getfield(L, tidx, key);
+            std::string v = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_pop(L, 1);
+            return v;
+        };
+
+        CustomDialogSpec spec;
+        spec.title   = get_str(1, "title");
+        spec.message = get_str(1, "message");
+
+        // buttons
+        lua_getfield(L, 1, "buttons");
+        if (lua_istable(L, -1)) {
+            int n = (int)lua_rawlen(L, -1);
+            for (int i = 1; i <= n; i++) {
+                lua_rawgeti(L, -1, i);
+                if (lua_isstring(L, -1)) spec.buttons.push_back(lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+
+        // checkboxes
+        lua_getfield(L, 1, "checkboxes");
+        if (lua_istable(L, -1)) {
+            int n = (int)lua_rawlen(L, -1);
+            for (int i = 1; i <= n; i++) {
+                lua_rawgeti(L, -1, i);
+                if (lua_istable(L, -1)) {
+                    CustomDialogCheckbox cb;
+                    cb.label   = get_str(lua_gettop(L), "label");
+                    lua_getfield(L, -1, "checked");
+                    cb.checked = lua_isboolean(L, -1) && lua_toboolean(L, -1);
+                    lua_pop(L, 1);
+                    spec.checkboxes.push_back(std::move(cb));
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+
+        // selects
+        lua_getfield(L, 1, "selects");
+        if (lua_istable(L, -1)) {
+            int n = (int)lua_rawlen(L, -1);
+            for (int i = 1; i <= n; i++) {
+                lua_rawgeti(L, -1, i);
+                if (lua_istable(L, -1)) {
+                    CustomDialogSelect sel;
+                    sel.label = get_str(lua_gettop(L), "label");
+                    lua_getfield(L, -1, "selected");
+                    sel.selected = lua_isnumber(L, -1) ? (int)lua_tointeger(L, -1) - 1 : 0; // 1-based → 0-based
+                    lua_pop(L, 1);
+                    lua_getfield(L, -1, "options");
+                    if (lua_istable(L, -1)) {
+                        int m = (int)lua_rawlen(L, -1);
+                        for (int j = 1; j <= m; j++) {
+                            lua_rawgeti(L, -1, j);
+                            if (lua_isstring(L, -1)) sel.options.push_back(lua_tostring(L, -1));
+                            lua_pop(L, 1);
+                        }
+                    }
+                    lua_pop(L, 1);
+                    spec.selects.push_back(std::move(sel));
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+
+        auto result = pl_show_custom_dialog(spec);
+        if (!result) {
+            lua_pushnil(L);
+            return 1;
+        }
+
+        lua_newtable(L);
+
+        lua_pushinteger(L, result->button_index + 1); // 0-based → 1-based
+        lua_setfield(L, -2, "button");
+
+        lua_newtable(L);
+        for (int i = 0; i < (int)result->checkboxes.size(); i++) {
+            lua_pushboolean(L, result->checkboxes[i]);
+            lua_rawseti(L, -2, i + 1);
+        }
+        lua_setfield(L, -2, "checkboxes");
+
+        lua_newtable(L);
+        for (int i = 0; i < (int)result->selects.size(); i++) {
+            lua_pushinteger(L, result->selects[i] + 1); // 0-based → 1-based
+            lua_rawseti(L, -2, i + 1);
+        }
+        lua_setfield(L, -2, "selects");
+
+        return 1;
+    }
 
 }
 

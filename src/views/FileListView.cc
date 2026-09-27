@@ -25,6 +25,13 @@ namespace miata::views {
         OnGuiList();
     }
 
+    void FileListView::SetSort(SortKey key, bool reverse)
+    {
+        sort_key_ = key;
+        sort_reverse_ = reverse;
+        Fetch();
+    }
+
     void FileListView::OnGuiHeader()
     {
         auto bak = ImGui::GetFont()->Scale;
@@ -147,9 +154,24 @@ namespace miata::views {
             list_.push_back(&entries_[(size_t)i]);
         }
 
-        std::sort(list_.begin(), list_.end(), [](FileEntryView* a, FileEntryView* b) {
+        std::sort(list_.begin(), list_.end(), [this](FileEntryView* a, FileEntryView* b) {
             if (a->Model().IsDirectory() != b->Model().IsDirectory()) return a->Model().IsDirectory();
-            return a->Model().Name() < b->Model().Name();
+
+            // reverse時は引数を入れ替えて同じ比較を行う（否定すると同値要素で狭義弱順序が壊れるため）
+            auto* x = sort_reverse_ ? b : a;
+            auto* y = sort_reverse_ ? a : b;
+            switch (sort_key_) {
+            case SortKey::Size:
+                return x->Model().Size() < y->Model().Size();
+            case SortKey::ModifiedTime:
+                return x->Model().ModifiedTime() < y->Model().ModifiedTime();
+            case SortKey::Extension:
+                if (x->Model().Ext() != y->Model().Ext()) return x->Model().Ext() < y->Model().Ext();
+                return x->Model().Name() < y->Model().Name();
+            case SortKey::Name:
+            default:
+                return x->Model().Name() < y->Model().Name();
+            }
         });
     }
 } // namespace miata::views

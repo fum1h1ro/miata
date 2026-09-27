@@ -1,9 +1,12 @@
 #ifndef PLATFORM_H__
 #define PLATFORM_H__
 
+#include <optional>
 #include <string>
+#include <vector>
 #include <filesystem>
 #include <expected>
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
 
 enum class pl_color_type {
@@ -58,6 +61,33 @@ enum class pl_color_type {
 std::string pl_normalize_string(const std::string& input);
 void pl_play_beep();
 void pl_app_post_initialize();
+void pl_update_ime(bool want_text_input);
+std::optional<std::string> pl_show_input_dialog(const std::string& message, const std::string& initial);
+
+struct CustomDialogCheckbox {
+    std::string label;
+    bool checked;
+};
+struct CustomDialogSelect {
+    std::string label;
+    std::vector<std::string> options;
+    int selected; // 0-based
+};
+struct CustomDialogSpec {
+    std::string title;
+    std::string message; // informative text (optional)
+    std::vector<std::string> buttons;
+    std::vector<CustomDialogCheckbox> checkboxes;
+    std::vector<CustomDialogSelect> selects;
+};
+struct CustomDialogResult {
+    int button_index; // 0-based
+    std::vector<bool> checkboxes;
+    std::vector<int> selects; // 0-based selected index
+};
+std::optional<CustomDialogResult> pl_show_custom_dialog(const CustomDialogSpec& spec);
+
+std::expected<void, std::string> pl_trash_file(const std::filesystem::path& path);
 
 void pl_set_fps(int fps);
 float pl_get_default_fps();

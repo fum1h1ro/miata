@@ -273,6 +273,28 @@ namespace miata::views {
         }
     }
 
+    models::FileListModel& View::OtherList()
+    {
+        auto& browser = panes_.browser_;
+        auto& browser_model = models::BrowserModel::Instance();
+        if (browser->IsLeft()) {
+            return browser_model.Right();
+        }
+        else {
+            return browser_model.Left();
+        }
+    }
+
+    models::FileEntryModel& View::CurrentEntry()
+    {
+        return panes_.browser_->CurrentFileEntryModel();
+    }
+
+    FileListView& View::CurrentFileListView()
+    {
+        return *panes_.browser_->GetCurrentFileListView();
+    }
+
     void View::ToggleFocus()
     {
         auto& browser= panes_.browser_;

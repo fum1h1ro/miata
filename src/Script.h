@@ -7,6 +7,7 @@
 #include <string>
 #include <map>
 #include <expected>
+#include <print>
 
 extern "C" {
 #include <lua.h>
@@ -28,13 +29,60 @@ namespace miata {
     public:
         static inline Script& Instance()
         {
-            //SOKOL_ASSERT(instance_ == nullptr);
-            if (instance_ == nullptr) {
-                instance_ = new Script();
-            }
-            return *instance_;
+            static Script instance;
+            return instance;
         }
 
+        template<typename R, int EXPECTED>
+        static R GetTableField(lua_State* L, int table_idx, std::string key, R default_value)
+        {
+            lua_getfield(L, table_idx, key.c_str());
+            if (lua_type(L, -1) == LUA_TNIL) {
+                return default_value;
+            }
+            if (lua_type(L, -1) != EXPECTED) {
+                luaL_error(L, "expected %d, got %d", EXPECTED, lua_type(L, -1));
+            }
+            R r;
+            switch (EXPECTED) {
+            case LUA_TNUMBER:
+                r = lua_tonumber(L, -1);
+                break;
+            case LUA_TBOOLEAN:
+                r = lua_toboolean(L, -1);
+                break;
+            case LUA_TSTRING:
+                r = lua_tostring(L, -1);
+                break;
+            default:
+                luaL_error(L, "unsupported type");
+            }
+            lua_pop(L, 1);
+            return r;
+        }
+
+        template<typename T>
+        static int FreeSharedUserdata(lua_State* L)
+        {
+            auto p = static_cast<std::shared_ptr<T>*>(lua_touserdata(L, 1));
+            p->~shared_ptr();
+            std::print("free shared userdata\n");
+            return 0;
+        }
+
+        template<typename T>
+        static std::shared_ptr<T> PushSharedUserdata(lua_State* L, std::shared_ptr<T>& ptr)
+        {
+            void* ud = lua_newuserdata(L, sizeof(std::shared_ptr<T>));
+            new(ud) std::shared_ptr<T>(ptr);
+            if (luaL_newmetatable(L, typeid(std::shared_ptr<T>).name())) {
+                lua_pushstring(L, "__gc");
+                lua_pushcfunction(L, FreeSharedUserdata<T>);
+                lua_settable(L, -3);
+            }
+            lua_setmetatable(L, -2);
+            return *static_cast<std::shared_ptr<T>*>(ud);
+        }
 
 
         void Initialize();
@@ -81,7 +129,6 @@ namespace miata {
 
 
 
-        static Script* instance_;
         lua_State* L_;
         std::map<std::string, std::unique_ptr<ThreadParam>> threads_;
 
