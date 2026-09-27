@@ -16,11 +16,49 @@
 }
 @end
 
-// ヘッダー(パス表示)とスクロール可能なリストを縦に並べるだけの単純なコンテナ。
-@interface _MiataFileListContainer : NSView
+// ヘッダー(パス表示)自体の背景ビュー。
+@interface _MiataFileListHeaderView : NSView
+@property (nonatomic, assign) miata::views::FileListView* owner;
 @end
-@implementation _MiataFileListContainer
+@implementation _MiataFileListHeaderView
 - (BOOL)isFlipped { return YES; }
+- (void)drawRect:(NSRect)dirtyRect
+{
+    if (self.owner) self.owner->DrawHeader();
+}
+@end
+
+// ヘッダーとスクロール可能なリストを縦に並べるコンテナ。
+// isFlipped=YESなビュー内ではautoresizingMaskのY軸マージン(NSViewMinYMargin/MaxYMargin)の
+// 意味が反転する既知の癖があり、意図通りに追従しないため、フレーム変更時に
+// 子ビューの矩形を明示的に再計算する。
+@interface _MiataFileListLayoutContainer : NSView
+@property (nonatomic, weak) NSView* headerView;
+@property (nonatomic, weak) NSView* scrollView;
+@property (nonatomic, assign) CGFloat headerHeight;
+- (void)layoutChildren;
+@end
+@implementation _MiataFileListLayoutContainer
+- (BOOL)isFlipped { return YES; }
+- (void)layoutChildren
+{
+    CGFloat w = self.bounds.size.width;
+    CGFloat h = self.bounds.size.height;
+    self.headerView.frame = NSMakeRect(0, 0, w, self.headerHeight);
+    self.scrollView.frame = NSMakeRect(0, self.headerHeight, w, MAX((CGFloat)0, h - self.headerHeight));
+}
+- (void)setFrameSize:(NSSize)newSize
+{
+    [super setFrameSize:newSize];
+    [self layoutChildren];
+}
+// NSSplitViewがフレームをどう設定してもここは確実に描画直前に呼ばれるため、
+// setFrameSize:での追従が効かない場合の保険として毎回レイアウトし直す。
+- (void)viewWillDraw
+{
+    [self layoutChildren];
+    [super viewWillDraw];
+}
 @end
 
 namespace miata::views {
@@ -53,7 +91,7 @@ namespace {
 }
 
 struct FileListView::Impl {
-    _MiataFileListContainer* container = nil;
+    _MiataFileListLayoutContainer* container = nil;
     NSView* header_view = nil;
     NSScrollView* scroll_view = nil;
     _MiataFileListNSView* content_view = nil;
@@ -69,22 +107,26 @@ struct FileListView::Impl {
 
 FileListView::FileListView(models::FileListModel& list) : model_(list), impl_(std::make_unique<Impl>())
 {
-    impl_->container = [[_MiataFileListContainer alloc] initWithFrame:NSMakeRect(0, 0, 200, 200)];
+    impl_->container = [[_MiataFileListLayoutContainer alloc] initWithFrame:NSMakeRect(0, 0, 200, 200)];
+    impl_->container.headerHeight = kHeaderHeight;
 
-    impl_->header_view = [[_MiataFileListContainer alloc] initWithFrame:NSMakeRect(0, 0, 200, kHeaderHeight)];
-    impl_->header_view.autoresizingMask = NSViewWidthSizable;
+    _MiataFileListHeaderView* header = [[_MiataFileListHeaderView alloc] initWithFrame:NSMakeRect(0, 0, 200, kHeaderHeight)];
+    header.owner = this;
+    impl_->header_view = header;
     [impl_->container addSubview:impl_->header_view];
+    impl_->container.headerView = impl_->header_view;
 
     impl_->content_view = [[_MiataFileListNSView alloc] initWithFrame:NSMakeRect(0, 0, 200, 200 - kHeaderHeight)];
     impl_->content_view.owner = this;
 
     impl_->scroll_view = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, kHeaderHeight, 200, 200 - kHeaderHeight)];
-    impl_->scroll_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     impl_->scroll_view.hasVerticalScroller = YES;
     impl_->scroll_view.hasHorizontalScroller = NO;
     impl_->scroll_view.drawsBackground = NO;
     impl_->scroll_view.documentView = impl_->content_view;
     [impl_->container addSubview:impl_->scroll_view];
+    impl_->container.scrollView = impl_->scroll_view;
+    [impl_->container layoutChildren];
 
     // NSSplitViewのドラッグやウィンドウリサイズでクリップビューの幅が変わるたびに
     // documentView(content_view)の幅を追従させる。autoresizingMaskだけでは
@@ -203,24 +245,24 @@ void FileListView::Redraw()
     [impl_->content_view setNeedsDisplay:YES];
 }
 
+void FileListView::DrawHeader()
+{
+    NSRect bounds = impl_->header_view.bounds;
+    auto bg = pl_get_color(pl_color_type::window_background_color);
+    [ToNSColor(bg) set];
+    NSRectFill(bounds);
+
+    NSString* path = @(model_.Path().c_str());
+    NSDictionary* attrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:13],
+        NSForegroundColorAttributeName: ToNSColor(pl_get_color(pl_color_type::text_color)),
+    };
+    NSRect text_rect = NSMakeRect(kPadding, (bounds.size.height - 16) / 2, bounds.size.width - kPadding * 2, 16);
+    [path drawInRect:text_rect withAttributes:attrs];
+}
+
 void FileListView::Draw()
 {
-    // ヘッダー: パス表示
-    {
-        NSRect bounds = impl_->header_view.bounds;
-        auto bg = pl_get_color(pl_color_type::window_background_color);
-        [ToNSColor(bg) set];
-        NSRectFill(bounds);
-
-        NSString* path = @(model_.Path().c_str());
-        NSDictionary* attrs = @{
-            NSFontAttributeName: [NSFont systemFontOfSize:13],
-            NSForegroundColorAttributeName: ToNSColor(pl_get_color(pl_color_type::text_color)),
-        };
-        NSRect text_rect = NSMakeRect(kPadding, (bounds.size.height - 16) / 2, bounds.size.width - kPadding * 2, 16);
-        [path drawInRect:text_rect withAttributes:attrs];
-    }
-
     // リスト本体
     {
         auto dir_color = ToNSColor(Config::Color().Get(Config::Color::Type::Directory));

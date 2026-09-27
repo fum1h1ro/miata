@@ -38,7 +38,10 @@ namespace miata::views {
 
         // 親(BrowserView)にaddSubviewするためのNSView*を(__bridge void*)で返す
         void* NativeView() const;
-        // drawRect: から呼ばれる。dirtyRectは無視して常に全体を再描画する(行数が少ないため十分)。
+        // それぞれ対応するNSViewのdrawRect:から呼ばれる。dirtyRectは無視して
+        // 常に全体を再描画する(行数が少ないため十分)。呼び出し元のビュー自身の
+        // 座標系で描画するため、ヘッダーとリスト本体でメソッドを分けている。
+        void DrawHeader();
         void Draw();
 
         void SetSort(SortKey key, bool reverse);
