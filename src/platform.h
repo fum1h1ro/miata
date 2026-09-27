@@ -89,6 +89,23 @@ void pl_set_resize_handler(std::function<void(int width, int height)> handler);
 // 一定間隔(seconds)で呼ばれる更新タイマーを開始する。
 void pl_start_timer(double interval_seconds, std::function<void()> callback);
 
+// 実行ファイルをPATH、および主要なインストール先(Homebrew等)から探す。見つからなければnullopt。
+// GUIアプリはログインシェルのPATHを継承しないことが多いため、PATHだけに頼らない。
+std::optional<std::filesystem::path> pl_find_executable(const std::string& name);
+
+struct ProcessRunResult {
+    int exit_code = -1;
+    std::string stdout_text;
+};
+// executableをargsで起動し、標準入力をstdin_fileから読み込ませ、標準出力を回収する。
+// 起動そのものに失敗した場合のみ unexpected を返す(プロセスが非0で終了しても失敗扱いにはしない。
+// 呼び出し側がexit_codeを見て判断する)。
+std::expected<ProcessRunResult, std::string> pl_run_process(
+    const std::filesystem::path& executable,
+    const std::vector<std::string>& args,
+    const std::filesystem::path& stdin_file
+);
+
 struct CustomDialogCheckbox {
     std::string label;
     bool checked;

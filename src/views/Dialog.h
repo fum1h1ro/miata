@@ -35,6 +35,13 @@ namespace miata::views {
         int AddPopup(const std::string& label, const std::vector<std::string>& options, int initial);
         // テキストフィールドはフォーカス可能リストに入れない(IME/標準入力を優先させるため)
         void AddTextField(const std::string& initial);
+        // 直前にAddTextFieldで作ったフィールドにdelegateを設定する
+        // (id<NSTextFieldDelegate>を(__bridge void*)で渡す。ヘッダをAppKit非依存に保つため)。
+        void SetTextFieldDelegate(void* delegate);
+        // 任意のNSView(void*で受け渡す)を積み上げレイアウトに埋め込む。
+        // AddButton等の定型コントロールに当てはまらない用途向けの最小限のエスケープハッチ。
+        // フォーカス可能リストには入れない(埋め込んだビュー自身がキー入力を処理する想定)。
+        void AddCustomView(void* native_view, float height);
 
         bool GetCheckbox(int id) const;
         int GetPopupSelection(int id) const;
