@@ -6,8 +6,12 @@
 #include <vector>
 #include <filesystem>
 #include <expected>
-#define IMGUI_DEFINE_MATH_OPERATORS
-#include <imgui.h>
+#include <functional>
+#include <cstdint>
+
+struct Color4f {
+    float r = 0, g = 0, b = 0, a = 1;
+};
 
 enum class pl_color_type {
     label_color,
@@ -58,13 +62,32 @@ enum class pl_color_type {
     text_insertion_point_color,
 };
 
+// KeyBinding::Key::mods_ で使うモディファイアのビット表現。NSEventModifierFlagsから
+// osx.mm 側で変換して渡す(値そのものはAppKitのビット位置とは無関係な自前定義)。
+namespace pl_modifier {
+    constexpr uint16_t Shift = 1 << 0;
+    constexpr uint16_t Ctrl  = 1 << 1;
+    constexpr uint16_t Alt   = 1 << 2;
+    constexpr uint16_t Super = 1 << 3;
+}
+
 std::string pl_normalize_string(const std::string& input);
 void pl_play_beep();
-void pl_app_post_initialize();
-void pl_update_ime(bool want_text_input);
+
 // AppKitのcontentView(NSView*)を(__bridge void*)で返す。
 // views/ 層はAppKit型に直接依存させたくないため、このvoid*橋渡し越しに使う。
 void* pl_get_content_view();
+
+// メインウィンドウを生成して表示する。
+void pl_create_main_window(int width, int height, const char* title);
+
+// キーコードはmacOSのvirtual keycode(NSEvent.keyCode)そのもの。
+// modsはpl_modifier::* のビットOR。
+void pl_set_key_down_handler(std::function<void(uint16_t keycode, uint16_t mods)> handler);
+void pl_set_key_up_handler(std::function<void(uint16_t keycode, uint16_t mods)> handler);
+void pl_set_resize_handler(std::function<void(int width, int height)> handler);
+// 一定間隔(seconds)で呼ばれる更新タイマーを開始する。
+void pl_start_timer(double interval_seconds, std::function<void()> callback);
 
 struct CustomDialogCheckbox {
     std::string label;
@@ -90,19 +113,13 @@ struct CustomDialogResult {
 
 std::expected<void, std::string> pl_trash_file(const std::filesystem::path& path);
 
-void pl_set_fps(int fps);
-float pl_get_default_fps();
-void pl_start_update();
-void pl_stop_update();
-void pl_force_update();
 std::filesystem::path pl_find_font_filename(const std::string& font_name);
 std::filesystem::path pl_get_home_dir();
 std::filesystem::path pl_get_config_dir();
 std::string pl_read_file(const char* path);
 std::expected<std::string, std::string> pl_read_resource_file(const char* path);
-void pl_osx_set_visual_effect_view();
 
-ImVec4 pl_get_color(pl_color_type type);
+Color4f pl_get_color(pl_color_type type);
 
 void pl_quick_preview(const std::vector<std::string>& path_list);
 

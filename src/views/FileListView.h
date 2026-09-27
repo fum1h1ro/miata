@@ -1,13 +1,10 @@
 #ifndef VIEWS_FILE_LIST_VIEW_H__
 #define VIEWS_FILE_LIST_VIEW_H__
 
+#include <memory>
 #include <vector>
-#include <string>
-#define IMGUI_DEFINE_MATH_OPERATORS
-#include <imgui.h>
-#include "../widgets/Widget.h"
 #include "../models/Model.h"
-#include "../Config.h"
+#include "../misc.h"
 
 namespace miata::views {
     class FileEntryView {
@@ -25,7 +22,9 @@ namespace miata::views {
         models::FileEntryModel* entry_model_;
     };
 
-    class FileListView : public widgets::Pane {
+    // ファイル一覧1ペイン分。実体はNSScrollView+自前NSView(Core Text描画)で、
+    // AppKit型はFileListView.mmに閉じ込める。
+    class FileListView {
     public:
         enum class SortKey {
             Name,
@@ -34,34 +33,21 @@ namespace miata::views {
             Extension,
         };
 
-        FileListView(const char* id, int w, int h, models::FileListModel& list);
-        void OnGuiImpl(bool window_resized) override;
+        FileListView(models::FileListModel& list);
+        ~FileListView();
+
+        // 親(BrowserView)にaddSubviewするためのNSView*を(__bridge void*)で返す
+        void* NativeView() const;
+        // drawRect: から呼ばれる。dirtyRectは無視して常に全体を再描画する(行数が少ないため十分)。
+        void Draw();
+
         void SetSort(SortKey key, bool reverse);
 
-        void Clear()
-        {
-            cursorIndex_ = 0;
-        }
-        bool GetFocus() const
-        {
-            return focus_;
-        }
-        void SetFocus(bool focus)
-        {
-            focus_ = focus;
-        }
-        int GetCursor() const
-        {
-            return cursorIndex_;
-        }
-        void SetCursor(int index)
-        {
-            cursorIndex_ = index;
-        }
-        void MoveCursor(int offset)
-        {
-            cursorIndex_ += offset;
-        }
+        bool GetFocus() const { return focus_; }
+        void SetFocus(bool focus);
+        int GetCursor() const { return cursorIndex_; }
+        void SetCursor(int index);
+        void MoveCursor(int offset);
         inline FileEntryView& GetEntry(int index) const
         {
             return *list_[(size_t)index];
@@ -70,20 +56,24 @@ namespace miata::views {
         {
             return GetEntry(cursorIndex_);
         }
+
+        // カーソル移動やフォーカス変更を伴わない外部要因(マーク変更等)の後に呼ぶ再描画要求
+        void Redraw();
+
     private:
-        bool IsFullyVisible() const;
         void Fetch();
-        void OnGuiHeader();
-        void OnGuiList();
-        //
-        int cursorIndex_;
-        bool focus_;
+
+        int cursorIndex_ = 0;
+        bool focus_ = false;
         SortKey sort_key_ = SortKey::Name;
         bool sort_reverse_ = false;
         models::FileListModel& model_;
         std::vector<FileEntryView*> list_;
         std::vector<FileEntryView> entries_;
         std::vector<misc::SubscriptionGuard> subscriptions_;
+
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
     };
 }
 

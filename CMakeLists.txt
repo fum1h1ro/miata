@@ -31,8 +31,6 @@ if (APPLE)
     target_compile_options(app PRIVATE -fobjc-arc -fmodules -Wconversion)
     target_link_libraries(app
         "-framework Cocoa"
-        "-framework Metal"
-        "-framework MetalKit"
         "-framework Quartz"
         "-framework AudioToolbox"
     )
@@ -47,12 +45,8 @@ if (WIN32)
 endif (WIN32)
 
 set_target_properties(app PROPERTIES OUTPUT_NAME "Miata")
-target_link_libraries(app imgui)
 target_link_libraries(app lua)
 target_include_directories(app PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/packages/sokol
-    ${CMAKE_CURRENT_SOURCE_DIR}/packages/sokol/util
-    ${CMAKE_CURRENT_SOURCE_DIR}/packages/imgui
     ${CMAKE_CURRENT_SOURCE_DIR}/packages/lua
     ${CMAKE_CURRENT_SOURCE_DIR}/packages/RxCpp/Rx/v2/src
 )

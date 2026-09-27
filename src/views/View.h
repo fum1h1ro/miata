@@ -1,35 +1,18 @@
 #ifndef VIEW_H__
 #define VIEW_H__
 
-#define IMGUI_DEFINE_MATH_OPERATORS
-#include <imgui.h>
+#include <memory>
+#include <queue>
 #include "Dialog.h"
-#include "FileListView.h"
 #include "BrowserView.h"
-#include "../misc.h"
 #include "../models/Model.h"
-#include "../widgets/Widget.h"
 
 namespace miata::views {
     class View {
-        struct dialog_request {
-            std::string id_;
-            std::function<void(views::IDialog&)> on_close_;
-            std::any args_;
-        };
     public:
-        enum class Mode {
-            Browser,
-            Viewer,
-        };
-        enum class Flags : uint8_t {
-            None = 0,
-            AnyDialogOpened = 1<<0,
-        };
+        View();
+        ~View();
 
-        View(int w, int h);
-        virtual ~View();
-        void OnGui(int width, int height);
         void Navigate(constants::Navigate dir);
 
         void RequestDialog(std::shared_ptr<IDialog> dialog);
@@ -37,6 +20,9 @@ namespace miata::views {
         {
             return current_dialog_ != nullptr;
         }
+        // タイマーから定期的に呼ぶ。閉じたダイアログを検出してキューの次を開く。
+        void CheckDialogState();
+
         void NavigateForBrowser(constants::Navigate dir);
         void ToggleFocus();
         void Mark();
@@ -47,46 +33,12 @@ namespace miata::views {
         models::FileEntryModel& CurrentEntry();
         FileListView& CurrentFileListView();
 
-        //void KeyDown(int key, constants::osx_modifier_flags flags);
-
-
     private:
-        void OnGuiDialogs(int width, int height);
-        std::shared_ptr<views::IDialog>& CurrentDialog();
+        void OpenNextDialogIfNeeded();
 
-
-
-
-
-
-        //void KeyProcessForBrowser(int key, constants::osx_modifier_flags flags);
-        //
-        Mode mode_;
-        misc::Flags<Flags> flags_;
-        bool resized_;
-        int window_width_;
-        int window_height_;
-
+        std::unique_ptr<BrowserView> browser_;
         std::shared_ptr<IDialog> current_dialog_;
         std::queue<std::shared_ptr<IDialog>> dialog_requests_;
-
-
-
-        struct {
-            //std::unique_ptr<widgets::HorizontalLayouter> test_;
-            std::unique_ptr<widgets::VerticalLayouter> test_;
-            std::unique_ptr<widgets::VerticalLayouter> main_;
-            std::shared_ptr<widgets::Pane> top_;
-            std::shared_ptr<widgets::Pane> bottom_;
-            std::shared_ptr<BrowserView> browser_;
-            std::unique_ptr<widgets::Pane> log_;
-            std::unique_ptr<widgets::Pane> viewer_;
-        } panes_;
-        struct {
-            ImVec2 window_;
-            ImVec2 top_;
-            ImVec2 bottom_;
-        } pane_sizes_;
     };
 }
 

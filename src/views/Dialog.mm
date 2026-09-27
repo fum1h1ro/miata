@@ -75,7 +75,7 @@ struct DialogPanel::Impl {
         background.wantsLayer = YES;
         background.layer.cornerRadius = 8.0;
         auto bg = pl_get_color(pl_color_type::window_background_color);
-        background.layer.backgroundColor = [NSColor colorWithRed:bg.x green:bg.y blue:bg.z alpha:0.98].CGColor;
+        background.layer.backgroundColor = [NSColor colorWithRed:bg.r green:bg.g blue:bg.b alpha:0.98].CGColor;
         background.layer.borderWidth = 1.0;
         background.layer.borderColor = [NSColor separatorColor].CGColor;
         buttons = [NSMutableArray array];
@@ -475,7 +475,7 @@ void CustomDialog::OnOpen()
     }
     auto buttons = spec_.buttons.empty() ? std::vector<std::string>{"OK"} : spec_.buttons;
     for (size_t i = 0; i < buttons.size(); ++i) {
-        button_ids_.push_back(panel_.AddButton(buttons[i], i == buttons.size() - 1));
+        button_ids_.push_back(panel_.AddButton(buttons[i], i == 0)); // 先頭ボタン(通常OK)をEnterのデフォルトにする
     }
 }
 void CustomDialog::OnButton(int button_id)

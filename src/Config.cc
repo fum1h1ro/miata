@@ -25,17 +25,17 @@ namespace miata {
             std::printf("%s: %d\n", t.first.c_str(), (int)t.second);
         }
     }
-    std::string Config::Color::ToString(const ImVec4& v)
+    std::string Config::Color::ToString(const Color4f& v)
     {
-        auto r = (int)(v.x * 255);
-        auto g = (int)(v.y * 255);
-        auto b = (int)(v.z * 255);
-        auto a = (int)(v.w * 255);
+        auto r = (int)(v.r * 255);
+        auto g = (int)(v.g * 255);
+        auto b = (int)(v.b * 255);
+        auto a = (int)(v.a * 255);
         return std::format("#{:02x}{:02x}{:02x}{:02x}", r, g, b, a);
     }
-    std::expected<ImVec4, std::string> Config::Color::FromString(const std::string_view& v)
+    std::expected<Color4f, std::string> Config::Color::FromString(const std::string_view& v)
     {
-        ImVec4 result;
+        Color4f result;
         const size_t sz = v.size();
         if (v[0] != '#') {
             return std::unexpected(std::format("unknown color format: {}", v));
@@ -49,10 +49,10 @@ namespace miata {
             if (result_r.ec != std::errc() || result_g.ec != std::errc() || result_b.ec != std::errc()) {
                 return std::unexpected(std::format("unknown color format: {}", v));
             }
-            result.x = (float)r / 255.0f;
-            result.y = (float)g / 255.0f;
-            result.z = (float)b / 255.0f;
-            result.w = 1.0f;
+            result.r = (float)r / 255.0f;
+            result.g = (float)g / 255.0f;
+            result.b = (float)b / 255.0f;
+            result.a = 1.0f;
         }
         else if (sz == 9) {
             int r, g, b, a;
@@ -63,10 +63,10 @@ namespace miata {
             if (result_r.ec != std::errc() || result_g.ec != std::errc() || result_b.ec != std::errc() || result_a.ec != std::errc()) {
                 return std::unexpected(std::format("unknown color format: {}", v));
             }
-            result.x = (float)r / 255.0f;
-            result.y = (float)g / 255.0f;
-            result.z = (float)b / 255.0f;
-            result.w = (float)a / 255.0f;
+            result.r = (float)r / 255.0f;
+            result.g = (float)g / 255.0f;
+            result.b = (float)b / 255.0f;
+            result.a = (float)a / 255.0f;
         }
         else {
             return std::unexpected(std::format("unknown color format: {}", v));

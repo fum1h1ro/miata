@@ -3,6 +3,7 @@
 #include <expected>
 
 namespace miata {
+    // 添字はASCIIコード、値はmacOSのvirtual keycode(NSEvent.keyCode / Carbon kVK_*)
     uint16_t KeyBinding::ascii_to_keycode_[128] = {
         0, // 0 NUL (Null char)
         0, // 1 SOH (Start of Heading)
@@ -36,97 +37,97 @@ namespace miata {
         0, // 29 GS  (Group Separator)
         0, // 30 RS  (Record Separator)
         0, // 31 US  (Unit Separator)
-        SAPP_KEYCODE_SPACE, // 32 ' ' (Space)
+        kVK_Space, // 32 ' ' (Space)
         0, // 33 '!'
         0, // 34 '"'
         0, // 35 '#'
         0, // 36 '$'
         0, // 37 '%'
         0, // 38 '&'
-        SAPP_KEYCODE_APOSTROPHE, // 39 '\''
+        kVK_ANSI_Quote, // 39 '\''
         0, // 40 '('
         0, // 41 ')'
         0, // 42 '*'
         0, // 43 '+'
-        SAPP_KEYCODE_COMMA, // 44 ','
-        SAPP_KEYCODE_MINUS, // 45 '-'
-        SAPP_KEYCODE_PERIOD, // 46 '.'
-        SAPP_KEYCODE_SLASH, // 47 '/'
-        SAPP_KEYCODE_0, // 48 '0'
-        SAPP_KEYCODE_1, // 49 '1'
-        SAPP_KEYCODE_2, // 50 '2'
-        SAPP_KEYCODE_3, // 51 '3'
-        SAPP_KEYCODE_4, // 52 '4'
-        SAPP_KEYCODE_5, // 53 '5'
-        SAPP_KEYCODE_6, // 54 '6'
-        SAPP_KEYCODE_7, // 55 '7'
-        SAPP_KEYCODE_8, // 56 '8'
-        SAPP_KEYCODE_9, // 57 '9'
+        kVK_ANSI_Comma, // 44 ','
+        kVK_ANSI_Minus, // 45 '-'
+        kVK_ANSI_Period, // 46 '.'
+        kVK_ANSI_Slash, // 47 '/'
+        kVK_ANSI_0, // 48 '0'
+        kVK_ANSI_1, // 49 '1'
+        kVK_ANSI_2, // 50 '2'
+        kVK_ANSI_3, // 51 '3'
+        kVK_ANSI_4, // 52 '4'
+        kVK_ANSI_5, // 53 '5'
+        kVK_ANSI_6, // 54 '6'
+        kVK_ANSI_7, // 55 '7'
+        kVK_ANSI_8, // 56 '8'
+        kVK_ANSI_9, // 57 '9'
         0, // 58 ':'
-        SAPP_KEYCODE_SEMICOLON, // 59 ';'
+        kVK_ANSI_Semicolon, // 59 ';'
         0, // 60 '<'
-        SAPP_KEYCODE_EQUAL, // 61 '='
+        kVK_ANSI_Equal, // 61 '='
         0, // 62 '>'
         0, // 63 '?'
         0, // 64 '@'
-        SAPP_KEYCODE_A, // 'A'
-        SAPP_KEYCODE_B, // 'B'
-        SAPP_KEYCODE_C, // 'C'
-        SAPP_KEYCODE_D, // 'D'
-        SAPP_KEYCODE_E, // 'E'
-        SAPP_KEYCODE_F, // 'F'
-        SAPP_KEYCODE_G, // 'G'
-        SAPP_KEYCODE_H, // 'H'
-        SAPP_KEYCODE_I, // 'I'
-        SAPP_KEYCODE_J, // 'J'
-        SAPP_KEYCODE_K, // 'K'
-        SAPP_KEYCODE_L, // 'L'
-        SAPP_KEYCODE_M, // 'M'
-        SAPP_KEYCODE_N, // 'N'
-        SAPP_KEYCODE_O, // 'O'
-        SAPP_KEYCODE_P, // 'P'
-        SAPP_KEYCODE_Q, // 'Q'
-        SAPP_KEYCODE_R, // 'R'
-        SAPP_KEYCODE_S, // 'S'
-        SAPP_KEYCODE_T, // 'T'
-        SAPP_KEYCODE_U, // 'U'
-        SAPP_KEYCODE_V, // 'V'
-        SAPP_KEYCODE_W, // 'W'
-        SAPP_KEYCODE_X, // 'X'
-        SAPP_KEYCODE_Y, // 'Y'
-        SAPP_KEYCODE_Z, // 'Z'
-        SAPP_KEYCODE_LEFT_BRACKET, // 91 '['
-        SAPP_KEYCODE_BACKSLASH, // 92 '\\'
-        SAPP_KEYCODE_RIGHT_BRACKET, // 93 ']'
+        kVK_ANSI_A, // 'A'
+        kVK_ANSI_B, // 'B'
+        kVK_ANSI_C, // 'C'
+        kVK_ANSI_D, // 'D'
+        kVK_ANSI_E, // 'E'
+        kVK_ANSI_F, // 'F'
+        kVK_ANSI_G, // 'G'
+        kVK_ANSI_H, // 'H'
+        kVK_ANSI_I, // 'I'
+        kVK_ANSI_J, // 'J'
+        kVK_ANSI_K, // 'K'
+        kVK_ANSI_L, // 'L'
+        kVK_ANSI_M, // 'M'
+        kVK_ANSI_N, // 'N'
+        kVK_ANSI_O, // 'O'
+        kVK_ANSI_P, // 'P'
+        kVK_ANSI_Q, // 'Q'
+        kVK_ANSI_R, // 'R'
+        kVK_ANSI_S, // 'S'
+        kVK_ANSI_T, // 'T'
+        kVK_ANSI_U, // 'U'
+        kVK_ANSI_V, // 'V'
+        kVK_ANSI_W, // 'W'
+        kVK_ANSI_X, // 'X'
+        kVK_ANSI_Y, // 'Y'
+        kVK_ANSI_Z, // 'Z'
+        kVK_ANSI_LeftBracket, // 91 '['
+        kVK_ANSI_Backslash, // 92 '\\'
+        kVK_ANSI_RightBracket, // 93 ']'
         0, // 94 '^'
         0, // 95 '_'
-        SAPP_KEYCODE_GRAVE_ACCENT, // 96 '`'
-        SAPP_KEYCODE_A, // 'a'
-        SAPP_KEYCODE_B, // 'b'
-        SAPP_KEYCODE_C, // 'c'
-        SAPP_KEYCODE_D, // 'd'
-        SAPP_KEYCODE_E, // 'e'
-        SAPP_KEYCODE_F, // 'f'
-        SAPP_KEYCODE_G, // 'g'
-        SAPP_KEYCODE_H, // 'h'
-        SAPP_KEYCODE_I, // 'i'
-        SAPP_KEYCODE_J, // 'j'
-        SAPP_KEYCODE_K, // 'k'
-        SAPP_KEYCODE_L, // 'l'
-        SAPP_KEYCODE_M, // 'm'
-        SAPP_KEYCODE_N, // 'n'
-        SAPP_KEYCODE_O, // 'o'
-        SAPP_KEYCODE_P, // 'p'
-        SAPP_KEYCODE_Q, // 'q'
-        SAPP_KEYCODE_R, // 'r'
-        SAPP_KEYCODE_S, // 's'
-        SAPP_KEYCODE_T, // 't'
-        SAPP_KEYCODE_U, // 'u'
-        SAPP_KEYCODE_V, // 'v'
-        SAPP_KEYCODE_W, // 'w'
-        SAPP_KEYCODE_X, // 'x'
-        SAPP_KEYCODE_Y, // 'y'
-        SAPP_KEYCODE_Z, // 'z'
+        kVK_ANSI_Grave, // 96 '`'
+        kVK_ANSI_A, // 'a'
+        kVK_ANSI_B, // 'b'
+        kVK_ANSI_C, // 'c'
+        kVK_ANSI_D, // 'd'
+        kVK_ANSI_E, // 'e'
+        kVK_ANSI_F, // 'f'
+        kVK_ANSI_G, // 'g'
+        kVK_ANSI_H, // 'h'
+        kVK_ANSI_I, // 'i'
+        kVK_ANSI_J, // 'j'
+        kVK_ANSI_K, // 'k'
+        kVK_ANSI_L, // 'l'
+        kVK_ANSI_M, // 'm'
+        kVK_ANSI_N, // 'n'
+        kVK_ANSI_O, // 'o'
+        kVK_ANSI_P, // 'p'
+        kVK_ANSI_Q, // 'q'
+        kVK_ANSI_R, // 'r'
+        kVK_ANSI_S, // 's'
+        kVK_ANSI_T, // 't'
+        kVK_ANSI_U, // 'u'
+        kVK_ANSI_V, // 'v'
+        kVK_ANSI_W, // 'w'
+        kVK_ANSI_X, // 'x'
+        kVK_ANSI_Y, // 'y'
+        kVK_ANSI_Z, // 'z'
         0, // 123 '{'
         0, // 124 '|'
         0, // 125 '}'
@@ -134,41 +135,36 @@ namespace miata {
         0, // 127 DEL (Delete)
     };
 
-    std::map<std::string_view, sapp_keycode> KeyBinding::special_to_keycode_ = {
-        { "esc", SAPP_KEYCODE_ESCAPE },
-        { "enter", SAPP_KEYCODE_ENTER },
-        { "tab", SAPP_KEYCODE_TAB },
-        { "bs", SAPP_KEYCODE_BACKSPACE },
-        { "del", SAPP_KEYCODE_DELETE },
-        { "right", SAPP_KEYCODE_RIGHT },
-        { "left", SAPP_KEYCODE_LEFT },
-        { "down", SAPP_KEYCODE_DOWN },
-        { "up", SAPP_KEYCODE_UP },
-        { "f1", SAPP_KEYCODE_F1 },
-        { "f2", SAPP_KEYCODE_F2 },
-        { "f3", SAPP_KEYCODE_F3 },
-        { "f4", SAPP_KEYCODE_F4 },
-        { "f5", SAPP_KEYCODE_F5 },
-        { "f6", SAPP_KEYCODE_F6 },
-        { "f7", SAPP_KEYCODE_F7 },
-        { "f8", SAPP_KEYCODE_F8 },
-        { "f9", SAPP_KEYCODE_F9 },
-        { "f10", SAPP_KEYCODE_F10 },
-        { "f11", SAPP_KEYCODE_F11 },
-        { "f12", SAPP_KEYCODE_F12 },
-        { "f13", SAPP_KEYCODE_F13 },
-        { "f14", SAPP_KEYCODE_F14 },
-        { "f15", SAPP_KEYCODE_F15 },
-        { "f16", SAPP_KEYCODE_F16 },
-        { "f17", SAPP_KEYCODE_F17 },
-        { "f18", SAPP_KEYCODE_F18 },
-        { "f19", SAPP_KEYCODE_F19 },
-        { "f20", SAPP_KEYCODE_F20 },
-        { "f21", SAPP_KEYCODE_F21 },
-        { "f22", SAPP_KEYCODE_F22 },
-        { "f23", SAPP_KEYCODE_F23 },
-        { "f24", SAPP_KEYCODE_F24 },
-        { "f25", SAPP_KEYCODE_F25 },
+    std::map<std::string_view, uint16_t> KeyBinding::special_to_keycode_ = {
+        { "esc", kVK_Escape },
+        { "enter", kVK_Return },
+        { "tab", kVK_Tab },
+        { "bs", kVK_Delete },
+        { "del", kVK_ForwardDelete },
+        { "right", kVK_RightArrow },
+        { "left", kVK_LeftArrow },
+        { "down", kVK_DownArrow },
+        { "up", kVK_UpArrow },
+        { "f1", kVK_F1 },
+        { "f2", kVK_F2 },
+        { "f3", kVK_F3 },
+        { "f4", kVK_F4 },
+        { "f5", kVK_F5 },
+        { "f6", kVK_F6 },
+        { "f7", kVK_F7 },
+        { "f8", kVK_F8 },
+        { "f9", kVK_F9 },
+        { "f10", kVK_F10 },
+        { "f11", kVK_F11 },
+        { "f12", kVK_F12 },
+        { "f13", kVK_F13 },
+        { "f14", kVK_F14 },
+        { "f15", kVK_F15 },
+        { "f16", kVK_F16 },
+        { "f17", kVK_F17 },
+        { "f18", kVK_F18 },
+        { "f19", kVK_F19 },
+        { "f20", kVK_F20 },
     };
 
 
@@ -382,16 +378,16 @@ namespace miata {
         for (size_t i = 0; i < tokens.size() - 1; ++i) {
             auto& t = tokens[i];
             if (t == "S" || t == "s") {
-                mods |= SAPP_MODIFIER_SHIFT;
+                mods |= pl_modifier::Shift;
             }
             else if (t == "C" || t == "c") {
-                mods |= SAPP_MODIFIER_CTRL;
+                mods |= pl_modifier::Ctrl;
             }
             else if (t == "A" || t == "a") {
-                mods |= SAPP_MODIFIER_ALT;
+                mods |= pl_modifier::Alt;
             }
             else if (t == "M" || t == "m") {
-                mods |= SAPP_MODIFIER_SUPER;
+                mods |= pl_modifier::Super;
             }
             else {
                 throw std::runtime_error("Invalid modifier");

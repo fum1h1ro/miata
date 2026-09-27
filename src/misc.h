@@ -4,8 +4,6 @@
 #include <iterator>
 #include <rxcpp/rx.hpp>
 #include <type_traits>
-#define IMGUI_DEFINE_MATH_OPERATORS
-#include <imgui.h>
 #include <typeinfo>
 
 namespace misc {
@@ -178,86 +176,6 @@ namespace misc {
         }
     private:
         int flags_;
-    };
-
-    class ImGuiIdHolder {
-    public:
-        ImGuiIdHolder() : id_(0)
-        {
-        }
-        ImGuiIdHolder(const std::string& str)
-        {
-            id_ = ImGui::GetID(str.c_str());
-        }
-        ImGuiIdHolder(const ImGuiIdHolder& r)
-        {
-            id_ = r.id_;
-        }
-        ~ImGuiIdHolder()
-        {
-        }
-        inline bool IsValid() const
-        {
-            return id_ != 0;
-        }
-        inline operator ImGuiID() const
-        {
-            return id_;
-        }
-    private:
-        ImGuiID id_;
-    };
-
-    class ScopedImGuiStyle {
-    public:
-        ScopedImGuiStyle(ImGuiCol idx, ImVec4 col)
-        {
-            ImGui::PushStyleColor(idx, col);
-            color_count_ = 1;
-        }
-
-        ScopedImGuiStyle(ImGuiStyleVar idx, float val)
-        {
-            ImGui::PushStyleVar(idx, val);
-            var_count_ = 1;
-        }
-
-        ScopedImGuiStyle(ImGuiStyleVar idx, const ImVec2& val)
-        {
-            ImGui::PushStyleVar(idx, val);
-            var_count_ = 1;
-        }
-
-        void AddStyleColor(ImGuiCol idx, ImVec4 col)
-        {
-            ImGui::PushStyleColor(idx, col);
-            color_count_++;
-        }
-
-        void AddStyleVar(ImGuiStyleVar idx, float val)
-        {
-            ImGui::PushStyleVar(idx, val);
-            var_count_++;
-        }
-
-        void AddStyleVar(ImGuiStyleVar idx, const ImVec2& val)
-        {
-            ImGui::PushStyleVar(idx, val);
-            var_count_++;
-        }
-
-        ~ScopedImGuiStyle()
-        {
-            if (color_count_ > 0) {
-                ImGui::PopStyleColor(color_count_);
-            }
-            if (var_count_ > 0) {
-                ImGui::PopStyleVar(var_count_);
-            }
-        }
-    private:
-        int color_count_ = 0;
-        int var_count_ = 0;
     };
 
     template<typename T>

@@ -1,7 +1,7 @@
 #ifndef CONFIG_H__
 #define CONFIG_H__
 
-#include "imgui.h"
+#include "platform.h"
 #include <format>
 #include <map>
 #include <vector>
@@ -30,29 +30,29 @@ namespace miata {
 #undef X
             };
 
-            const ImVec4& Get(Type type) const
+            const Color4f& Get(Type type) const
             {
                 return values_[(size_t)type];
             }
-            std::expected<ImVec4, std::string> Get(std::string type) const
+            std::expected<Color4f, std::string> Get(std::string type) const
             {
                 auto idx = Find(type);
                 if (!idx) return std::unexpected(idx.error());
                 return values_[(size_t)idx.value()];
             }
-            void Set(Type type, const ImVec4& value)
+            void Set(Type type, const Color4f& value)
             {
                 values_[(size_t)type] = value;
             }
-            std::expected<bool, std::string> Set(std::string type, const ImVec4& value)
+            std::expected<bool, std::string> Set(std::string type, const Color4f& value)
             {
                 auto idx = Find(type);
                 if (!idx) return std::unexpected(idx.error());
                 values_[(size_t)idx.value()] = value;
                 return true;
             }
-            static std::string ToString(const ImVec4& v);
-            static std::expected<ImVec4, std::string> FromString(const std::string_view& v);
+            static std::string ToString(const Color4f& v);
+            static std::expected<Color4f, std::string> FromString(const std::string_view& v);
 
         private:
             Color();
@@ -64,7 +64,7 @@ namespace miata {
             }
 
             static const char* names_[];
-            std::vector<ImVec4> values_;
+            std::vector<Color4f> values_;
             std::map<std::string, Type> table_;
         };
 

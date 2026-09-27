@@ -3,7 +3,6 @@
 
 #include <array>
 #include <memory>
-#include <sokol_app.h>
 #include <lua.h>
 #include "misc.h"
 #include "KeyBinding.h"
@@ -24,31 +23,21 @@ namespace miata {
             return instance;
         }
 
-
         static void Initialize();
-        static void Frame();
-        static void Shutdown();
-        static void Event(const sapp_event* event);
-
-
 
 
     private:
         Application();
         ~Application();
         void InitializeImpl();
-        void FrameImpl();
-        void ShutdownImpl();
-        void EventImpl(const sapp_event* event);
-        void KeyDown(sapp_keycode key_code, uint32_t mods);
-        void KeyUp(sapp_keycode key_code, uint32_t mods);
-        void CheckUpdate();
-        void RequestUpdate();
+        void Update(); // タイマーから定期的に呼ばれる(旧FrameImpl相当)
+        void KeyDown(uint16_t key_code, uint16_t mods);
+        void KeyUp(uint16_t key_code, uint16_t mods);
+        void Resize(int width, int height);
         std::expected<KeyBindingMap, std::string> GetKeyBinding(const char map_c);
         void StartFileOperation(FileOpType type);
         void DeleteMarked();
         void OnFileOperationCompleted(FileOperationCompleted& event);
-        void CheckFileOperations();
 
 
         static int lua_command_bind(lua_State* L);
@@ -82,8 +71,6 @@ namespace miata {
 
 
 
-        bool frame_running_ = false;
-        int update_count_;
         std::unique_ptr<views::View> view_;
         //KeyBinding key_binding_;
         std::array<std::unique_ptr<KeyBinding>, (size_t)KeyBindingMap::Max> key_binding_map_;

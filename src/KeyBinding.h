@@ -6,8 +6,9 @@
 #include <format>
 #include <map>
 #include <expected>
-#include <sokol_app.h>
+#include <Carbon/Carbon.h>
 #include "misc.h"
+#include "platform.h"
 extern "C" {
 #include <lua.h>
 #include "lauxlib.h"
@@ -40,16 +41,16 @@ namespace miata {
             std::string ToString() const
             {
                 std::string s;
-                if (mods_.is(SAPP_MODIFIER_SHIFT)) {
+                if (mods_.is(pl_modifier::Shift)) {
                     s += "Shift+";
                 }
-                if (mods_.is(SAPP_MODIFIER_CTRL)) {
+                if (mods_.is(pl_modifier::Ctrl)) {
                     s += "Ctrl+";
                 }
-                if (mods_.is(SAPP_MODIFIER_ALT)) {
+                if (mods_.is(pl_modifier::Alt)) {
                     s += "Alt+";
                 }
-                if (mods_.is(SAPP_MODIFIER_SUPER)) {
+                if (mods_.is(pl_modifier::Super)) {
                     s += "Super+";
                 }
                 s += std::format("{:d}", keycode_);
@@ -166,12 +167,12 @@ namespace miata {
         void Bind(lua_State* L, const char* key, int func_ref);
 
 
-        static inline bool IsModifierKey(const sapp_keycode code)
+        static inline bool IsModifierKey(uint16_t code)
         {
-            return code == SAPP_KEYCODE_LEFT_SHIFT || code == SAPP_KEYCODE_RIGHT_SHIFT ||
-                code == SAPP_KEYCODE_LEFT_CONTROL || code == SAPP_KEYCODE_RIGHT_CONTROL ||
-                code == SAPP_KEYCODE_LEFT_ALT || code == SAPP_KEYCODE_RIGHT_ALT ||
-                code == SAPP_KEYCODE_LEFT_SUPER || code == SAPP_KEYCODE_RIGHT_SUPER;
+            return code == kVK_Shift || code == kVK_RightShift ||
+                code == kVK_Control || code == kVK_RightControl ||
+                code == kVK_Option || code == kVK_RightOption ||
+                code == kVK_Command || code == kVK_RightCommand;
         }
     private:
         std::expected<KeyStroke, ErrorReason> ParseKey(const std::string_view& key_stroke);
@@ -198,7 +199,7 @@ namespace miata {
 
         //std::map<Key, std::unique_ptr<Setting>> bindings_;
         static uint16_t ascii_to_keycode_[128];
-        static std::map<std::string_view, sapp_keycode> special_to_keycode_;
+        static std::map<std::string_view, uint16_t> special_to_keycode_;
     };
 
 
