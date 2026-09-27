@@ -73,6 +73,18 @@ namespace {
         return [NSColor colorWithRed:c.r green:c.g blue:c.b alpha:c.a];
     }
 
+    // Miata.config.set_font(name) で指定されたフォントを使う。未指定、または
+    // 指定された名前が解決できない場合はシステムデフォルトフォントにフォールバックする。
+    NSFont* MakeFont(CGFloat size)
+    {
+        auto& family = Config::FontFamily();
+        if (!family.empty()) {
+            NSFont* f = [NSFont fontWithName:@(family.c_str()) size:size];
+            if (f) return f;
+        }
+        return [NSFont systemFontOfSize:size];
+    }
+
     // ls -lh 風の簡易フォーマット。将来的に外部指定できるようにするまでの固定実装。
     std::string FormatSize(uintmax_t bytes)
     {
@@ -254,7 +266,7 @@ void FileListView::DrawHeader()
 
     NSString* path = @(model_.Path().c_str());
     NSDictionary* attrs = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:13],
+        NSFontAttributeName: MakeFont(13),
         NSForegroundColorAttributeName: ToNSColor(pl_get_color(pl_color_type::text_color)),
     };
     NSRect text_rect = NSMakeRect(kPadding, (bounds.size.height - 16) / 2, bounds.size.width - kPadding * 2, 16);
@@ -267,7 +279,7 @@ void FileListView::Draw()
     {
         auto dir_color = ToNSColor(Config::Color().Get(Config::Color::Type::Directory));
         auto file_color = ToNSColor(Config::Color().Get(Config::Color::Type::NormalFile));
-        NSFont* font = [NSFont systemFontOfSize:12];
+        NSFont* font = MakeFont(12);
 
         auto size = (int)list_.size();
         for (int i = 0; i < size; i++) {

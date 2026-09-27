@@ -101,6 +101,18 @@ namespace miata {
             };
             script.RegisterFunctionsToMetaTable(std::vector<luaL_Reg>(std::begin(metas), std::end(metas)));
         });
+
+        static luaL_Reg config_funcs[] = {
+            { "set_font", lua_set_font },
+        };
+        script.RegisterFunctions("Miata.config", std::vector<luaL_Reg>(std::begin(config_funcs), std::end(config_funcs)));
+    }
+
+    int Config::lua_set_font(lua_State* L)
+    {
+        Script::CheckArgType(L, 1, LUA_TSTRING);
+        Instance().font_family_ = lua_tostring(L, 1);
+        return 0;
     }
 
     int Config::lua_color_index(lua_State* L)

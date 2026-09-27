@@ -76,6 +76,12 @@ namespace miata {
             return Instance().color_;
         }
 
+        // フォントファミリー名。未指定(空文字列)の場合はシステムデフォルトフォントを使う。
+        static inline const std::string& FontFamily()
+        {
+            return Instance().font_family_;
+        }
+
     private:
         static inline Config& Instance()
         {
@@ -89,9 +95,11 @@ namespace miata {
         ~Config();
         static int lua_color_index(lua_State* L);
         static int lua_color_newindex(lua_State* L);
+        static int lua_set_font(lua_State* L);
 
         static Config* _instance;
         class Color color_;
+        std::string font_family_;
     };
 }
 
