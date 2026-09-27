@@ -199,8 +199,13 @@ void DialogPanel::Show(const std::string& title, const std::string& message, Siz
 void DialogPanel::Hide()
 {
     if (impl_->background) {
+        NSWindow* window = impl_->background.window;
         [impl_->background removeFromSuperview];
         impl_->background = nil;
+        // テキストフィールド等firstResponderだったビューが消えると、
+        // ウィンドウのfirstResponderがnilになりキー入力がNSBeepされてしまうため、
+        // メインビューへ明示的に戻す。
+        [window makeFirstResponder:window.contentView];
     }
     impl_->focusables.clear();
     impl_->buttons = nil;
