@@ -2,7 +2,7 @@ Miata.config.color.background = "#11223344"
 Miata.config.color.normal_text = "#aaff55ff"
 Miata.config.color.normal_file = "#ffffffff"
 Miata.config.color.directory = "#00ffaaff"
--- Miata.config.set_font("フォント名") でファイル一覧のフォントを指定できる(未指定ならシステムデフォルト)
+-- Miata.config.set_font("フォント名") / Miata.config.set_font_size(size) でファイル一覧のフォントを指定できる(未指定ならデフォルト)
 
 local command <const> = Miata.command
 

@@ -64,9 +64,20 @@
 namespace miata::views {
 
 namespace {
-    constexpr CGFloat kHeaderHeight = 26;
-    constexpr CGFloat kRowHeight = 20;
     constexpr CGFloat kPadding = 6;
+    constexpr CGFloat kRowVerticalMargin = 8; // 行の上下に確保する余白の合計
+    constexpr CGFloat kHeaderVerticalMargin = 13;
+
+    // ファイル一覧・ヘッダーの行の高さは、フォントサイズに応じて動的に決める
+    // (固定値のままだとフォントサイズを上げた時に行同士が重なってしまうため)。
+    CGFloat RowHeight()
+    {
+        return Config::FontSize() + kRowVerticalMargin;
+    }
+    CGFloat HeaderHeight()
+    {
+        return Config::FontSize() + 1 + kHeaderVerticalMargin;
+    }
 
     NSColor* ToNSColor(const Color4f& c)
     {
@@ -119,19 +130,20 @@ struct FileListView::Impl {
 
 FileListView::FileListView(models::FileListModel& list) : model_(list), impl_(std::make_unique<Impl>())
 {
+    CGFloat header_height = HeaderHeight();
     impl_->container = [[_MiataFileListLayoutContainer alloc] initWithFrame:NSMakeRect(0, 0, 200, 200)];
-    impl_->container.headerHeight = kHeaderHeight;
+    impl_->container.headerHeight = header_height;
 
-    _MiataFileListHeaderView* header = [[_MiataFileListHeaderView alloc] initWithFrame:NSMakeRect(0, 0, 200, kHeaderHeight)];
+    _MiataFileListHeaderView* header = [[_MiataFileListHeaderView alloc] initWithFrame:NSMakeRect(0, 0, 200, header_height)];
     header.owner = this;
     impl_->header_view = header;
     [impl_->container addSubview:impl_->header_view];
     impl_->container.headerView = impl_->header_view;
 
-    impl_->content_view = [[_MiataFileListNSView alloc] initWithFrame:NSMakeRect(0, 0, 200, 200 - kHeaderHeight)];
+    impl_->content_view = [[_MiataFileListNSView alloc] initWithFrame:NSMakeRect(0, 0, 200, 200 - header_height)];
     impl_->content_view.owner = this;
 
-    impl_->scroll_view = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, kHeaderHeight, 200, 200 - kHeaderHeight)];
+    impl_->scroll_view = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, header_height, 200, 200 - header_height)];
     impl_->scroll_view.hasVerticalScroller = YES;
     impl_->scroll_view.hasHorizontalScroller = NO;
     impl_->scroll_view.drawsBackground = NO;
@@ -239,8 +251,9 @@ void FileListView::Redraw()
     if (cursorIndex_ < 0) cursorIndex_ = 0;
     if (cursorIndex_ >= size) cursorIndex_ = std::max(0, size - 1);
 
+    CGFloat row_height = RowHeight();
     NSRect content_frame = impl_->content_view.frame;
-    CGFloat needed_height = std::max((CGFloat)size * kRowHeight, impl_->scroll_view.contentSize.height);
+    CGFloat needed_height = std::max((CGFloat)size * row_height, impl_->scroll_view.contentSize.height);
     CGFloat needed_width = impl_->scroll_view.contentSize.width;
     if (content_frame.size.height != needed_height || content_frame.size.width != needed_width) {
         content_frame.size.height = needed_height;
@@ -249,7 +262,7 @@ void FileListView::Redraw()
     }
 
     if (focus_ && size > 0) {
-        NSRect row_rect = NSMakeRect(0, (CGFloat)cursorIndex_ * kRowHeight, content_frame.size.width, kRowHeight);
+        NSRect row_rect = NSMakeRect(0, (CGFloat)cursorIndex_ * row_height, content_frame.size.width, row_height);
         [impl_->content_view scrollRectToVisible:row_rect];
     }
 
@@ -266,10 +279,11 @@ void FileListView::DrawHeader()
 
     NSString* path = @(model_.Path().c_str());
     NSDictionary* attrs = @{
-        NSFontAttributeName: MakeFont(13),
+        NSFontAttributeName: MakeFont(Config::FontSize() + 1),
         NSForegroundColorAttributeName: ToNSColor(pl_get_color(pl_color_type::text_color)),
     };
-    NSRect text_rect = NSMakeRect(kPadding, (bounds.size.height - 16) / 2, bounds.size.width - kPadding * 2, 16);
+    NSSize text_size = [path sizeWithAttributes:attrs];
+    NSRect text_rect = NSMakeRect(kPadding, (bounds.size.height - text_size.height) / 2, bounds.size.width - kPadding * 2, text_size.height);
     [path drawInRect:text_rect withAttributes:attrs];
 }
 
@@ -279,13 +293,14 @@ void FileListView::Draw()
     {
         auto dir_color = ToNSColor(Config::Color().Get(Config::Color::Type::Directory));
         auto file_color = ToNSColor(Config::Color().Get(Config::Color::Type::NormalFile));
-        NSFont* font = MakeFont(12);
+        NSFont* font = MakeFont(Config::FontSize());
+        CGFloat row_height = RowHeight();
 
         auto size = (int)list_.size();
         for (int i = 0; i < size; i++) {
             auto& entry_model = list_[(size_t)i]->Model();
-            CGFloat y = (CGFloat)i * kRowHeight;
-            NSRect row_rect = NSMakeRect(0, y, impl_->content_view.bounds.size.width, kRowHeight);
+            CGFloat y = (CGFloat)i * row_height;
+            NSRect row_rect = NSMakeRect(0, y, impl_->content_view.bounds.size.width, row_height);
 
             if (entry_model.IsMarked()) {
                 [[NSColor colorWithRed:0 green:0.25 blue:0.5 alpha:1.0] set];
@@ -307,17 +322,18 @@ void FileListView::Draw()
             NSSize right_size = [right_text sizeWithAttributes:attrs];
             NSRect right_rect = NSMakeRect(
                 row_rect.origin.x + row_rect.size.width - right_size.width - kPadding,
-                row_rect.origin.y + (kRowHeight - right_size.height) / 2,
+                row_rect.origin.y + (row_height - right_size.height) / 2,
                 right_size.width, right_size.height
             );
             [right_text drawInRect:right_rect withAttributes:attrs];
 
             NSString* name = @(entry_model.Name().c_str());
+            NSSize name_size = [name sizeWithAttributes:attrs];
             NSRect name_rect = NSMakeRect(
                 row_rect.origin.x + kPadding,
-                row_rect.origin.y + (kRowHeight - 16) / 2,
+                row_rect.origin.y + (row_height - name_size.height) / 2,
                 row_rect.size.width - right_size.width - kPadding * 3,
-                16
+                name_size.height
             );
             [name drawInRect:name_rect withAttributes:attrs];
         }

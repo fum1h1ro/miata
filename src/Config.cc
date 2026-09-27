@@ -104,8 +104,16 @@ namespace miata {
 
         static luaL_Reg config_funcs[] = {
             { "set_font", lua_set_font },
+            { "set_font_size", lua_set_font_size },
         };
         script.RegisterFunctions("Miata.config", std::vector<luaL_Reg>(std::begin(config_funcs), std::end(config_funcs)));
+    }
+
+    int Config::lua_set_font_size(lua_State* L)
+    {
+        Script::CheckArgType(L, 1, LUA_TNUMBER);
+        Instance().font_size_ = (float)lua_tonumber(L, 1);
+        return 0;
     }
 
     int Config::lua_set_font(lua_State* L)

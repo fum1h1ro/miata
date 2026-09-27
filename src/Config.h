@@ -82,6 +82,12 @@ namespace miata {
             return Instance().font_family_;
         }
 
+        // ファイル一覧本体の基準フォントサイズ(pt)。ヘッダーはこれより少し大きいサイズを使う。
+        static inline float FontSize()
+        {
+            return Instance().font_size_;
+        }
+
     private:
         static inline Config& Instance()
         {
@@ -96,10 +102,12 @@ namespace miata {
         static int lua_color_index(lua_State* L);
         static int lua_color_newindex(lua_State* L);
         static int lua_set_font(lua_State* L);
+        static int lua_set_font_size(lua_State* L);
 
         static Config* _instance;
         class Color color_;
         std::string font_family_;
+        float font_size_ = 12.0f;
     };
 }
 
