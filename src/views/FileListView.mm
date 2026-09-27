@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 #include <algorithm>
+#include <format>
 #include "FileListView.h"
 #include "../platform.h"
 #include "../Config.h"
@@ -33,6 +34,22 @@ namespace {
     {
         return [NSColor colorWithRed:c.r green:c.g blue:c.b alpha:c.a];
     }
+
+    // ls -lh 風の簡易フォーマット。将来的に外部指定できるようにするまでの固定実装。
+    std::string FormatSize(uintmax_t bytes)
+    {
+        static const char* units[] = {"B", "K", "M", "G", "T"};
+        double size = (double)bytes;
+        int unit = 0;
+        while (size >= 1024.0 && unit < 4) {
+            size /= 1024.0;
+            ++unit;
+        }
+        if (unit == 0) {
+            return std::format("{}{}", (uintmax_t)size, units[unit]);
+        }
+        return std::format("{:.1f}{}", size, units[unit]);
+    }
 }
 
 struct FileListView::Impl {
@@ -40,6 +57,14 @@ struct FileListView::Impl {
     NSView* header_view = nil;
     NSScrollView* scroll_view = nil;
     _MiataFileListNSView* content_view = nil;
+    id frame_observer = nil; // クリップビューの幅変化をdocumentViewに追従させるための監視トークン
+
+    ~Impl()
+    {
+        if (frame_observer) {
+            [[NSNotificationCenter defaultCenter] removeObserver:frame_observer];
+        }
+    }
 };
 
 FileListView::FileListView(models::FileListModel& list) : model_(list), impl_(std::make_unique<Impl>())
@@ -56,9 +81,23 @@ FileListView::FileListView(models::FileListModel& list) : model_(list), impl_(st
     impl_->scroll_view = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, kHeaderHeight, 200, 200 - kHeaderHeight)];
     impl_->scroll_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     impl_->scroll_view.hasVerticalScroller = YES;
+    impl_->scroll_view.hasHorizontalScroller = NO;
     impl_->scroll_view.drawsBackground = NO;
     impl_->scroll_view.documentView = impl_->content_view;
     [impl_->container addSubview:impl_->scroll_view];
+
+    // NSSplitViewのドラッグやウィンドウリサイズでクリップビューの幅が変わるたびに
+    // documentView(content_view)の幅を追従させる。autoresizingMaskだけでは
+    // 初期化直後(ウィンドウ未配置)の不正確な幅が基準になってしまうため通知で確実に同期する。
+    impl_->scroll_view.contentView.postsFrameChangedNotifications = YES;
+    FileListView* self_ptr = this;
+    impl_->frame_observer = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSViewFrameDidChangeNotification
+                    object:impl_->scroll_view.contentView
+                     queue:nil
+                usingBlock:^(NSNotification*) {
+        self_ptr->Redraw();
+    }];
 
     subscriptions_.push_back(
         model_.ObservePath()
@@ -148,9 +187,10 @@ void FileListView::Redraw()
 
     NSRect content_frame = impl_->content_view.frame;
     CGFloat needed_height = std::max((CGFloat)size * kRowHeight, impl_->scroll_view.contentSize.height);
-    if (content_frame.size.height != needed_height) {
+    CGFloat needed_width = impl_->scroll_view.contentSize.width;
+    if (content_frame.size.height != needed_height || content_frame.size.width != needed_width) {
         content_frame.size.height = needed_height;
-        content_frame.size.width = impl_->scroll_view.contentSize.width;
+        content_frame.size.width = needed_width;
         impl_->content_view.frame = content_frame;
     }
 
@@ -208,9 +248,8 @@ void FileListView::Draw()
                 NSForegroundColorAttributeName: entry_model.IsDirectory() ? dir_color : file_color,
             };
 
-            NSString* mtime = @(entry_model.ModifiedTime().c_str());
-            NSString* dir_tag = entry_model.IsDirectory() ? @"<DIR> " : @"";
-            NSString* right_text = [dir_tag stringByAppendingString:mtime];
+            std::string size_or_dir = entry_model.IsDirectory() ? "<DIR>" : FormatSize(entry_model.Size());
+            NSString* right_text = [NSString stringWithFormat:@"%s  %s", size_or_dir.c_str(), entry_model.ModifiedTime().c_str()];
             NSSize right_size = [right_text sizeWithAttributes:attrs];
             NSRect right_rect = NSMakeRect(
                 row_rect.origin.x + row_rect.size.width - right_size.width - kPadding,
