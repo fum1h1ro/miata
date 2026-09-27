@@ -195,11 +195,8 @@ namespace miata::views {
             current_dialog_->Open();
         }
 
-        if (current_dialog_ != nullptr) {
-            current_dialog_->OnGui(width, height);
-            if (!current_dialog_->IsOpened()) {
-                current_dialog_.reset();
-            }
+        if (current_dialog_ != nullptr && !current_dialog_->IsOpened()) {
+            current_dialog_.reset();
         }
     }
 

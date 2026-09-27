@@ -26,10 +26,24 @@ Miata = {
             return Miata._private.dialog_result(handle, "yesno")
         end,
         dialog_input = function(message, initial_text)
-            return Miata._private.show_input_dialog(message, initial_text or "")
+            local handle = Miata._private.dialog_open("inputtext", {
+                message = message, initial_text = initial_text or ""
+            })
+            coroutine.yield()
+            coroutine.yield()
+            while Miata._private.dialog_is_open(handle) do
+                coroutine.yield()
+            end
+            return Miata._private.dialog_result(handle, "inputtext")
         end,
         dialog_custom = function(spec)
-            return Miata._private.show_custom_dialog(spec)
+            local handle = Miata._private.dialog_open("custom", spec)
+            coroutine.yield()
+            coroutine.yield()
+            while Miata._private.dialog_is_open(handle) do
+                coroutine.yield()
+            end
+            return Miata._private.dialog_result(handle, "custom")
         end,
         make_folder = function()
             local name = Miata.command.dialog_input("新しいフォルダ名を入力してください", "")

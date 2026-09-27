@@ -70,6 +70,83 @@ static ImFont* font = nullptr;
 
 
 namespace miata {
+    // tidx にあるテーブル(title/message/buttons/checkboxes/selects)から CustomDialogSpec を組み立てる。
+    static CustomDialogSpec ParseCustomDialogSpec(lua_State* L, int tidx)
+    {
+        auto get_str = [&](int idx, const char* key) -> std::string {
+            lua_getfield(L, idx, key);
+            std::string v = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_pop(L, 1);
+            return v;
+        };
+
+        CustomDialogSpec spec;
+        spec.title   = get_str(tidx, "title");
+        spec.message = get_str(tidx, "message");
+
+        // buttons
+        lua_getfield(L, tidx, "buttons");
+        if (lua_istable(L, -1)) {
+            int n = (int)lua_rawlen(L, -1);
+            for (int i = 1; i <= n; i++) {
+                lua_rawgeti(L, -1, i);
+                if (lua_isstring(L, -1)) spec.buttons.push_back(lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+
+        // checkboxes
+        lua_getfield(L, tidx, "checkboxes");
+        if (lua_istable(L, -1)) {
+            int n = (int)lua_rawlen(L, -1);
+            for (int i = 1; i <= n; i++) {
+                lua_rawgeti(L, -1, i);
+                if (lua_istable(L, -1)) {
+                    CustomDialogCheckbox cb;
+                    cb.label   = get_str(lua_gettop(L), "label");
+                    lua_getfield(L, -1, "checked");
+                    cb.checked = lua_isboolean(L, -1) && lua_toboolean(L, -1);
+                    lua_pop(L, 1);
+                    spec.checkboxes.push_back(std::move(cb));
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+
+        // selects
+        lua_getfield(L, tidx, "selects");
+        if (lua_istable(L, -1)) {
+            int n = (int)lua_rawlen(L, -1);
+            for (int i = 1; i <= n; i++) {
+                lua_rawgeti(L, -1, i);
+                if (lua_istable(L, -1)) {
+                    CustomDialogSelect sel;
+                    sel.label = get_str(lua_gettop(L), "label");
+                    lua_getfield(L, -1, "selected");
+                    sel.selected = lua_isnumber(L, -1) ? (int)lua_tointeger(L, -1) - 1 : 0; // 1-based → 0-based
+                    lua_pop(L, 1);
+                    lua_getfield(L, -1, "options");
+                    if (lua_istable(L, -1)) {
+                        int m = (int)lua_rawlen(L, -1);
+                        for (int j = 1; j <= m; j++) {
+                            lua_rawgeti(L, -1, j);
+                            if (lua_isstring(L, -1)) sel.options.push_back(lua_tostring(L, -1));
+                            lua_pop(L, 1);
+                        }
+                    }
+                    lua_pop(L, 1);
+                    spec.selects.push_back(std::move(sel));
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+
+        return spec;
+    }
+
     Application::Application()
     {
         update_count_ = 0;
@@ -177,8 +254,6 @@ namespace miata {
             { "dialog_open", lua_private_dialog_open },
             { "dialog_is_open", lua_private_dialog_is_open },
             { "dialog_result", lua_private_dialog_result },
-            { "show_input_dialog", lua_private_show_input_dialog },
-            { "show_custom_dialog", lua_private_show_custom_dialog },
         };
         script.RegisterFunctions(
             "Miata._private",
@@ -883,9 +958,7 @@ namespace miata {
             auto initial_text = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "initial_text", "");
 
             auto dialog = std::make_shared<views::InputTextDialog>(
-                [](views::IDialog& dialog) {
-                    std::print("inputtext\n");
-                },
+                [](views::IDialog&) {},
                 views::InputTextDialog::arguments{
                     .message_ = message,
                     .initial_text_ = initial_text,
@@ -896,30 +969,12 @@ namespace miata {
             return 1;
         }
         else if (type_string == "custom") {
-            auto message = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "message", "");
-
-
-
+            auto spec = ParseCustomDialogSpec(L, 2);
 
             auto dialog = std::make_shared<views::CustomDialog>(
-                [](views::IDialog& dialog) {
-                    std::print("custom\n");
-                },
-                views::CustomDialog::arguments{
-                    .message_ = "custom",
-                    .button_text_ = "OK",
-                    .on_button = []() {
-                        std::print("on_button\n");
-                    }
-                }
+                [](views::IDialog&) {},
+                spec
             );
-            dialog->SetTitle(message);
-            dialog->AddCheckbox("checkbox", true);
-            dialog->AddCheckbox("checkbox", false);
-            dialog->AddCheckbox("checkbox", false);
-            dialog->AddSelectables({ "1", "2", "3" });
-            dialog->AddSelectables({ "1", "2", "3" });
-
             auto dialog_ptr = Script::PushSharedUserdata<views::CustomDialog>(L, dialog);
             app.view_->RequestDialog(dialog_ptr);
             return 1;
@@ -931,7 +986,6 @@ namespace miata {
 
     int Application::lua_private_dialog_is_open(lua_State* L)
     {
-        auto& app = Application::Instance();
         Script::CheckArgType(L, 1, LUA_TUSERDATA);
         auto ud = static_cast<std::shared_ptr<views::IDialog>*>(lua_touserdata(L, 1));
         lua_pushboolean(L, (*ud)->IsOpened());
@@ -953,123 +1007,46 @@ namespace miata {
             lua_pushboolean(L, (*ud)->Result());
             return 1;
         }
-        return 0;
-    }
-
-    int Application::lua_private_show_input_dialog(lua_State* L)
-    {
-        const char* message = luaL_checkstring(L, 1);
-        const char* initial = luaL_optstring(L, 2, "");
-        auto result = pl_show_input_dialog(message, initial);
-        if (result) {
-            lua_pushstring(L, result->c_str());
-        } else {
-            lua_pushnil(L);
-        }
-        return 1;
-    }
-
-    int Application::lua_private_show_custom_dialog(lua_State* L)
-    {
-        Script::CheckArgType(L, 1, LUA_TTABLE);
-
-        auto get_str = [&](int tidx, const char* key) -> std::string {
-            lua_getfield(L, tidx, key);
-            std::string v = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
-            lua_pop(L, 1);
-            return v;
-        };
-
-        CustomDialogSpec spec;
-        spec.title   = get_str(1, "title");
-        spec.message = get_str(1, "message");
-
-        // buttons
-        lua_getfield(L, 1, "buttons");
-        if (lua_istable(L, -1)) {
-            int n = (int)lua_rawlen(L, -1);
-            for (int i = 1; i <= n; i++) {
-                lua_rawgeti(L, -1, i);
-                if (lua_isstring(L, -1)) spec.buttons.push_back(lua_tostring(L, -1));
-                lua_pop(L, 1);
+        else if (type_string == "inputtext") {
+            auto ud = static_cast<std::shared_ptr<views::InputTextDialog>*>(lua_touserdata(L, 1));
+            auto& result = (*ud)->Result();
+            if (result) {
+                lua_pushstring(L, result->c_str());
+            } else {
+                lua_pushnil(L);
             }
-        }
-        lua_pop(L, 1);
-
-        // checkboxes
-        lua_getfield(L, 1, "checkboxes");
-        if (lua_istable(L, -1)) {
-            int n = (int)lua_rawlen(L, -1);
-            for (int i = 1; i <= n; i++) {
-                lua_rawgeti(L, -1, i);
-                if (lua_istable(L, -1)) {
-                    CustomDialogCheckbox cb;
-                    cb.label   = get_str(lua_gettop(L), "label");
-                    lua_getfield(L, -1, "checked");
-                    cb.checked = lua_isboolean(L, -1) && lua_toboolean(L, -1);
-                    lua_pop(L, 1);
-                    spec.checkboxes.push_back(std::move(cb));
-                }
-                lua_pop(L, 1);
-            }
-        }
-        lua_pop(L, 1);
-
-        // selects
-        lua_getfield(L, 1, "selects");
-        if (lua_istable(L, -1)) {
-            int n = (int)lua_rawlen(L, -1);
-            for (int i = 1; i <= n; i++) {
-                lua_rawgeti(L, -1, i);
-                if (lua_istable(L, -1)) {
-                    CustomDialogSelect sel;
-                    sel.label = get_str(lua_gettop(L), "label");
-                    lua_getfield(L, -1, "selected");
-                    sel.selected = lua_isnumber(L, -1) ? (int)lua_tointeger(L, -1) - 1 : 0; // 1-based → 0-based
-                    lua_pop(L, 1);
-                    lua_getfield(L, -1, "options");
-                    if (lua_istable(L, -1)) {
-                        int m = (int)lua_rawlen(L, -1);
-                        for (int j = 1; j <= m; j++) {
-                            lua_rawgeti(L, -1, j);
-                            if (lua_isstring(L, -1)) sel.options.push_back(lua_tostring(L, -1));
-                            lua_pop(L, 1);
-                        }
-                    }
-                    lua_pop(L, 1);
-                    spec.selects.push_back(std::move(sel));
-                }
-                lua_pop(L, 1);
-            }
-        }
-        lua_pop(L, 1);
-
-        auto result = pl_show_custom_dialog(spec);
-        if (!result) {
-            lua_pushnil(L);
             return 1;
         }
+        else if (type_string == "custom") {
+            auto ud = static_cast<std::shared_ptr<views::CustomDialog>*>(lua_touserdata(L, 1));
+            auto& result = (*ud)->Result();
+            if (!result) {
+                lua_pushnil(L);
+                return 1;
+            }
 
-        lua_newtable(L);
+            lua_newtable(L);
 
-        lua_pushinteger(L, result->button_index + 1); // 0-based → 1-based
-        lua_setfield(L, -2, "button");
+            lua_pushinteger(L, result->button_index + 1); // 0-based → 1-based
+            lua_setfield(L, -2, "button");
 
-        lua_newtable(L);
-        for (int i = 0; i < (int)result->checkboxes.size(); i++) {
-            lua_pushboolean(L, result->checkboxes[i]);
-            lua_rawseti(L, -2, i + 1);
+            lua_newtable(L);
+            for (int i = 0; i < (int)result->checkboxes.size(); i++) {
+                lua_pushboolean(L, result->checkboxes[i]);
+                lua_rawseti(L, -2, i + 1);
+            }
+            lua_setfield(L, -2, "checkboxes");
+
+            lua_newtable(L);
+            for (int i = 0; i < (int)result->selects.size(); i++) {
+                lua_pushinteger(L, result->selects[i] + 1); // 0-based → 1-based
+                lua_rawseti(L, -2, i + 1);
+            }
+            lua_setfield(L, -2, "selects");
+
+            return 1;
         }
-        lua_setfield(L, -2, "checkboxes");
-
-        lua_newtable(L);
-        for (int i = 0; i < (int)result->selects.size(); i++) {
-            lua_pushinteger(L, result->selects[i] + 1); // 0-based → 1-based
-            lua_rawseti(L, -2, i + 1);
-        }
-        lua_setfield(L, -2, "selects");
-
-        return 1;
+        return 0;
     }
 
 }

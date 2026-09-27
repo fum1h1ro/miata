@@ -14,7 +14,7 @@ project(sokol-app CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release")
 
-file(GLOB_RECURSE SOURCES "src/*.c" "src/*.cc")
+file(GLOB_RECURSE SOURCES "src/*.c" "src/*.cc" "src/*.mm")
 file(GLOB_RECURSE RESOURCES "resources/*")
 
 add_subdirectory(packages)

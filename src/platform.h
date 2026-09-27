@@ -62,7 +62,9 @@ std::string pl_normalize_string(const std::string& input);
 void pl_play_beep();
 void pl_app_post_initialize();
 void pl_update_ime(bool want_text_input);
-std::optional<std::string> pl_show_input_dialog(const std::string& message, const std::string& initial);
+// AppKitのcontentView(NSView*)を(__bridge void*)で返す。
+// views/ 層はAppKit型に直接依存させたくないため、このvoid*橋渡し越しに使う。
+void* pl_get_content_view();
 
 struct CustomDialogCheckbox {
     std::string label;
@@ -85,7 +87,6 @@ struct CustomDialogResult {
     std::vector<bool> checkboxes;
     std::vector<int> selects; // 0-based selected index
 };
-std::optional<CustomDialogResult> pl_show_custom_dialog(const CustomDialogSpec& spec);
 
 std::expected<void, std::string> pl_trash_file(const std::filesystem::path& path);
 
