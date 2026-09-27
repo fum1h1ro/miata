@@ -1,15 +1,15 @@
 # Miata
 
 macOS 専用のキーボードドリブンなファイルブラウザ。
-sokol + Dear ImGui でレンダリングし、Lua スクリプトでキーバインドとコマンドを定義する。
+フルネイティブ AppKit で描画し、Lua スクリプトでキーバインドとコマンドを定義する。
 
 ## 技術スタック
 
 - **言語**: C++23、Objective-C++
-- **レンダリング**: [sokol](https://github.com/floooh/sokol)（Metal バックエンド）+ [Dear ImGui](https://github.com/ocornut/imgui)
+- **レンダリング**: フルネイティブ AppKit（`NSView.drawRect:` によるカスタム描画 + 標準コントロール。sokol/Dear ImGui は使用していない）
 - **スクリプト**: Lua 5.x（コルーチンベースのダイアログ制御）
 - **リアクティブ**: RxCpp（`ReactiveProperty` 等）
-- **依存関係**: すべて `packages/` に Git submodule として存在
+- **依存関係**: すべて `packages/` に Git submodule として存在（実際にビルドされるのは `lua` のみ）
 
 ## ビルド
 
@@ -25,23 +25,22 @@ rake run:debug        # Debug ビルドして実行
 rake run:release      # Release ビルドして実行
 ```
 
-成果物: `_build/debug/miata.app` / `_build/release/miata.app`
+成果物: `_build/debug/Miata.app` / `_build/release/Miata.app`
 
 ## アーキテクチャ
 
 ```
 src/
-├── Application.cc/h      # フレームループ・イベント処理・コマンド登録（シングルトン）
+├── Application.cc/h      # 更新処理(0.05秒タイマー駆動)・イベント処理・コマンド登録（シングルトン）
 ├── Script.cc/h           # Lua VM 管理・C++ 関数登録・resources/ の読み込み
 ├── KeyBinding.h          # キーストローク解析・モード別キーマップ管理
 ├── misc.h                # Flags・ReactiveProperty・MessageBroker 等のユーティリティ
-├── platform.h            # macOS 固有 API の抽象化（フォント検索・ダイアログ等）
+├── platform.h            # OS 依存処理の抽象化（`pl_*` 関数。色・フォント・ファイル操作・プロセス起動等）
 ├── models/               # データモデル（ファイルリスト・ブラウザ状態）
-├── views/                # UI レイヤー（View・BrowserView・Dialog）
-└── widgets/              # 汎用 UI ウィジェット
+└── views/                # UI レイヤー（View・BrowserView・FileListView・Dialog）
 
 platforms/
-└── osx.mm                # macOS 固有実装（IME・ネイティブダイアログ・ウィンドウ操作）
+└── osx.mm                # platform.h の macOS 実装。AppKit 型はここと views/*.mm にのみ閉じ込める
 
 resources/
 ├── base.lua              # コアユーティリティ・ダイアログヘルパー定義
@@ -73,7 +72,7 @@ Miata.command.navigate_cancel()
 
 ### ダイアログ
 
-すべてのダイアログはネイティブ NSAlert で表示される（macOS IME 対応）。
+ダイアログは `NSAlert` ではなく、非モーダルな `NSView` オーバーレイ（`DialogPanel`）で表示される。テキスト入力欄は本物の `NSTextField` を使うため macOS IME（日本語入力）にそのまま対応する。
 
 #### `dialog_confirm`
 
@@ -119,6 +118,20 @@ local result = Miata.command.dialog_custom({
 -- result.selects      -- 選択インデックス（1始まり）の配列
 ```
 
+#### `dialog_filter_list`
+
+大量の文字列（`items`）から [fzf](https://github.com/junegunn/fzf) による絞り込みで1件選択する。フィルタ欄は常時表示され、上下矢印で選択移動、Enter で確定、Escape でキャンセルする。`fzf` が見つからない環境では大文字小文字を無視した部分一致に自動フォールバックする。
+
+```lua
+local picked = Miata.command.dialog_filter_list({
+    items   = path_history,        -- 必須: 文字列の配列
+    title   = "履歴",              -- optional
+    message = "選択してください",   -- optional
+})
+
+-- picked: 選択した文字列 または nil（キャンセル）
+```
+
 ### ユーティリティ
 
 ```lua
@@ -133,4 +146,7 @@ Miata.config.color.background  = "#11223344"  -- RGBA hex
 Miata.config.color.normal_text = "#aaff55ff"
 Miata.config.color.normal_file = "#ffffffff"
 Miata.config.color.directory   = "#00ffaaff"
+
+Miata.config.set_font("フォント名")   -- 未指定時はシステムデフォルトフォント
+Miata.config.set_font_size(14)        -- ファイル一覧の行の高さも連動して変わる
 ```
