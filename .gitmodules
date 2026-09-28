@@ -1,9 +1,3 @@
-[submodule "packages/imgui"]
-	path = packages/imgui
-	url = git@github.com:ocornut/imgui.git
-[submodule "packages/sokol"]
-	path = packages/sokol
-	url = git@github.com:floooh/sokol.git
 [submodule "packages/lua"]
 	path = packages/lua
 	url = git@github.com:lua/lua.git
