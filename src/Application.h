@@ -55,6 +55,9 @@ namespace miata {
         static int lua_command_copy_marked(lua_State* L);
         static int lua_command_move_marked(lua_State* L);
         static int lua_command_make_directory(lua_State* L);
+        static int lua_command_rename_target(lua_State* L);
+        static int lua_command_rename_conflict(lua_State* L);
+        static int lua_command_rename(lua_State* L);
         static int lua_command_delete_marked(lua_State* L);
         static int lua_command_sort(lua_State* L);
 
