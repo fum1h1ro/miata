@@ -132,11 +132,32 @@ local picked = Miata.command.dialog_filter_list({
 -- picked: 選択した文字列 または nil（キャンセル）
 ```
 
+### ファイル操作
+
+```lua
+Miata.command.mark()                -- カーソル位置のエントリをマーク
+Miata.command.unmark()              -- マーク解除
+Miata.command.toggle_mark()         -- マークのトグル
+Miata.command.copy_marked()         -- マーク済み(無ければカーソル位置)を反対側のペインへコピー
+Miata.command.move_marked()         -- 同、移動。コピー/移動とも、名前が衝突する場合は上書き確認ダイアログを出す
+Miata.command.delete_marked()       -- マーク済みをゴミ箱へ移動(確認ダイアログあり)
+Miata.command.make_directory(name)  -- 現在のペインに新規フォルダを作成
+Miata.command.make_folder()         -- 名前を入力ダイアログで聞いてから make_directory を呼ぶ
+Miata.command.sort(key, reverse)    -- key: "name"/"size"/"mtime"/"ext"
+```
+
+#### `rename`
+
+カーソル位置の単一エントリの名前を変更する。**マークが1件でもあれば何もしない**（複数選択時のリネームは未対応）。リネーム先の名前が既に存在する場合は上書きせず、衝突している旨のメッセージを添えて同じ入力ダイアログを開き直す。
+
+```lua
+Miata.command.rename()
+```
+
 ### ユーティリティ
 
 ```lua
 Miata.util.pp(value)          -- デバッグ出力（pretty print）
-Miata.command.toggle_mark()   -- 選択マークのトグル
 ```
 
 ### 設定
