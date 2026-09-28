@@ -22,7 +22,8 @@ namespace miata::models {
         }
         inline bool IsValid() const
         {
-            return raw_.exists();
+            std::error_code ec;
+            return raw_.exists(ec);
         }
         inline const std::string& Name() const
         {
@@ -40,10 +41,15 @@ namespace miata::models {
         {
             return ext_;
         }
+        // 破損したシンボリックリンクや特殊なシステムファイル(例: macOSルート直下の
+        // .VolumeIcon.icns 等)はディレクトリ一覧には出てくるがstatに失敗することがあるため、
+        // 例外を投げないerror_code版を使い、失敗時は0/falseにフォールバックする。
         inline uintmax_t Size() const
         {
             if (IsDirectory()) return 0;
-            return raw_.file_size();
+            std::error_code ec;
+            auto size = raw_.file_size(ec);
+            return ec ? 0 : size;
         }
         inline const std::string& ModifiedTime() const
         {
@@ -51,11 +57,13 @@ namespace miata::models {
         }
         inline bool IsDirectory() const
         {
-            return raw_.is_directory();
+            std::error_code ec;
+            return raw_.is_directory(ec);
         }
         inline bool IsSymlink() const
         {
-            return raw_.is_symlink();
+            std::error_code ec;
+            return raw_.is_symlink(ec);
         }
         inline bool IsMarked() const
         {
