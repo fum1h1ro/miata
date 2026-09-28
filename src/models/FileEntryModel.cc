@@ -16,9 +16,12 @@ namespace miata::models {
         name_ = pl_normalize_string(filename.string());
         basename_ = filename.stem().string();
         ext_ = filename.extension().string();
-        if (raw_.exists()) {
-            auto t = std::filesystem::last_write_time(entry);
-            mtime_ = format_time(t);
+        std::error_code ec;
+        if (raw_.exists(ec) && !ec) {
+            auto t = std::filesystem::last_write_time(entry, ec);
+            if (!ec) {
+                mtime_ = format_time(t);
+            }
         }
     }
 
