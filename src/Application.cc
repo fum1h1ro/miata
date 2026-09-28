@@ -141,6 +141,9 @@ namespace miata {
             { "dialog_open", lua_private_dialog_open },
             { "dialog_is_open", lua_private_dialog_is_open },
             { "dialog_result", lua_private_dialog_result },
+            { "rename_target", lua_private_rename_target },
+            { "rename_conflict", lua_private_rename_conflict },
+            { "rename_execute", lua_private_rename_execute },
         };
         script.RegisterFunctions(
             "Miata._private",
@@ -553,6 +556,77 @@ namespace miata {
                 [](views::IDialog&) {},
                 views::ConfirmDialog::arguments{
                     .message_ = std::format("フォルダを作成できませんでした: {}", ec.message()),
+                    .button_text_ = "OK",
+                }
+            ));
+            lua_pushboolean(L, false);
+        }
+        return 1;
+    }
+
+    // list内にマークが1件でもあれば true(rename系コマンドは単一ファイルのみ対応のため無効化する)
+    static bool AnyMarked(models::FileListModel& list)
+    {
+        for (auto i = 0; i < list.Size(); ++i) {
+            if (list.GetEntry(i).IsMarked()) return true;
+        }
+        return false;
+    }
+
+    // マークがある、またはリストが空ならnil。それ以外はカーソル位置のエントリ名を返す。
+    int Application::lua_private_rename_target(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        auto& list = app.view_->CurrentList();
+
+        if (list.Size() == 0 || AnyMarked(list)) {
+            lua_pushnil(L);
+            return 1;
+        }
+        lua_pushstring(L, app.view_->CurrentEntry().Name().c_str());
+        return 1;
+    }
+
+    // カレントディレクトリ内にnameと同名のエントリが既に存在するか
+    int Application::lua_private_rename_conflict(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        Script::CheckArgType(L, 1, LUA_TSTRING);
+        const std::string name = lua_tostring(L, 1);
+
+        auto& list = app.view_->CurrentList();
+        std::error_code ec;
+        lua_pushboolean(L, std::filesystem::exists(list.Path() / name, ec));
+        return 1;
+    }
+
+    int Application::lua_private_rename_execute(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        Script::CheckArgType(L, 1, LUA_TSTRING);
+        const std::string new_name = lua_tostring(L, 1);
+
+        auto& list = app.view_->CurrentList();
+        if (list.Size() == 0 || AnyMarked(list)) {
+            lua_pushboolean(L, false);
+            return 1;
+        }
+
+        auto& entry = app.view_->CurrentEntry();
+        auto dest = list.Path() / new_name;
+
+        std::error_code ec;
+        std::filesystem::rename(entry.Path(), dest, ec);
+
+        if (!ec) {
+            list.JumpTo(list.Path());
+            lua_pushboolean(L, true);
+        }
+        else {
+            app.view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
+                [](views::IDialog&) {},
+                views::ConfirmDialog::arguments{
+                    .message_ = std::format("リネームできませんでした: {}", ec.message()),
                     .button_text_ = "OK",
                 }
             ));

@@ -61,6 +61,9 @@ namespace miata {
         static int lua_private_dialog_open(lua_State* L);
         static int lua_private_dialog_is_open(lua_State* L);
         static int lua_private_dialog_result(lua_State* L);
+        static int lua_private_rename_target(lua_State* L);
+        static int lua_private_rename_conflict(lua_State* L);
+        static int lua_private_rename_execute(lua_State* L);
 
         static int lua_color_index(lua_State* L);
         static int lua_color_newindex(lua_State* L);
