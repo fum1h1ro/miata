@@ -107,6 +107,12 @@ namespace {
         }
         return std::format("{:.1f}{}", size, units[unit]);
     }
+
+    // ファイル名/拡張子のソート用。大文字小文字を区別しない(Unicodeの大文字小文字も正しく畳み込む)。
+    NSComparisonResult CaseInsensitiveCompare(const std::string& a, const std::string& b)
+    {
+        return [@(a.c_str()) caseInsensitiveCompare:@(b.c_str())];
+    }
 }
 
 struct FileListView::Impl {
@@ -232,11 +238,14 @@ void FileListView::Fetch()
         case SortKey::ModifiedTime:
             return x->Model().ModifiedTime() < y->Model().ModifiedTime();
         case SortKey::Extension:
-            if (x->Model().Ext() != y->Model().Ext()) return x->Model().Ext() < y->Model().Ext();
-            return x->Model().Name() < y->Model().Name();
+            {
+                auto cmp = CaseInsensitiveCompare(x->Model().Ext(), y->Model().Ext());
+                if (cmp != NSOrderedSame) return cmp == NSOrderedAscending;
+                return CaseInsensitiveCompare(x->Model().Name(), y->Model().Name()) == NSOrderedAscending;
+            }
         case SortKey::Name:
         default:
-            return x->Model().Name() < y->Model().Name();
+            return CaseInsensitiveCompare(x->Model().Name(), y->Model().Name()) == NSOrderedAscending;
         }
     });
 }
