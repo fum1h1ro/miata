@@ -66,7 +66,7 @@ Miata = {
         -- マークがあれば何もしない(単一ファイルのリネームのみ対応)。
         -- 同名のファイル/フォルダが既に存在する場合は、上書きせず同じ入力ダイアログを開き直す。
         rename = function()
-            local current = Miata.command.rename_target()
+            local current = Miata._private.rename_target()
             if not current then return end
 
             local message = "リネーム"
@@ -76,12 +76,12 @@ Miata = {
                 if not new_name or new_name == "" or new_name == current then
                     return
                 end
-                if not Miata.command.rename_conflict(new_name) then
+                if not Miata._private.rename_conflict(new_name) then
                     break
                 end
                 message = "リネーム（同名のファイル/フォルダが既に存在します）"
             end
-            Miata.command.rename(new_name)
+            Miata._private.rename_execute(new_name)
         end,
     },
     _private = {},

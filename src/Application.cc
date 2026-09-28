@@ -129,9 +129,6 @@ namespace miata {
             { "copy_marked", lua_command_copy_marked },
             { "move_marked", lua_command_move_marked },
             { "make_directory", lua_command_make_directory },
-            { "rename_target", lua_command_rename_target },
-            { "rename_conflict", lua_command_rename_conflict },
-            { "rename", lua_command_rename },
             { "delete_marked", lua_command_delete_marked },
             { "sort", lua_command_sort },
         };
@@ -144,6 +141,9 @@ namespace miata {
             { "dialog_open", lua_private_dialog_open },
             { "dialog_is_open", lua_private_dialog_is_open },
             { "dialog_result", lua_private_dialog_result },
+            { "rename_target", lua_private_rename_target },
+            { "rename_conflict", lua_private_rename_conflict },
+            { "rename_execute", lua_private_rename_execute },
         };
         script.RegisterFunctions(
             "Miata._private",
@@ -574,7 +574,7 @@ namespace miata {
     }
 
     // マークがある、またはリストが空ならnil。それ以外はカーソル位置のエントリ名を返す。
-    int Application::lua_command_rename_target(lua_State* L)
+    int Application::lua_private_rename_target(lua_State* L)
     {
         auto& app = Application::Instance();
         auto& list = app.view_->CurrentList();
@@ -588,7 +588,7 @@ namespace miata {
     }
 
     // カレントディレクトリ内にnameと同名のエントリが既に存在するか
-    int Application::lua_command_rename_conflict(lua_State* L)
+    int Application::lua_private_rename_conflict(lua_State* L)
     {
         auto& app = Application::Instance();
         Script::CheckArgType(L, 1, LUA_TSTRING);
@@ -600,7 +600,7 @@ namespace miata {
         return 1;
     }
 
-    int Application::lua_command_rename(lua_State* L)
+    int Application::lua_private_rename_execute(lua_State* L)
     {
         auto& app = Application::Instance();
         Script::CheckArgType(L, 1, LUA_TSTRING);
