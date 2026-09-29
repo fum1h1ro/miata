@@ -5,6 +5,10 @@
 namespace miata::views {
     View::View() : browser_(std::make_unique<BrowserView>())
     {
+        // ダイアログは非モーダルなオーバーレイなので、その裏のファイル一覧にもマウスは届く。
+        // ダイアログ表示中はファイルのドラッグ開始を受け付けない。
+        browser_->SetDragGuard([this] { return !IsAnyDialogOpened(); });
+
         NSView* content = (__bridge NSView*)pl_get_content_view();
         NSView* browser_view = (__bridge NSView*)browser_->NativeView();
         browser_view.frame = content.bounds;

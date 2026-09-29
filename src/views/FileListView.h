@@ -1,6 +1,8 @@
 #ifndef VIEWS_FILE_LIST_VIEW_H__
 #define VIEWS_FILE_LIST_VIEW_H__
 
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <vector>
 #include "../models/Model.h"
@@ -63,6 +65,26 @@ namespace miata::views {
         // カーソル移動やフォーカス変更を伴わない外部要因(マーク変更等)の後に呼ぶ再描画要求
         void Redraw();
 
+        // --- マーク済みファイルのドラッグ&ドロップ(他アプリへの持ち出し) ---
+        // 実際のドラッグ開始とドラッグ画像はFileListView.mm内のNSViewが担い、ここは
+        // 「何を運ぶか」と「ドロップ後にどうするか」だけを決める。
+
+        // ドラッグ開始を許可するかを上位(View)が判断するためのコールバック
+        // (ダイアログ表示中は無効にする用途)。未設定なら常に許可する。
+        void SetDragGuard(std::function<bool()> guard);
+
+        struct DragEntry {
+            std::filesystem::path path;
+            bool is_directory;
+        };
+        // ドラッグ開始時に呼ぶ。このペインのマーク済みエントリを画面表示順で返す。
+        // どの行を押してドラッグしたかは問わない。マークが無い、またはDragGuardが
+        // 拒否した場合は空を返す(=ドラッグしない)。
+        const std::vector<DragEntry>& BeginDrag();
+        // ドラッグ終了時に呼ぶ。acceptedは宛先がドロップを受理したか(キャンセル/拒否ならfalse)。
+        // 受理された場合、ファイルが移動されていれば一覧を再スキャンし、そうでなければマークだけ解除する。
+        void EndDrag(bool accepted);
+
     private:
         void Fetch();
 
@@ -74,6 +96,9 @@ namespace miata::views {
         std::vector<FileEntryView*> list_;
         std::vector<FileEntryView> entries_;
         std::vector<misc::SubscriptionGuard> subscriptions_;
+        std::function<bool()> drag_guard_;
+        std::vector<DragEntry> drag_entries_;
+        std::filesystem::path drag_source_dir_; // ドラッグ開始時に表示していたディレクトリ
 
         struct Impl;
         std::unique_ptr<Impl> impl_;

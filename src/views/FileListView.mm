@@ -1,19 +1,87 @@
 #import <AppKit/AppKit.h>
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include "FileListView.h"
 #include "../platform.h"
 #include "../Config.h"
 #include "NSColorUtil.h"
 
-@interface _MiataFileListNSView : NSView
+namespace {
+    constexpr CGFloat kDragStartDistance = 4; // 押下位置からこれ以上動いたらドラッグ開始とみなす(pt)
+    constexpr CGFloat kDragIconSize = 32;     // ドラッグ画像1件分の大きさ(pt)
+    constexpr NSUInteger kMaxDragImages = 16; // ドラッグ画像(アイコン)を用意する最大件数
+}
+
+// ファイル一覧本体のビュー。キーボード操作が主体のアプリなので、マウスで受け付けるのは
+// 「マーク済みファイルのドラッグ」だけ(クリックでのカーソル移動等は行わない)。
+// first responderにはならないため、キー入力はこれまで通りMiataRootViewに届く。
+@interface _MiataFileListNSView : NSView <NSDraggingSource>
 @property (nonatomic, assign) miata::views::FileListView* owner;
 @end
-@implementation _MiataFileListNSView
+@implementation _MiataFileListNSView {
+    NSPoint _mouseDownPoint;
+    BOOL _dragPending; // mouseDown後、まだドラッグを開始(または見送り)していない
+}
 - (BOOL)isFlipped { return YES; }
+// 非アクティブなウィンドウ上でも、最初の1回のマウス操作でそのままドラッグを始められるようにする
+- (BOOL)acceptsFirstMouse:(NSEvent*)event { return YES; }
 - (void)drawRect:(NSRect)dirtyRect
 {
     if (self.owner) self.owner->Draw();
+}
+- (void)mouseDown:(NSEvent*)event
+{
+    _mouseDownPoint = [self convertPoint:event.locationInWindow fromView:nil];
+    _dragPending = YES;
+}
+- (void)mouseDragged:(NSEvent*)event
+{
+    if (!_dragPending || !self.owner) return;
+    NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+    if (std::hypot(p.x - _mouseDownPoint.x, p.y - _mouseDownPoint.y) < kDragStartDistance) return;
+    _dragPending = NO; // このmouseDownの間は、開始できなかった場合も含めて2度目以降を試さない
+
+    // 何を運ぶかはFileListViewが決める(マーク済みのみ。押した行は問わない)
+    const auto& entries = self.owner->BeginDrag();
+    if (entries.empty()) return;
+
+    NSMutableArray<NSDraggingItem*>* items = [NSMutableArray arrayWithCapacity:entries.size()];
+    for (const auto& entry : entries) {
+        // パスをNSStringに変換せず、バイト列から直接URLを作る(変換できない名前でも例外にならない)
+        NSURL* url = [NSURL fileURLWithFileSystemRepresentation:entry.path.c_str()
+                                                    isDirectory:entry.is_directory
+                                                  relativeToURL:nil];
+        if (!url) continue;
+
+        // アイコンは先頭の一部だけ用意する(数千件マークしていても開始が重くならないように)。
+        // 残りは画像なし(contents=nil)で、ペーストボードには載せて運ぶ。画像なしでも
+        // draggingFrameにサイズ0は指定できない(NSRangeException)ので、枠は全件同じ大きさにする。
+        NSImage* icon = items.count < kMaxDragImages ? [[NSWorkspace sharedWorkspace] iconForFile:url.path] : nil;
+        NSDraggingItem* item = [[NSDraggingItem alloc] initWithPasteboardWriter:url];
+        [item setDraggingFrame:NSMakeRect(_mouseDownPoint.x - kDragIconSize / 2, _mouseDownPoint.y - kDragIconSize / 2, kDragIconSize, kDragIconSize)
+                      contents:icon];
+        [items addObject:item];
+    }
+
+    NSDraggingSession* session = items.count > 0 ? [self beginDraggingSessionWithItems:items event:event source:self] : nil;
+    if (!session) {
+        self.owner->EndDrag(false);
+        return;
+    }
+    session.draggingFormation = items.count > 1 ? NSDraggingFormationPile : NSDraggingFormationNone;
+}
+
+// NSDraggingSource
+- (NSDragOperation)draggingSession:(NSDraggingSession*)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context
+{
+    // コピーになるか移動になるかは、宛先アプリと修飾キー(Option=コピー等)で決まる。
+    // 自アプリ内にはドロップ先が無いので、どの文脈でも同じ値を返す。
+    return NSDragOperationCopy | NSDragOperationMove | NSDragOperationLink | NSDragOperationGeneric;
+}
+- (void)draggingSession:(NSDraggingSession*)session endedAtPoint:(NSPoint)screenPoint operation:(NSDragOperation)operation
+{
+    if (self.owner) self.owner->EndDrag(operation != NSDragOperationNone);
 }
 @end
 
@@ -112,6 +180,17 @@ namespace {
     NSComparisonResult CaseInsensitiveCompare(const std::string& a, const std::string& b)
     {
         return [@(a.c_str()) caseInsensitiveCompare:@(b.c_str())];
+    }
+
+    // ドロップ受理から、宛先アプリがファイルを動かし終えたかを確認するまでの待ち時間(秒)
+    constexpr double kDropSettleSeconds = 0.3;
+
+    // 実体が確実に無くなっている場合のみtrue。エラーで判定できない場合や、壊れた
+    // シンボリックリンク(リンク自体は残っている)はfalse。
+    bool IsGone(const std::filesystem::path& path)
+    {
+        std::error_code ec;
+        return std::filesystem::symlink_status(path, ec).type() == std::filesystem::file_type::not_found;
     }
 }
 
@@ -273,6 +352,53 @@ void FileListView::Redraw()
 
     [impl_->header_view setNeedsDisplay:YES];
     [impl_->content_view setNeedsDisplay:YES];
+}
+
+void FileListView::SetDragGuard(std::function<bool()> guard)
+{
+    drag_guard_ = std::move(guard);
+}
+
+const std::vector<FileListView::DragEntry>& FileListView::BeginDrag()
+{
+    drag_entries_.clear();
+    if (drag_guard_ && !drag_guard_()) return drag_entries_;
+
+    // list_は画面表示順(ソート済み)。貼り付け先でも画面と同じ並びになるようこの順で集める
+    for (auto* entry : list_) {
+        auto& entry_model = entry->Model();
+        if (entry_model.IsMarked()) {
+            drag_entries_.push_back({entry_model.Path(), entry_model.IsDirectory()});
+        }
+    }
+    drag_source_dir_ = model_.Path();
+    return drag_entries_;
+}
+
+void FileListView::EndDrag(bool accepted)
+{
+    auto entries = std::move(drag_entries_);
+    drag_entries_.clear();
+    if (!accepted || entries.empty()) return;
+
+    // 宛先(Finderなど)はドロップを受理した後に非同期で移動/コピーを進めるため、受理直後の
+    // ファイルシステムはまだ変わっていないことがある。ファイル監視の仕組みも無いので、少し待ってから
+    // 実際の状態を見て後始末を決める(宛先が申告する操作の種類はあくまで自己申告なので、
+    // 実際にファイルが動いたかは自分で確かめる)。
+    auto dir = drag_source_dir_;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kDropSettleSeconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        // 待っている間に別ディレクトリへ移動していたら、そちらのマーク等には触れない
+        if (model_.Path() != dir) return;
+
+        auto moved = std::any_of(entries.begin(), entries.end(), [](const DragEntry& e) { return IsGone(e.path); });
+        if (moved) {
+            model_.JumpTo(dir); // 消えたファイルを一覧に反映(マークも自然に消える)
+        }
+        else {
+            model_.ClearMarks(); // 中身は変わらない(コピー等)のでマークだけ解除する
+            Redraw();
+        }
+    });
 }
 
 void FileListView::DrawHeader()
