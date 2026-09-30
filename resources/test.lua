@@ -112,7 +112,7 @@ Miata.command.bind("n", "s", function()
     end
 end)
 
-Miata.command.bind("n", "H", function()
+Miata.command.bind("n", "<S-h>", function()
     local items = {}
     for i = 1, 3000 do
         items[i] = string.format("/path/to/some/file_%d.txt", i)

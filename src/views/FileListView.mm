@@ -340,6 +340,12 @@ void FileListView::Fetch()
     });
 }
 
+void FileListView::ClearMarks()
+{
+    model_.ClearMarks();
+    Redraw();
+}
+
 std::expected<void, std::string> FileListView::Reload(std::optional<std::filesystem::path> cursor_to)
 {
     // 再スキャンで旧エントリが破棄される前に、カーソル復元に必要な情報を控える。
@@ -498,8 +504,7 @@ void FileListView::EndDrag(bool accepted)
             (void)Reload();
         }
         else {
-            model_.ClearMarks(); // 中身は変わらない(コピー等)のでマークだけ解除する
-            Redraw();
+            ClearMarks(); // 中身は変わらない(コピー等)のでマークだけ解除する
         }
     });
 }

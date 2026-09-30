@@ -303,7 +303,7 @@ namespace miata {
                 view_->ReloadList(*event.src_model); // 消えたファイルを一覧に反映（移せなかったファイルのマークは残る）
             }
             else {
-                event.src_model->ClearMarks(); // 中身は変わらないのでマークだけ解除する
+                view_->ClearListMarks(*event.src_model); // 中身は変わらないのでマークだけ解除する(画面にも反映する)
             }
         }
 
