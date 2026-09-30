@@ -1,7 +1,11 @@
 #ifndef MODELS_FILE_LIST_MODEL_H__
 #define MODELS_FILE_LIST_MODEL_H__
 
+#include <expected>
 #include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
 #include "../misc.h"
 #include "FileEntryModel.h"
 
@@ -11,6 +15,12 @@ namespace miata::models {
         FileListModel();
         ~FileListModel();
         void JumpTo(const std::filesystem::path& path);
+        // 現在のディレクトリを再スキャンする。JumpTo(Path())と違い、マークは同じパスの
+        // エントリに引き継ぐ(消えたファイルのマークは落ち、新しいファイルは未マーク)。
+        // ディレクトリが消えた/読めない場合は、何も変えずにエラーメッセージを返す。
+        // 成功時はJumpToと同様にObservePath()へ通知する(購読側は旧エントリへの参照を
+        // 捨てて作り直す必要がある。旧エントリは通知の前に破棄される)。
+        std::expected<void, std::string> Reload();
         void NavigateToParent();
         void Invoke(int idx);
         void Mark(int idx);

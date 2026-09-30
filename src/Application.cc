@@ -1,3 +1,5 @@
+#include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -130,6 +132,8 @@ namespace miata {
             { "move_marked", lua_command_move_marked },
             { "make_directory", lua_command_make_directory },
             { "delete_marked", lua_command_delete_marked },
+            { "current_pane", lua_command_current_pane },
+            { "reload", lua_command_reload },
             { "sort", lua_command_sort },
         };
         script.RegisterFunctions(
@@ -640,6 +644,60 @@ namespace miata {
         auto& app = Application::Instance();
         app.DeleteMarked();
         return 0;
+    }
+
+    // Luaに公開するペイン名。current_pane()の戻り値とreload(pane)の引数で同じ表記を使うよう、
+    // 文字列との変換はここに集約する。
+    static const char* PaneName(views::constants::Pane pane)
+    {
+        return pane == views::constants::Pane::Left ? "left" : "right";
+    }
+
+    static std::optional<views::constants::Pane> ParsePane(const char* name)
+    {
+        if (std::strcmp(name, "left") == 0) return views::constants::Pane::Left;
+        if (std::strcmp(name, "right") == 0) return views::constants::Pane::Right;
+        return std::nullopt;
+    }
+
+    // Miata.command.current_pane() -> "left" | "right"  (カーソルのあるペイン)
+    int Application::lua_command_current_pane(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        lua_pushstring(L, PaneName(app.view_->CurrentPane()));
+        return 1;
+    }
+
+    // Miata.command.reload([pane]) -> boolean
+    // paneは "left" / "right"。省略またはnilなら現在のペイン。
+    int Application::lua_command_reload(lua_State* L)
+    {
+        auto& app = Application::Instance();
+
+        auto pane = app.view_->CurrentPane();
+        if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
+            Script::CheckArgType(L, 1, LUA_TSTRING);
+            auto parsed = ParsePane(lua_tostring(L, 1));
+            if (!parsed) {
+                luaL_error(L, "unknown pane: %s (expected \"left\" or \"right\")", lua_tostring(L, 1));
+                return 0;
+            }
+            pane = *parsed;
+        }
+
+        auto result = app.view_->GetFileListView(pane).Reload();
+        if (!result) {
+            // 反対側のペインも対象にできるので、どのディレクトリで失敗したかも示す
+            app.view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
+                [](views::IDialog&) {},
+                views::ConfirmDialog::arguments{
+                    .message_ = std::format("再読み込みできませんでした ({}): {}", app.view_->GetList(pane).Path().string(), result.error()),
+                    .button_text_ = "OK",
+                }
+            ));
+        }
+        lua_pushboolean(L, result.has_value());
+        return 1;
     }
 
     int Application::lua_command_sort(lua_State* L)

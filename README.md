@@ -77,7 +77,10 @@ Miata.command.navigate_left()
 Miata.command.navigate_right()
 Miata.command.navigate_ok()
 Miata.command.navigate_cancel()
+Miata.command.current_pane()     -- カーソルのあるペイン: "left" または "right"
 ```
+
+ペインは `"left"` / `"right"` の文字列で表す。`current_pane()` の戻り値は、ペインを指定する引数（`reload` など）にそのまま渡せる。
 
 ### ダイアログ
 
@@ -150,6 +153,7 @@ Miata.command.toggle_mark()         -- マークのトグル
 Miata.command.copy_marked()         -- マーク済み(無ければカーソル位置)を反対側のペインへコピー
 Miata.command.move_marked()         -- 同、移動。コピー/移動とも、名前が衝突する場合は上書き確認ダイアログを出す
 Miata.command.delete_marked()       -- マーク済みをゴミ箱へ移動(確認ダイアログあり)
+Miata.command.reload(pane)          -- ペインのディレクトリを再読み込み(カーソルとマークは維持)。pane省略で現在のペイン
 Miata.command.make_directory(name)  -- 現在のペインに新規フォルダを作成
 Miata.command.make_folder()         -- 名前を入力ダイアログで聞いてから make_directory を呼ぶ
 Miata.command.sort(key, reverse)    -- key: "name"/"size"/"mtime"/"ext"
@@ -161,6 +165,26 @@ Miata.command.sort(key, reverse)    -- key: "name"/"size"/"mtime"/"ext"
 
 ```lua
 Miata.command.rename()
+```
+
+#### `reload`
+
+ペインのディレクトリを再スキャンして、一覧を最新にする（外部で追加・削除・移動されたファイルの反映用。ファイル監視は無いため手動）。**カーソルとマークは、パスで同じファイルを引き継ぐ。**
+
+- 引数 `pane` を省略（または `nil`）すると**現在のペイン**（カーソルのある方）が対象。`"left"` / `"right"` を渡すと、カーソルの位置に関係なくそのペインが対象になる。それ以外の値はエラー
+- マーク済みのファイルが残っていれば、マークも残る。消えたファイルのマークは落ち、新しく現れたファイルは未マーク
+- カーソルは同じファイルに追従する（並びが変わっても）。カーソルのファイルが消えていた場合は、再読み込み前の並びで次に残っているファイル（無ければその前）へ寄せる。対象が現在のペインでなくても同じ
+- ディレクトリが消えた・読めない場合は、一覧を変えずに、失敗したディレクトリを示すエラーのダイアログを出す
+
+成功なら `true`、失敗なら `false` を返す。`resources/test.lua` では `<C-r>`（現在のペイン）に割り当てている。
+
+```lua
+Miata.command.reload()          -- 現在のペイン
+Miata.command.reload("left")    -- 左ペイン
+
+-- 反対側のペインを再読み込みする
+local other = Miata.command.current_pane() == "left" and "right" or "left"
+Miata.command.reload(other)
 ```
 
 ### ユーティリティ

@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <memory>
+#include "Constants.h"
 #include "FileListView.h"
 
 namespace miata::views {
@@ -30,6 +31,16 @@ namespace miata::views {
         inline std::shared_ptr<FileListView>& GetCurrentFileListView()
         {
             return cursorIndex_ == 0 ? left_ : right_;
+        }
+
+        // カーソル(フォーカス)のあるペイン
+        inline constants::Pane CurrentPane() const
+        {
+            return IsLeft() ? constants::Pane::Left : constants::Pane::Right;
+        }
+        inline std::shared_ptr<FileListView>& GetFileListView(constants::Pane pane)
+        {
+            return pane == constants::Pane::Left ? left_ : right_;
         }
 
         // 左右ペイン共通のドラッグ開始可否コールバックを設定する(FileListView::SetDragGuard参照)

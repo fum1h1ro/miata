@@ -96,6 +96,9 @@ end)
 Miata.command.bind("n", "dd", function()
     Miata.command.delete_marked()
 end)
+Miata.command.bind("n", "<C-r>", function()
+    Miata.command.reload()
+end)
 Miata.command.bind("n", "s", function()
     local result = Miata.command.dialog_custom({
         title = "ソート",
