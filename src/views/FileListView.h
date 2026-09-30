@@ -1,6 +1,7 @@
 #ifndef VIEWS_FILE_LIST_VIEW_H__
 #define VIEWS_FILE_LIST_VIEW_H__
 
+#include <chrono>
 #include <expected>
 #include <filesystem>
 #include <functional>
@@ -10,6 +11,7 @@
 #include <vector>
 #include "../models/Model.h"
 #include "../misc.h"
+#include "../platform.h"
 
 namespace miata::views {
     class FileEntryView {
@@ -97,8 +99,24 @@ namespace miata::views {
         // 移されなかったファイルのマークは残る)、そうでなければマークだけ解除する。
         void EndDrag(bool accepted);
 
+        // --- ディレクトリ監視による自動リロード ---
+        // 表示中のディレクトリを監視し、変化(直下のエントリの追加・削除・改名、既存ファイルの中身・
+        // 更新日時の更新)を検知したら、少し待ってからReload()する(カーソルとマークは維持される)。
+        // 短時間に続く変化は1回にまとめ、走査が重いディレクトリでは間隔をあける。監視できない場所
+        // (ネットワークボリュームの他のマシンからの変更など)は、手動のReload()で反映する。
+        // 毎ティック(Application::Update)から呼ぶこと。allowがfalseの間は、検知していても保留して
+        // 許可された最初のティックで反映する(ダイアログ表示中は、リネームの入力中にカーソルが動いて
+        // 別のファイルを改名してしまうのを避けるため保留する)。
+        void UpdateAutoReload(bool allow);
+
     private:
         void Fetch();
+
+        // ディレクトリ監視。表示するパスが変わったときだけ張り直す。監視はパス基準で、ディレクトリが
+        // 差し替えられても届き続けるので、同じパスの再スキャンでは張り直さない(張り直す間に起きた
+        // 変更を取りこぼさないため)。
+        void WatchDirectory(const std::filesystem::path& dir);
+        void OnDirectoryChanged();
 
         // Reload()の間だけ持つ、カーソル復元用の記録。再スキャンで旧エントリが破棄される前に
         // パスとして控えておく(破棄後にlist_経由で読むと寿命切れの参照になる)。
@@ -123,8 +141,15 @@ namespace miata::views {
         std::vector<DragEntry> drag_entries_;
         std::filesystem::path drag_source_dir_; // ドラッグ開始時に表示していたディレクトリ
 
+        std::filesystem::path watched_dir_; // watch_が見ているパス
+        bool stale_ = false; // 監視で変化を検知し、まだ一覧に反映していない
+        std::chrono::steady_clock::time_point reload_due_;          // 自動リロードしてよい時刻
+        std::chrono::steady_clock::time_point next_reload_allowed_; // 直近の自動リロードの重さに応じた、次回の下限
+
         struct Impl;
         std::unique_ptr<Impl> impl_;
+        // 破棄の順序: 他のメンバーより先に監視を止める(コールバックがthisを参照するため)ので最後に置く
+        std::unique_ptr<pl_dir_watch> watch_;
     };
 }
 

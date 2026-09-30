@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <expected>
 #include <functional>
+#include <memory>
 #include <cstdint>
 
 struct Color4f {
@@ -88,6 +89,18 @@ void pl_set_key_up_handler(std::function<void(uint16_t keycode, uint16_t mods)> 
 void pl_set_resize_handler(std::function<void(int width, int height)> handler);
 // 一定間隔(seconds)で呼ばれる更新タイマーを開始する。
 void pl_start_timer(double interval_seconds, std::function<void()> callback);
+
+// pl_watch_directory() が返すディレクトリ監視のハンドル。破棄すると監視を止める。
+class pl_dir_watch {
+public:
+    virtual ~pl_dir_watch() = default;
+};
+// dir直下のエントリの変化(追加・削除・改名、既存ファイルの中身・更新日時・属性の更新)を監視し、
+// 検知するたびにon_changeをメインスレッドで呼ぶ(短時間の変化はまとめて1回になることがある)。
+// より深い階層の変化は通知しない。dir自身が移動・削除された場合も通知する(その後、同じパスに
+// 再作成されても通知は続く)。ネットワークボリュームなど、他のマシンからの変更が通知されない場所もある。
+// dirが存在しない・権限が無いなど、監視できない場合はnullptrを返す。
+std::unique_ptr<pl_dir_watch> pl_watch_directory(const std::filesystem::path& dir, std::function<void()> on_change);
 
 // 実行ファイルをPATH、および主要なインストール先(Homebrew等)から探す。見つからなければnullopt。
 // GUIアプリはログインシェルのPATHを継承しないことが多いため、PATHだけに頼らない。

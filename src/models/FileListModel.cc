@@ -4,6 +4,17 @@
 #include <unordered_set>
 
 namespace miata::models {
+    namespace {
+        // ディレクトリの更新日時(直下のエントリの追加・削除・改名で変わる)。取得できなければ空。
+        std::optional<std::filesystem::file_time_type> DirectoryMtime(const std::filesystem::path& path)
+        {
+            std::error_code ec;
+            auto mtime = std::filesystem::last_write_time(path, ec);
+            if (ec) return std::nullopt;
+            return mtime;
+        }
+    }
+
     FileListModel::FileListModel()
     {
         entries_.reserve(1024);
@@ -17,6 +28,7 @@ namespace miata::models {
 
     void FileListModel::JumpTo(const std::filesystem::path& path)
     {
+        scanned_mtime_ = DirectoryMtime(path); // 走査より前に取る
         entries_.clear();
         for (auto& d : std::filesystem::directory_iterator(path)) {
             entries_.emplace_back(std::unique_ptr<FileEntryModel>(new FileEntryModel(d)));
@@ -31,6 +43,7 @@ namespace miata::models {
         // 先に新しい一覧を作り、失敗した場合は現在の状態に一切触れない。
         // 再読み込みは外部でディレクトリが変わった後に使うため、JumpToと違って
         // 消えた/権限の無いディレクトリでも例外を投げずにエラーとして返す。
+        auto mtime = DirectoryMtime(path); // 走査より前に取る
         std::vector<std::unique_ptr<FileEntryModel>> scanned;
         std::error_code ec;
         std::filesystem::directory_iterator it(path, ec);
@@ -48,6 +61,7 @@ namespace miata::models {
         }
 
         entries_ = std::move(scanned);
+        scanned_mtime_ = mtime;
         path_.Value(path);
         return {};
     }

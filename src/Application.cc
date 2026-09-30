@@ -189,6 +189,9 @@ namespace miata {
         file_operations_.Update();
         Script::Instance().Update();
         view_->CheckDialogState();
+        // Luaのコルーチン(Script::Update)とダイアログの後始末(CheckDialogState)の後に行う。
+        // リネームなど、ダイアログの結果を受けて一覧のカーソルに作用する処理が終わってから反映するため。
+        view_->UpdateAutoReload();
     }
 
     void Application::KeyDown(uint16_t key_code, uint16_t mods)

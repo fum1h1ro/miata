@@ -50,6 +50,11 @@ namespace miata::views {
         OpenNextDialogIfNeeded();
     }
 
+    void View::UpdateAutoReload()
+    {
+        browser_->UpdateAutoReload(!IsAnyDialogOpened());
+    }
+
     void View::NavigateForBrowser(constants::Navigate dir)
     {
         auto& browser_model = models::BrowserModel::Instance();
