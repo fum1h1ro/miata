@@ -48,7 +48,7 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 | `views/Dialog.h/.mm` | ダイアログ基盤。`IDialog`（confirm/yesno/inputtext/custom/filterlist の基底）と `DialogPanel`（実体となる非モーダル NSView オーバーレイ）。詳細は後述 |
 | `views/FileListView.h/.mm` | ファイル一覧の描画・スクロール・キーボードカーソル移動（`NSScrollView` + 自前描画）。マーク済みファイルのドラッグ元（`NSDraggingSource`）も兼ねる（後述） |
 | `misc.h` | `Flags`、`ReactiveProperty`、`MessageBroker` などのユーティリティ |
-| `platform.h` | OS 依存処理の抽象境界（`pl_*` 関数群の宣言）。色・フォント・ダイアログ用構造体・ファイル操作・プロセス起動など |
+| `platform.h` | OS 依存処理の抽象境界（`pl_*` 関数群の宣言）。色・フォント・ダイアログ用構造体・ファイル操作・ディレクトリ監視（`pl_watch_directory`）・プロセス起動など |
 | `platforms/osx.mm` | `platform.h` の macOS 実装。AppKit 型はこの層（と `views/*.mm`）にのみ閉じ込め、ヘッダ（`.h`）には持ち込まない規約 |
 
 **Lua スクリプト:**
@@ -97,7 +97,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `commands[]`）と `Miata._p
 - **運ぶのは「そのペインのマーク済みファイル」だけ**。押した行がどれかは判定しない（未マークの行から始めても同じ）。マークが0件なら何もしない。順序は画面表示順（`list_` 順）。
 - **ダイアログ表示中は無効**。`DialogPanel` は画面中央の小さな `NSView` でマウスを遮らないため、裏の一覧にもマウスが届く。`View` のコンストラクタが `SetDragGuard`（`BrowserView` 経由で左右ペインへ）で `!IsAnyDialogOpened()` を注入している（`FileListView` は `View` を知らない）。
 - `_MiataFileListNSView` は `acceptsFirstResponder` を YES にしないこと（キー入力は `MiataRootView` に届き続ける必要がある）。
-- **ドロップ後（`EndDrag`）**：ファイル監視の仕組みが無く、宛先（Finder 等）は受理後に非同期で移動を進めるため、0.3 秒待ってから**実ファイルの有無**で判断する。1件でも消えていれば `Reload()` で再スキャン（カーソルは維持され、移されなかったファイルのマークは残る）、そうでなければ `ClearMarks()` のみ。宛先が申告する操作種別（Move/Copy/Generic）は自己申告なので当てにしない。キャンセル/拒否時はマーク維持。
+- **ドロップ後（`EndDrag`）**：宛先（Finder 等）は受理後に非同期で移動を進めるため、0.3 秒待ってから**実ファイルの有無**で判断する。1件でも消えていれば `Reload()` で再スキャン（カーソルは維持され、移されなかったファイルのマークは残る）、そうでなければ `ClearMarks()` のみ。宛先が申告する操作種別（Move/Copy/Generic）は自己申告なので当てにしない。キャンセル/拒否時はマーク維持。宛先の処理が 0.3 秒より遅くても、その後の一覧への反映は「ディレクトリ監視」（後述）が追随する（マークを解除するかどうかの判断だけは、この 0.3 秒の時点で決まる）。
 - **罠**：`NSDraggingItem.draggingFrame` にサイズ 0 は指定できず `NSRangeException` で落ちる。画像を省く件（`contents=nil`）でも枠は非ゼロにすること。多数マーク時にアイコンを先頭 16 件に絞っているのはこのため（残りは画像なしで運ぶ）。
 - 自アプリ内へのドロップ（ペイン間ドラッグ）は未実装（`NSDraggingDestination` が必要）。
 
@@ -113,6 +113,22 @@ C++ 側は `Miata.command.*`（`Application.cc` の `commands[]`）と `Miata._p
 - **`JumpTo` は「ディレクトリを移動する」専用**（カーソルは先頭、マークは消える）。同じディレクトリを再スキャンして最新にしたいだけの処理（mkdir/rename/`delete_marked`/コピー・移動の完了後/ドロップ後）は `JumpTo(Path())` ではなく **`View::ReloadList(model, cursor_to)`** を使う（カーソルとマークが維持され、ゴミ箱や移動に失敗したファイルのマークも残る。再スキャン自体の失敗は無視する）。新しくそういう処理を足すときも `JumpTo(Path())` を使わないこと。
 - `Reload` / `ReloadList` の `cursor_to`：旧パスが消えて新しいパスに移る操作（リネーム）では新しいパスを渡す。渡さないと、旧名が消えるのでカーソルは「次のファイル」に寄ってしまう。`rename` は `ReloadList(list, dest)` を使っている。Copy の移動元は中身が変わらないので、従来どおり `ClearMarks()` のまま（`Reload` ではない）。
 - 失敗（ディレクトリが消えた・権限なし）は `std::expected` で返し、モデルもビューも一切変えない。`directory_iterator` の例外を投げる版は、外部で変更された後に使う再読み込みでは落ちるので使わない（エラーコード版）。
+
+## ディレクトリ監視（自動リロード）
+
+各ペインが表示中のディレクトリを監視し、変化を検知したら `Reload()` する。流れ：`pl_watch_directory`（`platform.h`／`osx.mm`。FSEvents のストリーム、コールバックはメインキュー）→ コールバックは `FileListView::OnDirectoryChanged()` で `stale_`／`reload_due_` を立てるだけ → `Application::Update()` のティックから `View::UpdateAutoReload()` → `FileListView::UpdateAutoReload(allow)` が期限を過ぎていれば `Reload()`。判断（まとめる・保留する・間隔をあける）は `FileListView` 側、OS 依存は `pl_watch_directory` の内側に閉じているので、検知の仕組みだけを差し替えられる。
+
+- **FSEvents を選んだ理由（実測済み）**：ディレクトリの fd に張る kqueue／GCD の vnode ソースは、直下のエントリの追加・削除・改名しか検知できず、**既存ファイルへの追記・更新日時・属性の変更を検知できない**（一覧に出しているサイズ・更新日時が古くなる）。FSEvents（`kFSEventStreamCreateFlagFileEvents`）は両方検知でき、遅延は 12〜20ms 程度。代償は、再帰的なので無関係なイベントも届くこと（`$HOME` で 30 秒に 352 件＝毎秒 12 件ほど、直下の子は 0 件）。届いた path を見て**直下の子だけ**を拾い、それ以外は捨てる（`IsRelevantDirEvent`）。
+- **監視先は実パスにそろえる**：FSEvents は常に実パス（`/tmp`→`/private/tmp`、`/var/folders`→`/private/var/folders`）で報告するので、`std::filesystem::canonical` した path を渡し、それと比べる。報告された path が想定の形（監視先の配下）でないときは、見逃すよりは変化ありとみなして通知する（安全側）。
+- **イベントの取りこぼしや、何が変わったか分からない場合も通知する**：`MustScanSubDirs`／`UserDropped`／`KernelDropped`／`RootChanged`（監視先自身の移動・削除・再作成）／`Mount`／`Unmount`。監視はパス基準なので、監視先が削除されて同じパスに再作成されても、張り直さずに届き続ける。
+- **フラグで絞り込まない**：FSEvents のフラグは path ごとに**累積**する（古いファイルへの `setxattr` だけの変更にも `Created|Modified` が付いて届く）ので、「拡張属性だけの変更は無視」のような絞り込みは信用できない。直下の子への変更なら何でも拾う。
+- **`FSEventStreamContext` の retain/release に `CFRetain`／`CFRelease` を渡す**（`info` は ObjC オブジェクト `MiataDirWatchState`）。ストリームが解放されるまで `info` が生きる。破棄は `Stop`→`Invalidate`→`Release` の順。`alive` フラグは念のための保護（`Stop`／`Invalidate` の後に FSEvents がコールバックを呼ばないことは実測で確認している）。
+- **コールバックの中で `Reload()` しない**：コールバックはフラグを立てるだけ。再スキャンはティック（`UpdateAutoReload`）で行う（監視のコールバックの中から監視自体を破棄することになるのを避け、続く変化を 1 回にまとめるため）。
+- **監視は、表示するパスが変わったときだけ張り直す**：`WatchDirectory()` はパス変更の購読側（＝JumpTo／Reload の直後）から呼ばれるが、同じパスを見ている監視が生きていれば何もしない。張り直すと、その間の変更（特に、更新日時に現れない既存ファイルの中身の更新）を取りこぼすため。ストリームは再スキャンの間も生かし続ける。**新しく張るとき**（起動時・ディレクトリの移動時）の、走査から張るまでの隙間の変更は、`FileListModel::ScannedMtime()`（走査の**直前**に取ったディレクトリの更新日時）と現在の更新日時を比べて、食い違っていればもう一度反映待ちにする（追加・削除・改名を確認できる）。
+- **自分の走査は、イベントを起こさない**（読むだけ）ので、自動リロードが連鎖することはない。一方、自分の操作（mkdir／rename／コピー・移動など）や、走査が完了する前に届いたイベントの分は、走査の後に届いて、約 0.3 秒後にもう 1 回リロードされることがある（内容は同じで、無害）。
+- **ダイアログ表示中は保留する**：`View::UpdateAutoReload()` が `!IsAnyDialogOpened()` を渡す。リネームの入力中に外部でそのファイルが消えると、反映によってカーソルが隣のファイルへ動き、確定時の `rename_execute`（カーソル位置のエントリを改名する）が**別のファイルを改名してしまう**ため。`Application::Update()` では `Script::Update()`（コルーチンがダイアログの結果を受けて `rename_execute` などを呼ぶ）と `CheckDialogState()` の**後**に `UpdateAutoReload()` を呼ぶこと。
+- **待ちとスロットル**（`FileListView.mm` の定数）：検知から 300ms 待って反映し、自動リロードどうしは最短 500ms（走査に時間がかかるときは、かかった時間の 8 倍）あける。失敗（ディレクトリが消えた等）は再試行しない（次のイベントか、手動のリロードを待つ）。
+- **テストの罠**：`rxcpp` の subscription はスコープを抜けても購読解除されない。ローカル変数を参照するラムダを `ObservePath().subscribe` に渡したら、変数の寿命が切れる前に `unsubscribe()` すること（アプリ側は `misc::SubscriptionGuard`）。
 
 ## C++ から Lua へ関数を登録する手順
 

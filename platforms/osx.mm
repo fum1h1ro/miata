@@ -1,7 +1,9 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <Quartz/Quartz.h>
+#import <CoreServices/CoreServices.h>
 #include "../src/platform.h"
+#include <unistd.h>
 #include <fstream>
 #include <format>
 #include <functional>
@@ -140,6 +142,105 @@ void pl_start_timer(double interval_seconds, std::function<void()> callback)
     [NSTimer scheduledTimerWithTimeInterval:interval_seconds repeats:YES block:^(NSTimer* timer) {
         (*cb)();
     }];
+}
+
+// pl_watch_directory の状態。FSEventsのコンテキストがretain/releaseするので、ストリームが解放される
+// まで(=キューに積まれたコールバックが残っていても)生きている。
+@interface MiataDirWatchState : NSObject {
+@public
+    std::function<void()> on_change;
+    std::filesystem::path watched; // FSEventsが報告する形(実パス)にそろえた監視先
+    BOOL alive;
+}
+@end
+@implementation MiataDirWatchState
+@end
+
+namespace {
+    // このイベントは、監視先ディレクトリの一覧に影響しうるか
+    bool IsRelevantDirEvent(const std::filesystem::path& watched, const char* path, FSEventStreamEventFlags flags)
+    {
+        // 何が変わったか分からない場合(イベントの取りこぼし・監視先自身の移動/削除・マウント)は、変化ありとみなす
+        constexpr FSEventStreamEventFlags kUnknown =
+            kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped |
+            kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagMount | kFSEventStreamEventFlagUnmount;
+        if (flags & kUnknown) return true;
+
+        // FSEventsは配下すべての変更を報告する(再帰的)ので、監視先の直下の子だけを拾う
+        auto rel = std::filesystem::path(path).lexically_relative(watched);
+        if (rel.empty() || *rel.begin() == "..") return true; // 想定外の形で報告された。見逃すよりは変化ありとみなす
+        if (rel == ".") return false;                          // 監視先自身(移動/削除はRootChangedで拾っている)
+        return std::distance(rel.begin(), rel.end()) == 1;    // 直下の子か(それより深い階層は無視)
+    }
+
+    void DirWatchCallback(ConstFSEventStreamRef, void* info, size_t count, void* event_paths,
+                          const FSEventStreamEventFlags flags[], const FSEventStreamEventId[])
+    {
+        MiataDirWatchState* state = (__bridge MiataDirWatchState*)info;
+        if (!state->alive) return; // 破棄された後に、キューに残っていたコールバック
+        NSArray* paths = (__bridge NSArray*)event_paths; // kFSEventStreamCreateFlagUseCFTypes
+        for (size_t i = 0; i < count; ++i) {
+            if (IsRelevantDirEvent(state->watched, [paths[i] UTF8String], flags[i])) {
+                auto on_change = state->on_change; // コールバックの中で破棄されても、呼び出しが終わるまで生きるようにコピー
+                on_change();
+                return; // 1回のコールバックでは1度だけ通知する
+            }
+        }
+    }
+
+    // FSEventsのストリームを1つ持ち、破棄で止める
+    class DirWatchImpl : public pl_dir_watch {
+    public:
+        DirWatchImpl(FSEventStreamRef stream, MiataDirWatchState* state) : stream_(stream), state_(state) {}
+        ~DirWatchImpl() override
+        {
+            // 念のため、キューに積まれたまま残ったコールバックがあっても呼び出し側へ届かないようにする
+            // (Stop/Invalidateの後にFSEventsがコールバックを呼ばないことは実測で確認しているが、
+            // 呼び出し側のon_changeはthisなどを参照するため、寿命切れの参照になる余地を残さない)
+            state_->alive = NO;
+            FSEventStreamStop(stream_);
+            FSEventStreamInvalidate(stream_);
+            FSEventStreamRelease(stream_); // コンテキストがretainしていたstateも手放す
+        }
+    private:
+        FSEventStreamRef stream_;
+        MiataDirWatchState* state_;
+    };
+}
+
+std::unique_ptr<pl_dir_watch> pl_watch_directory(const std::filesystem::path& dir, std::function<void()> on_change)
+{
+    // FSEventsは実パスで報告する(/tmp -> /private/tmp など)ので、監視先も実パスにそろえる。
+    // 存在しない・読めないディレクトリは監視しない。
+    std::error_code ec;
+    auto real = std::filesystem::canonical(dir, ec);
+    if (ec || access(real.c_str(), R_OK) != 0) return nullptr;
+    NSString* real_ns = [NSString stringWithUTF8String:real.c_str()];
+    if (!real_ns) return nullptr;
+
+    MiataDirWatchState* state = [[MiataDirWatchState alloc] init];
+    state->on_change = std::move(on_change);
+    state->watched = real;
+    state->alive = YES;
+
+    FSEventStreamContext context = {0, (__bridge void*)state, CFRetain, CFRelease, nullptr};
+    FSEventStreamRef stream = FSEventStreamCreate(
+        nullptr, &DirWatchCallback, &context, (__bridge CFArrayRef)@[real_ns],
+        kFSEventStreamEventIdSinceNow,
+        0.1, // 短時間の変化をまとめる幅(秒)。NoDeferなので最初の変化はすぐ届く
+        kFSEventStreamCreateFlagFileEvents |   // ファイル単位のイベント(既存ファイルの中身の更新も届く)
+        kFSEventStreamCreateFlagUseCFTypes |
+        kFSEventStreamCreateFlagNoDefer |
+        kFSEventStreamCreateFlagWatchRoot      // 監視先自身の移動/削除も届く
+    );
+    if (!stream) return nullptr;
+    FSEventStreamSetDispatchQueue(stream, dispatch_get_main_queue());
+    if (!FSEventStreamStart(stream)) {
+        FSEventStreamInvalidate(stream);
+        FSEventStreamRelease(stream);
+        return nullptr;
+    }
+    return std::make_unique<DirWatchImpl>(stream, state);
 }
 
 std::optional<std::filesystem::path> pl_find_executable(const std::string& name)

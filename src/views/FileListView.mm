@@ -186,6 +186,11 @@ namespace {
     // ドロップ受理から、宛先アプリがファイルを動かし終えたかを確認するまでの待ち時間(秒)
     constexpr double kDropSettleSeconds = 0.3;
 
+    // ディレクトリ監視による自動リロード
+    constexpr auto kAutoReloadDelay = std::chrono::milliseconds(300);       // 変化を検知してから反映するまでの待ち(続く変化を1回にまとめる)
+    constexpr auto kAutoReloadMinInterval = std::chrono::milliseconds(500); // 自動リロードどうしの最短の間隔
+    constexpr int kAutoReloadCostFactor = 8;                                // 走査が重いときは、かかった時間のこの倍以上あける
+
     // 実体が確実に無くなっている場合のみtrue。エラーで判定できない場合や、壊れた
     // シンボリックリンク(リンク自体は残っている)はfalse。
     bool IsGone(const std::filesystem::path& path)
@@ -249,11 +254,15 @@ FileListView::FileListView(models::FileListModel& list) : model_(list), impl_(st
 
     subscriptions_.push_back(
         model_.ObservePath()
-            .subscribe([this](const std::filesystem::path&) {
+            .subscribe([this](const std::filesystem::path& path) {
                 Fetch();
                 // Reload()経由の通知ならカーソルを復元する。ディレクトリ移動(JumpTo)は先頭から
                 cursorIndex_ = reload_memo_ ? RestoreCursor(*reload_memo_) : 0;
                 Redraw();
+                // 走査した内容が最新になったので、反映待ちは不要。監視は、表示するパスが変わったときだけ
+                // 張り直す(張り直しの中で、走査より後の変更を見つけたら、また反映待ちになる)
+                stale_ = false;
+                WatchDirectory(path);
             })
     );
 
@@ -402,6 +411,48 @@ void FileListView::Redraw()
 
     [impl_->header_view setNeedsDisplay:YES];
     [impl_->content_view setNeedsDisplay:YES];
+}
+
+void FileListView::WatchDirectory(const std::filesystem::path& dir)
+{
+    // 同じパスを見ている監視が生きていれば、そのまま使う(再スキャンごとに張り直すと、その間の変更を落とす)
+    if (watch_ && watched_dir_ == dir) return;
+
+    watch_.reset(); // 古い監視を先に止める
+    watched_dir_ = dir;
+    watch_ = pl_watch_directory(dir, [this] { OnDirectoryChanged(); });
+    if (!watch_) return; // 監視できないディレクトリ(権限が無い等)は、自動では更新しない(次の走査で張り直しを試す)
+
+    // 走査してから監視を張るまでの間の変更は通知されないので、走査より後に変わっていないか確かめる
+    // (ディレクトリの更新日時が変わるもの=追加・削除・改名を確認できる)
+    std::error_code ec;
+    auto now = std::filesystem::last_write_time(dir, ec);
+    auto scanned = model_.ScannedMtime();
+    if (!ec && scanned && now != *scanned) OnDirectoryChanged();
+}
+
+void FileListView::OnDirectoryChanged()
+{
+    if (stale_) return; // すでに反映待ち(続く変化はまとめて1回で反映される)
+    stale_ = true;
+    reload_due_ = std::max(std::chrono::steady_clock::now() + kAutoReloadDelay, next_reload_allowed_);
+}
+
+void FileListView::UpdateAutoReload(bool allow)
+{
+    if (!stale_ || !allow) return;
+    auto start = std::chrono::steady_clock::now();
+    if (start < reload_due_) return;
+
+    // Reload()が成功すると、パス変更の通知の中でstale_が落ちる(その中で、走査より後の変更を
+    // 見つけたらまた立つ)。失敗(ディレクトリが消えた等)した場合は通知が無いので、先に落として
+    // おいて再試行はしない(次の変化の通知か、手動のリロードを待つ)。
+    stale_ = false;
+    (void)Reload();
+
+    auto end = std::chrono::steady_clock::now();
+    next_reload_allowed_ = end + std::max<std::chrono::steady_clock::duration>(kAutoReloadMinInterval, (end - start) * kAutoReloadCostFactor);
+    if (stale_) reload_due_ = std::max(reload_due_, next_reload_allowed_);
 }
 
 void FileListView::SetDragGuard(std::function<bool()> guard)

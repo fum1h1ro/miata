@@ -24,6 +24,9 @@ namespace miata::views {
         }
         // タイマーから定期的に呼ぶ。閉じたダイアログを検出してキューの次を開く。
         void CheckDialogState();
+        // タイマーから定期的に呼ぶ(CheckDialogStateの後)。ディレクトリ監視で古くなった一覧を
+        // 自動リロードする。ダイアログ表示中は保留する(FileListView::UpdateAutoReload参照)。
+        void UpdateAutoReload();
 
         void NavigateForBrowser(constants::Navigate dir);
         void ToggleFocus();

@@ -43,6 +43,13 @@ namespace miata::views {
             return pane == constants::Pane::Left ? left_ : right_;
         }
 
+        // 両ペインの自動リロードを進める(FileListView::UpdateAutoReload参照)
+        inline void UpdateAutoReload(bool allow)
+        {
+            left_->UpdateAutoReload(allow);
+            right_->UpdateAutoReload(allow);
+        }
+
         // 左右ペイン共通のドラッグ開始可否コールバックを設定する(FileListView::SetDragGuard参照)
         inline void SetDragGuard(const std::function<bool()>& guard)
         {
