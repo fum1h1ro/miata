@@ -71,8 +71,10 @@ namespace miata::views {
         // このペインのディレクトリを再スキャンする(FileListModel::Reload()参照)。
         // マークもカーソルも、パスで同じファイルを引き継ぐ。カーソルのファイルが消えていた
         // 場合は、再スキャン前の画面上の並びで次に残っているファイル(無ければその前)へ寄せる。
+        // cursor_toを渡すと、再スキャン後にそのパスのファイルへカーソルを合わせる(リネームの
+        // 直後など、旧パスが消えて新しいパスに移るとき用。一覧に無ければ上記の通常の寄せ方)。
         // 失敗時(ディレクトリが読めない等)は何も変えずにエラーメッセージを返す。
-        std::expected<void, std::string> Reload();
+        std::expected<void, std::string> Reload(std::optional<std::filesystem::path> cursor_to = std::nullopt);
 
         // --- マーク済みファイルのドラッグ&ドロップ(他アプリへの持ち出し) ---
         // 実際のドラッグ開始とドラッグ画像はFileListView.mm内のNSViewが担い、ここは
@@ -91,7 +93,8 @@ namespace miata::views {
         // 拒否した場合は空を返す(=ドラッグしない)。
         const std::vector<DragEntry>& BeginDrag();
         // ドラッグ終了時に呼ぶ。acceptedは宛先がドロップを受理したか(キャンセル/拒否ならfalse)。
-        // 受理された場合、ファイルが移動されていれば一覧を再スキャンし、そうでなければマークだけ解除する。
+        // 受理された場合、ファイルが移動されていればReload()で一覧を最新にし(カーソルは維持、
+        // 移されなかったファイルのマークは残る)、そうでなければマークだけ解除する。
         void EndDrag(bool accepted);
 
     private:
@@ -102,6 +105,7 @@ namespace miata::views {
         struct CursorMemo {
             std::vector<std::filesystem::path> order; // 再スキャン前の画面上の並び
             int index = 0;                            // その中でのカーソル位置
+            std::optional<std::filesystem::path> target; // 指定があれば、再スキャン後にカーソルを合わせる先
         };
         // Fetch()で並べ直した後のlist_から、memoに基づくカーソル位置を求める
         int RestoreCursor(const CursorMemo& memo) const;
