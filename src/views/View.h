@@ -32,6 +32,10 @@ namespace miata::views {
         models::FileListModel& OtherList();
         models::FileEntryModel& CurrentEntry();
         FileListView& CurrentFileListView();
+        // カーソル(フォーカス)のあるペインと、ペインを指定して取得するアクセサ
+        constants::Pane CurrentPane() const;
+        FileListView& GetFileListView(constants::Pane pane);
+        models::FileListModel& GetList(constants::Pane pane);
 
     private:
         void OpenNextDialogIfNeeded();

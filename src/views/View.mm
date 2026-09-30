@@ -118,6 +118,22 @@ namespace miata::views {
         return *browser_->GetCurrentFileListView();
     }
 
+    constants::Pane View::CurrentPane() const
+    {
+        return browser_->CurrentPane();
+    }
+
+    FileListView& View::GetFileListView(constants::Pane pane)
+    {
+        return *browser_->GetFileListView(pane);
+    }
+
+    models::FileListModel& View::GetList(constants::Pane pane)
+    {
+        auto& browser_model = models::BrowserModel::Instance();
+        return pane == constants::Pane::Left ? browser_model.Left() : browser_model.Right();
+    }
+
     void View::ToggleFocus()
     {
         browser_->ToggleFocus();

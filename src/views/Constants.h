@@ -12,6 +12,12 @@ namespace miata::views::constants {
         Ok,
         Cancel,
     };
+
+    // 左右2ペインのどちらか。Luaには "left" / "right" の文字列で公開する
+    enum class Pane : uint8_t {
+        Left,
+        Right,
+    };
 }
 
 

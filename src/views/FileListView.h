@@ -1,9 +1,12 @@
 #ifndef VIEWS_FILE_LIST_VIEW_H__
 #define VIEWS_FILE_LIST_VIEW_H__
 
+#include <expected>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 #include "../models/Model.h"
 #include "../misc.h"
@@ -65,6 +68,12 @@ namespace miata::views {
         // カーソル移動やフォーカス変更を伴わない外部要因(マーク変更等)の後に呼ぶ再描画要求
         void Redraw();
 
+        // このペインのディレクトリを再スキャンする(FileListModel::Reload()参照)。
+        // マークもカーソルも、パスで同じファイルを引き継ぐ。カーソルのファイルが消えていた
+        // 場合は、再スキャン前の画面上の並びで次に残っているファイル(無ければその前)へ寄せる。
+        // 失敗時(ディレクトリが読めない等)は何も変えずにエラーメッセージを返す。
+        std::expected<void, std::string> Reload();
+
         // --- マーク済みファイルのドラッグ&ドロップ(他アプリへの持ち出し) ---
         // 実際のドラッグ開始とドラッグ画像はFileListView.mm内のNSViewが担い、ここは
         // 「何を運ぶか」と「ドロップ後にどうするか」だけを決める。
@@ -87,6 +96,16 @@ namespace miata::views {
 
     private:
         void Fetch();
+
+        // Reload()の間だけ持つ、カーソル復元用の記録。再スキャンで旧エントリが破棄される前に
+        // パスとして控えておく(破棄後にlist_経由で読むと寿命切れの参照になる)。
+        struct CursorMemo {
+            std::vector<std::filesystem::path> order; // 再スキャン前の画面上の並び
+            int index = 0;                            // その中でのカーソル位置
+        };
+        // Fetch()で並べ直した後のlist_から、memoに基づくカーソル位置を求める
+        int RestoreCursor(const CursorMemo& memo) const;
+        std::optional<CursorMemo> reload_memo_;
 
         int cursorIndex_ = 0;
         bool focus_ = false;

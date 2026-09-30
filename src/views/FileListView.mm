@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <unordered_map>
 #include "FileListView.h"
 #include "../platform.h"
 #include "../Config.h"
@@ -250,7 +251,8 @@ FileListView::FileListView(models::FileListModel& list) : model_(list), impl_(st
         model_.ObservePath()
             .subscribe([this](const std::filesystem::path&) {
                 Fetch();
-                cursorIndex_ = 0;
+                // Reload()経由の通知ならカーソルを復元する。ディレクトリ移動(JumpTo)は先頭から
+                cursorIndex_ = reload_memo_ ? RestoreCursor(*reload_memo_) : 0;
                 Redraw();
             })
     );
@@ -327,6 +329,47 @@ void FileListView::Fetch()
             return CaseInsensitiveCompare(x->Model().Name(), y->Model().Name()) == NSOrderedAscending;
         }
     });
+}
+
+std::expected<void, std::string> FileListView::Reload()
+{
+    // 再スキャンで旧エントリが破棄される前に、カーソル復元に必要な情報を控える。
+    // 復元自体は、再スキャン後のパス変更通知の購読側(コンストラクタ)がFetch()の直後に行う。
+    CursorMemo memo;
+    memo.order.reserve(list_.size());
+    for (auto* entry : list_) {
+        memo.order.push_back(entry->Model().Path());
+    }
+    memo.index = cursorIndex_;
+
+    reload_memo_ = std::move(memo);
+    auto result = model_.Reload();
+    reload_memo_.reset();
+    return result;
+}
+
+int FileListView::RestoreCursor(const CursorMemo& memo) const
+{
+    if (memo.order.empty() || list_.empty()) return 0;
+
+    std::unordered_map<std::filesystem::path, int> index_of;
+    index_of.reserve(list_.size());
+    for (size_t i = 0; i < list_.size(); ++i) {
+        index_of.emplace(list_[i]->Model().Path(), (int)i);
+    }
+
+    // カーソルのファイルが残っていればそれを指す(並びが変わっても同じファイルに追従する)。
+    // 消えていたら、再スキャン前の並びで「カーソル以降→カーソルより前」の順に最初に残っている
+    // ファイルへ寄せる(Finderで選択中のファイルを消すと次の行へ移るのと同じ感覚)。
+    auto size = (int)memo.order.size();
+    auto start = std::clamp(memo.index, 0, size - 1);
+    for (auto i = start; i < size; ++i) {
+        if (auto it = index_of.find(memo.order[(size_t)i]); it != index_of.end()) return it->second;
+    }
+    for (auto i = start - 1; i >= 0; --i) {
+        if (auto it = index_of.find(memo.order[(size_t)i]); it != index_of.end()) return it->second;
+    }
+    return 0;
 }
 
 void FileListView::Redraw()

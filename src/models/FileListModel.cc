@@ -1,6 +1,7 @@
 #include "../platform.h"
 #include "FileListModel.h"
 #include <memory>
+#include <unordered_set>
 
 namespace miata::models {
     FileListModel::FileListModel()
@@ -21,6 +22,34 @@ namespace miata::models {
             entries_.emplace_back(std::unique_ptr<FileEntryModel>(new FileEntryModel(d)));
         }
         path_.Value(path);
+    }
+
+    std::expected<void, std::string> FileListModel::Reload()
+    {
+        auto path = path_.Value();
+
+        // 先に新しい一覧を作り、失敗した場合は現在の状態に一切触れない。
+        // 再読み込みは外部でディレクトリが変わった後に使うため、JumpToと違って
+        // 消えた/権限の無いディレクトリでも例外を投げずにエラーとして返す。
+        std::vector<std::unique_ptr<FileEntryModel>> scanned;
+        std::error_code ec;
+        std::filesystem::directory_iterator it(path, ec);
+        for (; !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+            scanned.emplace_back(std::unique_ptr<FileEntryModel>(new FileEntryModel(*it)));
+        }
+        if (ec) return std::unexpected(ec.message());
+
+        std::unordered_set<std::filesystem::path> marked;
+        for (auto& entry : entries_) {
+            if (entry->IsMarked()) marked.insert(entry->Path());
+        }
+        for (auto& entry : scanned) {
+            if (marked.contains(entry->Path())) entry->Mark(true);
+        }
+
+        entries_ = std::move(scanned);
+        path_.Value(path);
+        return {};
     }
 
     void FileListModel::NavigateToParent()
