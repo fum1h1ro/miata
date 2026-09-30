@@ -331,7 +331,7 @@ void FileListView::Fetch()
     });
 }
 
-std::expected<void, std::string> FileListView::Reload()
+std::expected<void, std::string> FileListView::Reload(std::optional<std::filesystem::path> cursor_to)
 {
     // 再スキャンで旧エントリが破棄される前に、カーソル復元に必要な情報を控える。
     // 復元自体は、再スキャン後のパス変更通知の購読側(コンストラクタ)がFetch()の直後に行う。
@@ -341,6 +341,7 @@ std::expected<void, std::string> FileListView::Reload()
         memo.order.push_back(entry->Model().Path());
     }
     memo.index = cursorIndex_;
+    memo.target = std::move(cursor_to);
 
     reload_memo_ = std::move(memo);
     auto result = model_.Reload();
@@ -350,13 +351,19 @@ std::expected<void, std::string> FileListView::Reload()
 
 int FileListView::RestoreCursor(const CursorMemo& memo) const
 {
-    if (memo.order.empty() || list_.empty()) return 0;
+    if (list_.empty()) return 0;
 
     std::unordered_map<std::filesystem::path, int> index_of;
     index_of.reserve(list_.size());
     for (size_t i = 0; i < list_.size(); ++i) {
         index_of.emplace(list_[i]->Model().Path(), (int)i);
     }
+
+    // 合わせる先を指定されていて一覧にあれば、そこへ
+    if (memo.target) {
+        if (auto it = index_of.find(*memo.target); it != index_of.end()) return it->second;
+    }
+    if (memo.order.empty()) return 0;
 
     // カーソルのファイルが残っていればそれを指す(並びが変わっても同じファイルに追従する)。
     // 消えていたら、再スキャン前の並びで「カーソル以降→カーソルより前」の順に最初に残っている
@@ -435,7 +442,9 @@ void FileListView::EndDrag(bool accepted)
 
         auto moved = std::any_of(entries.begin(), entries.end(), [](const DragEntry& e) { return IsGone(e.path); });
         if (moved) {
-            model_.JumpTo(dir); // 消えたファイルを一覧に反映(マークも自然に消える)
+            // 消えたファイルを一覧に反映する。カーソルは維持され、移されなかったファイルの
+            // マークは残る。失敗(ディレクトリが読めない等)しても一覧は変わらないだけなので無視する。
+            (void)Reload();
         }
         else {
             model_.ClearMarks(); // 中身は変わらない(コピー等)のでマークだけ解除する

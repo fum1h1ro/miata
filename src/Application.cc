@@ -293,11 +293,11 @@ namespace miata {
         // バックグラウンド実行中にペインが別ディレクトリへ移動されている場合があるため、
         // 操作開始時点のパスを今も表示している場合に限って再スキャンする。
         if (event.dest_model && event.dest_model->Path() == event.dest_dir) {
-            event.dest_model->JumpTo(event.dest_dir);
+            view_->ReloadList(*event.dest_model);
         }
         if (event.src_model && event.src_model->Path() == event.src_dir) {
             if (event.type == FileOpType::Move) {
-                event.src_model->JumpTo(event.src_dir); // 消えたファイルを一覧に反映（マークも自然に消える）
+                view_->ReloadList(*event.src_model); // 消えたファイルを一覧に反映（移せなかったファイルのマークは残る）
             }
             else {
                 event.src_model->ClearMarks(); // 中身は変わらないのでマークだけ解除する
@@ -348,7 +348,7 @@ namespace miata {
                 // 確認ダイアログはモーダルで開いている間ペイン移動できないため、
                 // ここでは常に操作対象だったディレクトリのままのはずだが、念のため確認する。
                 if (list.Path() == dir) {
-                    list.JumpTo(dir);
+                    view_->ReloadList(list); // ゴミ箱に移せなかったファイルのマークは残る
                 }
 
                 if (failed_count > 0) {
@@ -552,7 +552,7 @@ namespace miata {
         std::filesystem::create_directory(dest, ec);
 
         if (!ec) {
-            list.JumpTo(list.Path());
+            app.view_->ReloadList(list);
             lua_pushboolean(L, true);
         }
         else {
@@ -623,7 +623,7 @@ namespace miata {
         std::filesystem::rename(entry.Path(), dest, ec);
 
         if (!ec) {
-            list.JumpTo(list.Path());
+            app.view_->ReloadList(list, dest); // 旧名は消えるので、カーソルは新しい名前に合わせる
             lua_pushboolean(L, true);
         }
         else {

@@ -1,7 +1,9 @@
 #ifndef VIEW_H__
 #define VIEW_H__
 
+#include <filesystem>
 #include <memory>
+#include <optional>
 #include <queue>
 #include "Dialog.h"
 #include "BrowserView.h"
@@ -36,6 +38,10 @@ namespace miata::views {
         constants::Pane CurrentPane() const;
         FileListView& GetFileListView(constants::Pane pane);
         models::FileListModel& GetList(constants::Pane pane);
+        // listを表示しているペインを再スキャンして最新にする。カーソルとマークは維持される
+        // (FileListView::Reload参照。cursor_toの意味も同じ)。ファイル操作の後始末用で、
+        // 失敗(ディレクトリが読めない等)しても一覧が変わらないだけなので呼び出し側には返さない。
+        void ReloadList(const models::FileListModel& list, std::optional<std::filesystem::path> cursor_to = std::nullopt);
 
     private:
         void OpenNextDialogIfNeeded();
