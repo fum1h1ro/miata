@@ -71,12 +71,60 @@ resources/
 ### キーバインド
 
 ```lua
--- モード: "n"=Normal, "d"=Dialog, "nd"=両方, ""=全モード
+Miata.command.bind(mode, keys, function() ... end)
+Miata.command.unbind(mode, keys)
+
 Miata.command.bind("n", "j", function()
-    Miata.command.navigate_down()
+    Miata.command.navigate_down()          -- j
 end)
-Miata.command.unbind("n", "j")
+Miata.command.bind("n", "<C-d>", function()
+    Miata.command.navigate_down(10)        -- Ctrl+d
+end)
+Miata.command.bind("n", "<S-k>", function()
+    Miata.command.make_folder()            -- Shift+k
+end)
+Miata.command.bind("n", "dd", function()
+    Miata.command.delete_marked()          -- d を 2 回
+end)
+Miata.command.bind("nd", "<enter>", function()
+    Miata.command.navigate_ok()            -- Enter（一覧でもダイアログでも）
+end)
 ```
+
+#### モード（`mode`）
+
+| 値 | 意味 |
+|---|---|
+| `"n"` | Normal（通常の一覧操作） |
+| `"d"` | Dialog（ダイアログ表示中） |
+| `"nd"` | 両方 |
+
+- `"N"` `"D"` のように大文字で書いても同じ
+- 空文字 `""` は何も登録しない（エラーにもならない）。`n` `d` 以外の文字を含めると `unknown map` のエラーになる
+- テキスト入力欄にフォーカスがある間（`dialog_input`、`dialog_filter_list`）は、Dialog モードのキーバインドも効かない（テキスト入力が優先される）
+
+#### キーの書き方（`keys`）
+
+| 書き方 | 意味 |
+|---|---|
+| `j` `1` `;` など | 修飾キー無しのそのキー。**大文字は Shift ではない**（`"J"` は `"j"` と同じ） |
+| `" "` | スペース（1 文字のスペース。`<space>` は使えない） |
+| `<S-j>` | Shift+j |
+| `<C-d>` | Ctrl+d |
+| `<A-x>` | Alt（Option）+x |
+| `<M-x>` | Command+x |
+| `<C-S-k>` | 修飾キーは `-` でつないで複数指定できる。修飾キーは `S` `C` `A` `M`（小文字も可） |
+| `<enter>` `<esc>` `<tab>` `<bs>` `<del>` `<up>` `<down>` `<left>` `<right>` `<f1>`〜`<f20>` | 特殊キー（`enter` は Return、`bs` は Delete（後退）、`del` は前方削除）。`<S-up>` のように修飾キーも付けられる |
+| `dd` `gg` `<C-q>s` | 続けて押すキーの列（最大 4 キー）。途中までは次のキーを待ち、どの割り当てにも合わない列を押すとビープ音が鳴って最初からやり直しになる |
+
+そのまま書ける記号は、スペース（`" "`）と `'` `,` `-` `.` `/` `;` `=` `[` `\` `]` とバッククォートだけ。キーは文字ではなく**物理キーの位置**（ANSI 配列のキーコード）で識別する。
+
+**注意**
+
+- 同じモードで同じキー列を二度 `bind` すると、後の方が**黙って上書き**する（エラーにならない）。大文字の `"H"` を Shift+h のつもりで書くと、`"h"` の割り当てを上書きしてしまう。Shift+h は `"<S-h>"` と書く
+- Shift を押さないと出ない記号（`?` `!` `:` など）は、直接は書けない。表にない記号を直接書くと、**`a` のキーとして登録されてしまう**。ベースのキーに `<S-...>` を付けて書く（`?` は `<S-/>`）
+- 特殊キーの表にない名前を `<...>` に書くと、先頭の 1 文字のキーとして扱われる（`<space>` は `s` のキーになる）
+- 修飾キーの綴りを間違えた `<X-a>` や、中身が空の `<>` を書くと、Lua のエラーではなく**アプリが異常終了する**（既知の問題）
 
 ### ナビゲーション
 
