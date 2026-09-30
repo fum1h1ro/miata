@@ -139,14 +139,25 @@ namespace miata::views {
         return pane == constants::Pane::Left ? browser_model.Left() : browser_model.Right();
     }
 
-    void View::ReloadList(const models::FileListModel& list, std::optional<std::filesystem::path> cursor_to)
+    FileListView* View::FindFileListView(const models::FileListModel& list)
     {
         auto& browser_model = models::BrowserModel::Instance();
-        if (&list == &browser_model.Left()) {
-            (void)GetFileListView(constants::Pane::Left).Reload(std::move(cursor_to));
+        if (&list == &browser_model.Left()) return &GetFileListView(constants::Pane::Left);
+        if (&list == &browser_model.Right()) return &GetFileListView(constants::Pane::Right);
+        return nullptr;
+    }
+
+    void View::ReloadList(const models::FileListModel& list, std::optional<std::filesystem::path> cursor_to)
+    {
+        if (auto* view = FindFileListView(list)) {
+            (void)view->Reload(std::move(cursor_to));
         }
-        else if (&list == &browser_model.Right()) {
-            (void)GetFileListView(constants::Pane::Right).Reload(std::move(cursor_to));
+    }
+
+    void View::ClearListMarks(const models::FileListModel& list)
+    {
+        if (auto* view = FindFileListView(list)) {
+            view->ClearMarks();
         }
     }
 

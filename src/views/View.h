@@ -45,9 +45,13 @@ namespace miata::views {
         // (FileListView::Reload参照。cursor_toの意味も同じ)。ファイル操作の後始末用で、
         // 失敗(ディレクトリが読めない等)しても一覧が変わらないだけなので呼び出し側には返さない。
         void ReloadList(const models::FileListModel& list, std::optional<std::filesystem::path> cursor_to = std::nullopt);
+        // listを表示しているペインのマークをすべて解除して、再描画する(FileListView::ClearMarks参照)。
+        void ClearListMarks(const models::FileListModel& list);
 
     private:
         void OpenNextDialogIfNeeded();
+        // listを表示しているペイン(どちらでもなければnullptr)
+        FileListView* FindFileListView(const models::FileListModel& list);
 
         std::unique_ptr<BrowserView> browser_;
         std::shared_ptr<IDialog> current_dialog_;
