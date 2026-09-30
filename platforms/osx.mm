@@ -647,11 +647,11 @@ Color4f pl_get_color(pl_color_type type)
 
 
 
-@interface QLPreviewPanelController : NSViewController <QLPreviewPanelDataSource, QLPreviewPanelDelegate>
+@interface MiataQuickLookController : NSViewController <QLPreviewPanelDataSource, QLPreviewPanelDelegate>
 @property (nonatomic, strong) NSArray* previewFilePathArray;
 @end
 
-@implementation QLPreviewPanelController
+@implementation MiataQuickLookController
 - (void)showPreviewForFileList:(NSArray*)filePathArray
 {
     self.previewFilePathArray = filePathArray;
@@ -689,7 +689,7 @@ void pl_quick_preview(const std::vector<std::string>& path_list)
         for (const auto& path : path_list) {
             [items addObject:[NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]]];
         }
-        QLPreviewPanelController* controller = [[QLPreviewPanelController alloc] init];
+        MiataQuickLookController* controller = [[MiataQuickLookController alloc] init];
         [controller showPreviewForFileList:items];
     }
 }
