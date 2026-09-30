@@ -302,6 +302,12 @@ void FileListView::MoveCursor(int offset)
     Redraw();
 }
 
+std::optional<std::filesystem::path> FileListView::CurrentPath() const
+{
+    if (cursorIndex_ < 0 || (size_t)cursorIndex_ >= list_.size()) return std::nullopt;
+    return list_[(size_t)cursorIndex_]->Model().Path();
+}
+
 void FileListView::Fetch()
 {
     list_.clear();

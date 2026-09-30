@@ -48,6 +48,12 @@ namespace miata::views {
         // listを表示しているペインのマークをすべて解除して、再描画する(FileListView::ClearMarks参照)。
         void ClearListMarks(const models::FileListModel& list);
 
+        // Quick Lookのプレビューを、areaの範囲の一覧に被せて表示する/閉じる(BrowserView::ToggleQuickLook
+        // 参照)。呼んだ後に表示中ならtrue。Navigate::Cancel(Escなど)でも閉じる。
+        bool ToggleQuickLook(constants::QuickLookArea area);
+        // タイマーから定期的に呼ぶ。プレビューを、カーソル下のファイルに追従させる。
+        void UpdateQuickLook();
+
     private:
         void OpenNextDialogIfNeeded();
         // listを表示しているペイン(どちらでもなければnullptr)

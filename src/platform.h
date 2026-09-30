@@ -151,6 +151,4 @@ std::expected<std::string, std::string> pl_read_resource_file(const char* path);
 
 Color4f pl_get_color(pl_color_type type);
 
-void pl_quick_preview(const std::vector<std::string>& path_list);
-
 #endif // PLATFORM_H__

@@ -66,6 +66,8 @@ namespace miata::views {
         {
             return GetEntry(cursorIndex_);
         }
+        // カーソル下のファイルのパス。一覧が空ならnullopt(GetCurrent()は一覧が空だと使えない)
+        std::optional<std::filesystem::path> CurrentPath() const;
 
         // カーソル移動やフォーカス変更を伴わない外部要因(マーク変更等)の後に呼ぶ再描画要求
         void Redraw();

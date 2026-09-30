@@ -96,6 +96,9 @@ namespace miata::views {
                 }
             }
             break;
+        case constants::Navigate::Cancel:
+            browser_->HideQuickLook();
+            break;
         default:
             break;
         }
@@ -159,6 +162,16 @@ namespace miata::views {
         if (auto* view = FindFileListView(list)) {
             view->ClearMarks();
         }
+    }
+
+    bool View::ToggleQuickLook(constants::QuickLookArea area)
+    {
+        return browser_->ToggleQuickLook(area);
+    }
+
+    void View::UpdateQuickLook()
+    {
+        browser_->UpdateQuickLook();
     }
 
     void View::ToggleFocus()
