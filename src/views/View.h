@@ -59,6 +59,15 @@ namespace miata::views {
         // タイマーから定期的に呼ぶ。プレビューを、カーソル下のファイルに追従させる。
         void UpdateQuickLook();
 
+        // カーソルのペインで、ファイル名の検索を始める/次・前のマッチへ動く/終える(BrowserViewの同名の
+        // メソッドを参照)。ダイアログの表示中は、始めない・動かない(falseを返す)。
+        // Navigate::Cancel(Escなど)でも、検索を終える。
+        bool BeginSearch();
+        bool StepSearch(int dir);
+        bool ClearSearch();
+        // タイマーから定期的に呼ぶ。検索バーの入力欄と、ペインの検索の状態を整える(BrowserView::UpdateSearchBar参照)。
+        void UpdateSearchBar();
+
     private:
         void OpenNextDialogIfNeeded();
         // 親ディレクトリ/pathへ移動する。読めない場合(権限が無い等)は、移動せずに、ダイアログで知らせる

@@ -12,6 +12,7 @@
 #include "../models/Model.h"
 #include "../misc.h"
 #include "../platform.h"
+#include "SearchState.h"
 
 namespace miata::views {
     class FileEntryView {
@@ -45,11 +46,12 @@ namespace miata::views {
 
         // 親(BrowserView)にaddSubviewするためのNSView*を(__bridge void*)で返す
         void* NativeView() const;
-        // それぞれ対応するNSViewのdrawRect:から呼ばれる。dirtyRectは無視して
-        // 常に全体を再描画する(行数が少ないため十分)。呼び出し元のビュー自身の
+        // それぞれ対応するNSViewのdrawRect:から呼ばれる。呼び出し元のビュー自身の
         // 座標系で描画するため、ヘッダーとリスト本体でメソッドを分けている。
+        // Draw()のmin_y〜max_yは、描き直す範囲(dirtyRectのy)。その範囲にかかる行だけを描く
+        // (数千〜数万件のディレクトリでも、見えている行数分のコストで済むように)。
         void DrawHeader();
-        void Draw();
+        void Draw(double min_y, double max_y);
 
         void SetSort(SortKey key, bool reverse);
 
@@ -116,8 +118,52 @@ namespace miata::views {
         // 別のファイルを改名してしまうのを避けるため保留する)。
         void UpdateAutoReload(bool allow);
 
+        // --- 検索(vimの / のようなインクリメンタル検索) ---
+        // 検索はペインごと。状態の遷移とヒットからの計算はSearchState、ここは実際のマッチ(名前に対する検索)と、
+        // カーソルの移動、ハイライトの描画を受け持つ。マッチは、検索語を部分文字列として含む名前(検索語に大文字が
+        // 無ければ大文字小文字を区別しない=スマートケース)。名前の中のすべての出現を強調し、カーソルのある行の
+        // 一致部分は別の色にする。一覧が作り直されたとき(リロード・ソート)は、検索語を保ったままヒットを
+        // 再計算し、ディレクトリを移動したときは検索を消す。ペインの下の検索バーは、BrowserViewが持つ。
+
+        // 検索語の入力を始める(Idle / Committed → Typing)。入力するまでヒットは無い(前の検索のハイライトは隠れる)。
+        // すでにTypingなら何もしない。
+        void BeginSearch();
+        // 入力中の語を更新する(Typingのときだけ)。検索を始めた位置(↓ / ↑で動かしていれば、その位置)から
+        // 前方(末尾まで行ったら先頭に戻る)の最初のマッチ(その位置自身を含む)へ、カーソルを動かす。
+        // マッチが無ければ(語が空のときも)その位置に戻す。語を全部消したときは、↓ / ↑で動かしていても、
+        // 検索を始めた位置からやり直す。
+        void SetSearchQuery(const std::string& query);
+        // 次(dir > 0)・前(dir < 0)のマッチのファイルへカーソルを動かす(端でラップ)。入力中は、動いた先を
+        // 以降の入力の起点にする。検索していない、またはマッチが無くて動けなければfalse。
+        bool StepSearch(int dir);
+        // 入力を確定する(Typing → Committed)。カーソルは動かさない。語が空なら、検索を始める前の状態
+        // (確定済みの検索があればそれ、無ければ検索なし)に戻る。
+        void CommitSearch();
+        // 入力を取り消す(Typing → 検索を始める前の状態)。カーソルは、検索を始めた位置に戻す。
+        void CancelSearch();
+        // 検索を終える(ハイライトを消す)。カーソルは動かさない。検索していたらtrue。
+        bool ClearSearch();
+        SearchMode GetSearchMode() const { return search_.Mode(); }
+        // 検索バーに出す内容(語、ヒット数、カーソルのある行の順番)
+        SearchStatus GetSearchStatus() const;
+
+        // 一覧の下端に空ける高さ(pt)。一覧(スクロール部分)がこの分だけ縮む。空いた帯には、親(BrowserView)が
+        // このペインの検索バーを重ねる(反対側のペインは縮まない)。0で空けない。縮んでカーソルが見えなくなるときは、
+        // 見える位置までスクロールする。
+        void SetBottomInset(double height);
+
     private:
         void Fetch();
+
+        // 検索語に一致する行(ヒット)を、今のlist_から作り直してsearch_に渡す。list_を作り直したとき(Fetch)と、
+        // 検索語・検索の状態が変わったときに呼ぶ。
+        void RebuildSearchHits();
+        // 位置(パス)を、今のlist_の添字にする。パスが見つからなければ、位置の添字(範囲に収める)。一覧が空なら-1
+        int ResolveRow(const SearchPosition& position) const;
+        SearchPosition PositionAt(int row) const;
+        // 検索でrowの行へカーソルを動かして、描き直す。今見えている範囲の外へ飛ぶときは、行を画面の中央に出す
+        // (Redraw()のスクロールは、行が見える最小限だけなので、遠くへ飛ぶと端に張り付く)。
+        void JumpCursorTo(int row);
 
         // ディレクトリ監視。表示するパスが変わったときだけ張り直す。監視はパス基準で、ディレクトリが
         // 差し替えられても届き続けるので、同じパスの再スキャンでは張り直さない(張り直す間に起きた
@@ -143,6 +189,9 @@ namespace miata::views {
         models::FileListModel& model_;
         std::vector<FileEntryView*> list_;
         std::vector<FileEntryView> entries_;
+        // 検索の状態。ヒットは表示順(list_)の添字なので、list_を作り直すFetch()のたびに作り直す。
+        // 購読(subscriptions_)の通知はFetch()を呼ぶので、購読より先に宣言する(破棄は逆順)
+        SearchState search_;
         std::vector<misc::SubscriptionGuard> subscriptions_;
         std::function<bool()> drag_guard_;
         std::vector<DragEntry> drag_entries_;

@@ -13,8 +13,9 @@
 - (BOOL)isOpaque { return YES; }
 - (void)drawRect:(NSRect)dirtyRect
 {
-    [miata::views::ToNSColor(miata::Config::Background()) setFill];
-    NSRectFill(dirtyRect);
+    // dirtyRectは、自分の範囲を超えて渡されることがある(親をまるごと描くとき。macOS 14以降、ビューは既定で
+    // 自分の範囲に描画を切り詰めない)。そのまま塗ると、隣のビュー(一覧)を塗りつぶしてしまう
+    NSRectFill(NSIntersectionRect(dirtyRect, self.bounds));
 }
 // マウスは常にこのビューが受ける(何もしない)。中のQLPreviewViewがヒットしないので、クリックしても
 // first responderは動かず、キー入力はこれまで通りMiataRootViewに届く。

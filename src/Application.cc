@@ -185,6 +185,10 @@ namespace miata {
             { "reload", lua_command_reload },
             { "quick_look", lua_command_quick_look },
             { "sort", lua_command_sort },
+            { "search", lua_command_search },
+            { "search_next", lua_command_search_next },
+            { "search_prev", lua_command_search_prev },
+            { "search_clear", lua_command_search_clear },
         };
         script.RegisterFunctions(
             "Miata.command",
@@ -246,6 +250,9 @@ namespace miata {
         // Luaのコルーチン(Script::Update)とダイアログの後始末(CheckDialogState)の後に行う。
         // リネームなど、ダイアログの結果を受けて一覧のカーソルに作用する処理が終わってから反映するため。
         view_->UpdateAutoReload();
+        // 検索バーの入力欄とペインの検索の状態を整える。自動リロードの後に行う(リロードで検索の件数が変わる)。
+        // バーの出入りで一覧が縮むとき、Quick Lookの覆いが追従するのはレイアウトの側で行うので、UpdateQuickLookとの順序は問わない
+        view_->UpdateSearchBar();
         // 自動リロードの後に行う(リロードで動いたカーソルに、同じティックで追従を始められるように)
         view_->UpdateQuickLook();
     }
@@ -794,6 +801,48 @@ namespace miata {
 
         app.view_->CurrentFileListView().SetSort(key, reverse);
         return 0;
+    }
+
+    // Miata.command.search() -> boolean
+    // カーソルのペインで、ファイル名の検索を始める(vimの / )。そのペインの下に検索バーが出て、入力欄に文字を打てる
+    // (入力中はNormalのキーバインドは効かない。Enterで確定、Escで取り消し)。始められたらtrue。
+    // ダイアログの表示中や、すでに入力中のときはfalse。
+    int Application::lua_command_search(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        lua_pushboolean(L, app.view_->BeginSearch());
+        return 1;
+    }
+
+    // Miata.command.search_next() / search_prev() -> boolean
+    // カーソルのペインの、次・前のマッチのファイルへカーソルを動かす(vimの n / N。端でラップ)。
+    // 動けたらtrue。検索していない、またはマッチが無くて動けなければ、beepを鳴らしてfalse。
+    int Application::lua_command_search_next(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        bool moved = app.view_->StepSearch(1);
+        if (!moved) pl_play_beep();
+        lua_pushboolean(L, moved);
+        return 1;
+    }
+
+    int Application::lua_command_search_prev(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        bool moved = app.view_->StepSearch(-1);
+        if (!moved) pl_play_beep();
+        lua_pushboolean(L, moved);
+        return 1;
+    }
+
+    // Miata.command.search_clear() -> boolean
+    // カーソルのペインの検索を終える(ハイライトと検索バーを消す。カーソルは動かさない)。
+    // 検索していたらtrue。通常時のEsc(navigate_cancel)も、同じことをする。
+    int Application::lua_command_search_clear(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        lua_pushboolean(L, app.view_->ClearSearch());
+        return 1;
     }
 
     // Miata._private.dialog_open(type, options)

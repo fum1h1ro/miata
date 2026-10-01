@@ -34,7 +34,7 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 
 **構成:**
 - `src/models/` — データモデル（`FileListModel`、`FileEntryModel`、`BrowserModel`）
-- `src/views/` — UI レイヤー。`View`（ダイアログキュー管理・ブラウザ操作の起点）、`BrowserView`（左右ペインの `NSSplitView` と、その上に被せるプレビューの覆いを持つコンテナ）、`FileListView`（ファイル一覧本体。`NSScrollView` + 自前 `NSView.drawRect` で描画）、`QuickLookView`（Quick Look のプレビューを載せる覆い）、`Dialog`（`IDialog`/`DialogPanel` によるダイアログ基盤）
+- `src/views/` — UI レイヤー。`View`（ダイアログキュー管理・ブラウザ操作の起点）、`BrowserView`（左右ペインの `NSSplitView` と、その上に被せるプレビューの覆い、各ペインの下の検索バーを持つコンテナ）、`FileListView`（ファイル一覧本体。`NSScrollView` + 自前 `NSView.drawRect` で描画）、`QuickLookView`（Quick Look のプレビューを載せる覆い）、`SearchBar`（下端の検索バー）と `SearchState`（検索の状態。AppKit 非依存）、`Dialog`（`IDialog`/`DialogPanel` によるダイアログ基盤）
 - `src/widgets/` は存在しない（過去のドキュメントの残骸。汎用ウィジェットは今のところ `views/` 直下に個別実装されている）
 - `platforms/` — OS 固有実装（`.mm`）。現状 macOS 用の `osx.mm` と `main.mm` のみ
 
@@ -49,6 +49,9 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 | `views/Dialog.h/.mm` | ダイアログ基盤。`IDialog`（confirm/yesno/inputtext/custom/filterlist の基底）と `DialogPanel`（実体となる非モーダル NSView オーバーレイ）。詳細は後述 |
 | `views/FileListView.h/.mm` | ファイル一覧の描画・スクロール・キーボードカーソル移動（`NSScrollView` + 自前描画）。マーク済みファイルのドラッグ元（`NSDraggingSource`）も兼ねる（後述） |
 | `views/QuickLookView.h/.mm` | Quick Look（`QLPreviewView`）のプレビューを一覧の上に被せる覆い。クリックを止めてキー入力を守る（後述） |
+| `views/SearchState.h/.cc` | ファイル名の検索の状態（遷移・ヒット・n/N と件数の計算）。AppKit 非依存。1ペイン分で、`FileListView` が持つ（後述「ファイル名の検索」） |
+| `views/SearchBar.h/.mm` | 検索しているペインの下に出す検索バー（`NSTextField` の入力欄 + 件数）。ペインごとに1つ、`BrowserView` が持つ（後述） |
+| `views/ViewMetrics.h` | 一覧と検索バーが共有するフォント（`MakeFont`）とヘッダーの高さ（`HeaderHeight`）。`.mm` 専用 |
 | `FileError.h` | ファイル操作の失敗（`FileError` = OS の説明 + 「権限が無い失敗か」、`FileErrorSummary` = 複数の失敗のまとめ）。権限の失敗に、許可のしかたを案内するために使う（後述「権限エラーの案内」） |
 | `misc.h` | `Flags`、`ReactiveProperty`、`MessageBroker` などのユーティリティ |
 | `platform.h` | OS 依存処理の抽象境界（`pl_*` 関数群の宣言）。色・フォント・ダイアログ用構造体・ファイル操作・ディレクトリ監視（`pl_watch_directory`）・プロセス起動など |
@@ -139,12 +142,39 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 
 `Miata.command.quick_look([pane])` → `Application::lua_command_quick_look` → `View::ToggleQuickLook` → `BrowserView::ToggleQuickLook`。カーソル下のファイルを `QLPreviewView`（QuickLookUI）で、一覧の上に被せて表示する。別ウィンドウの `QLPreviewPanel`（旧 `pl_quick_preview`）は使わない（パネルはウィンドウで、ビューにできないため。旧実装は削除済み）。
 
-- **構造**：`BrowserView::NativeView()` は `_MiataBrowserContainer`（`BrowserView.mm`）で、`NSSplitView`（左右ペイン）と、その上に重ねる覆い（`QuickLookView::NativeView()` = `_MiataQuickLookShield`）を子に持つ。覆いの中に `QLPreviewView` を入れる。覆いの位置は、範囲（`constants::QuickLookArea` = `Both`/`Left`/`Right`）に応じてペインの frame から決め、**`NSSplitView` のデリゲート（`splitViewDidResizeSubviews:`）で追従**する（ウィンドウのリサイズもディバイダのドラッグもここに来る）。覆いは不透明に塗る（読み込み中や空のとき、下の一覧が透けないように）。色は一覧と同じ設定の背景色（`Config::Background()`。後述「色の設定」）。
+- **構造**：`BrowserView::NativeView()` は `_MiataBrowserContainer`（`BrowserView.mm`）で、`NSSplitView`（左右ペイン）と、その上に重ねる覆い（`QuickLookView::NativeView()` = `_MiataQuickLookShield`）、各ペインの下の検索バー（後述「ファイル名の検索」。左右で2つ。覆いより手前に重なる）を子に持つ。覆いの中に `QLPreviewView` を入れる。覆いの位置は、範囲（`constants::QuickLookArea` = `Both`/`Left`/`Right`）に応じてペインの frame から決め、**`NSSplitView` のデリゲート（`splitViewDidResizeSubviews:`）で追従**する（ウィンドウのリサイズもディバイダのドラッグもここに来る）。覆いは不透明に塗る（読み込み中や空のとき、下の一覧が透けないように）。色は一覧と同じ設定の背景色（`Config::Background()`。後述「色の設定」）。
 - **範囲と「何を見せるか」は別**：見せるのは常に「カーソルのあるペインのカーソル下のファイル」で、範囲は被せる場所だけを決める。Lua には `"both"`/`"left"`/`"right"`（省略・nil は both）で公開し、変換は `Application.cc` の `ParseQuickLookArea()`（`ParsePane()` に `"both"` を足したもの）に集約している。`ToggleQuickLook(area)` は、同じ範囲なら閉じ、別の範囲なら範囲だけ切り替える（`QLPreviewView` は作り直さない）。`Navigate::Cancel`（Esc）でも閉じる。
 - **追従はティック駆動**：カーソル下のファイルは、カーソル移動・ペイン切替・ディレクトリ移動・再読み込み・ソートなど多くの経路で変わり、通知点が 1 つに揃っていない。通知を集めず、`Application::Update()` → `BrowserView::UpdateQuickLook()` が毎ティック `FileListView::CurrentPath()` を見て、直近の値（`quick_look_target_`）とプレビューに渡した値（`quick_look_shown_`）を比べる（`UpdateAutoReload` と同じく、状態を見て判断する方式）。変わってから 0.1 秒（`kQuickLookSettleDelay`）落ち着いたら切り替える。出した時点のファイルは待たずに設定する。`FileListView::GetCurrent()` は一覧が空だと範囲外を読むので、空になり得る場所では `CurrentPath()`（空なら nullopt）を使う。
 - **キー入力の安全（実測済み）**：`QLPreviewView` は `acceptsFirstResponder` が YES で、**クリックすると first responder を奪う**（覆い無しで確認済み）。奪われるとキー入力が `MiataRootView` に届かなくなる恐れがあるので、覆いが `hitTest:` で常に自分を返し、クリックを `QLPreviewView` に渡さない（`_MiataFileListNSView` が first responder にならないのと同じ考え方）。代償として、プレビューの中のマウス操作（PDF のスクロール、動画の再生ボタン）と、覆った範囲でのマーク済みファイルのドラッグはできない。一方、`QLPreviewView` は読み込み（`previewItem` の設定）では first responder を取りに来ず（キーウィンドウでも確認済み）、`performKeyEquivalent:` も横取りしなかったので、「奪われたら戻す」処理は入れていない。
 - **罠（`QLPreviewView` の `close`、実測。守らないとプロセスが異常終了する）**：`close` は**ウィンドウに載っている間に、1 回だけ**呼ぶ（二重に呼ぶ・ウィンドウから外れた後に呼ぶと、QuickLook の `_QLRaiseAssert` で abort）。`close` した後のビューには**何も触らない**（`previewItem` の設定を含む）。だから `QuickLookView::Hide()` は、外す前に `close` してすぐ手放し、出すたびに `QLPreviewView` を作り直す（1 回 0.5ms 未満）。`shouldCloseWithWindow` は **NO** にする（既定の YES だと、ウィンドウを閉じるときに QuickLook 側も自動で `close` するため、その後の `Hide()` が二重 close になる。ウィンドウを閉じるとアプリは終了するが、その間もタイマーのティックは回る）。
 - **テストの罠**：ヘッドレスのハーネスでも、覆いを載せる親はウィンドウに入れておくこと（ウィンドウ外での `close` は abort する）。`QLPreviewView` の `setPreviewItem:`/`close` をメソッド差し替えで記録すると、`close` 後の設定などの違反を検出できる。
+
+## ファイル名の検索（インクリメンタル検索）
+
+`Miata.command.search()` / `search_next()` / `search_prev()` / `search_clear()`（`Application.cc` の `lua_command_search*`）→ `View::BeginSearch` ほか → `BrowserView` → `FileListView`。vim の `/` `n` `N` のように、検索語を入れていくと一致するファイル名へカーソルが飛び、名前の一致部分が強調される。ユーザー向けの仕様は README の「ファイル名の検索」。ここには、設計の決定と罠を書く。
+
+- **3つに分けた**：`SearchState`（AppKit 非依存。1ペイン分の状態遷移 Idle → Typing → Committed と、ヒットからの計算 `FirstHitFrom`/`Step`/`Ordinal`/`RangesFor` だけ。マッチ自体は持たない）、`FileListView`（実際のマッチ `RebuildSearchHits`、カーソルの移動 `JumpCursorTo`、ハイライトの描画 `Draw`。検索状態は `search_`）、`SearchBar`（pimpl。背景のビュー + `NSTextField` 3つ（「/」・入力欄・件数）+ delegate）。バーは**ペインごとに1つ**、`BrowserView` が持ち、入力の始まりと終わり、ペインの状態との整合を担う
+- **マッチ**：`NSString` の `rangeOfString:options:range:`（名前は `@(Name().c_str())`）。返る `NSRange` は名前の UTF-16 の添字で、そのまま `NSAttributedString` の属性範囲に使える（UTF-8 との変換が要らない）。スマートケース：語に Unicode の大文字（`uppercaseLetterCharacterSet`）が1文字でもあれば `0`（区別する）、無ければ `NSCaseInsensitiveSearch`。**`NSLiteralSearch` は付けない**（付けると、合成済みの文字と分解された文字（NFC の `が` と `か` + 濁点）が一致しなくなる。`Name()` は NFC だが、検索語は NFD で来ることもある）。範囲の長さは**名前の側**の長さ（検索語の長さと同じとは限らない）。全角/半角・ひらがな/カタカナ・アクセントは畳み込まない（実測）。`FzfFilter` は使えない（外部プロセスを起動し、一致位置を返さず、結果がスコア順）
+- **ヒットは `Fetch()` の末尾で作り直す**：`list_` を作り直すのは `Fetch()` だけで（ディレクトリ移動・手動/自動リロード・ソートはすべてここを通る）、ヒットは `list_` の添字なので、そのたびに無効になる。`Draw()` の中では計算しない。検索状態に持てるのは、検索語・位置のパス（`SearchPosition`。パスが見つからないときの代わりに添字も）・ヒットの添字だけ。**`FileEntryView*`/`FileEntryModel*` は持たない**（再スキャンで旧エントリが通知より前に破棄される）。起点（`Anchor`）と戻り先（`Restore`）は、`CursorMemo` と同じく**パス**で持ち、`ResolveRow()` で今の添字にする
+- **「ディレクトリ移動」の判定は `reload_memo_` の有無**：購読（`ObservePath`）の中で、`FileListView::Reload()` の間だけ立つ `reload_memo_` が無い通知は移動とみなし、`search_.Clear()` する（カーソルを 0 に戻すのと同じ判定）。`FileListModel::Reload()` を `FileListView::Reload()` を介さずに呼ぶ処理を足すと、再スキャンなのに検索が消える。`TryJumpTo` は、同じパスへでも消す（ルートでの `navigate_left` など。無害）
+- **メンバーの宣言順**：`search_` は `subscriptions_` より前に宣言する（購読の通知は `Fetch()` を呼び、`Fetch()` は `search_` を使う。破棄は宣言の逆順なので、購読が先に止まる）
+- **遷移**（`SearchState`）：`Begin`（Idle/Committed → Typing。確定済みの語は Esc で戻れるよう取っておく。新しい語は空で、前のヒットは隠す）、`Commit`（Typing → Committed。**語が空なら `Cancel` と同じ**=検索を始める前の状態に戻る）、`Cancel`（Typing → 始める前の状態。カーソルを `Origin`（検索を始めた位置）へ戻すのは `FileListView::CancelSearch`。`Origin` は `Cancel` では消えず、`Clear` で消える）、`Clear`。**語が変わる遷移（`Begin`/`Cancel`/`Clear`、語が空の `Commit`）はヒットを空にする**ので、今の語のヒットが要るなら `RebuildSearchHits()` で作り直す（語がある普通の `Commit` は、語もヒットも変わらない）
+- **入力中の動き**：打つたびに `Anchor`（最初は `/` を押した位置）から前方（ラップ）の最初のヒット（`Anchor` 自身を含む）へ。ヒットが無ければ `Anchor` に戻る。`↓`/`↑` は `Step(cursorIndex_)` で、動いた先を新しい `Anchor` にする（Esc の戻り先 `Origin` は動かさない）。**語を全部消したら、`Anchor` を `Origin` に戻す**（検索を始めた位置からやり直す）。`n`/`N`（`Step`）は、カーソルがヒット上でも、ヒットでない行でも、同じ式（カーソルの行そのものは含まない）
+- **画面外へ飛ぶときだけ中央寄せ**（`JumpCursorTo`）：`Redraw()` のスクロールは行が見える最小限なので、遠くへ飛ぶと端に張り付く。飛ぶ前に行が見えていたか（`NSContainsRect(visibleRect, ...)`）を調べ、見えていなかったときだけ `scrollPoint:` で中央へ
+- **ハイライトの描画**：`NSMutableAttributedString` に `NSBackgroundColorAttributeName` を付けて `drawInRect:`（実測：塗りは文字の行の高さ。20pt の行の中でほぼ中央）。カーソルのある行は `search_current`、ほかは `search_match`。カーソルの下線と同じく、**フォーカスのあるペインだけ** `search_current`。`Draw(min_y, max_y)` は、**描き直す範囲（`drawRect:` の `dirtyRect` の y）にかかる行だけ**描く（以前は全行を描いていた。行ごとに `file_size()` を呼ぶので、数万件で重い。1万件・全件ヒットで、描き直しが 2ms ほど、1打鍵の検索が 10ms ほど）
+- **検索バーは、検索しているペインの下だけ**（ペインと同じ幅。反対側のペインには出ず、反対側の一覧も縮まない）：バーは `_MiataBrowserContainer` の子（`searchBars`。ペイン番号が添字）で、`layoutSearchBars` が、ペインの frame（`convertRect:` でコンテナの座標に直す）の下端に重ねる。位置が決まるのは `layoutOverlay` と同じで、`NSSplitView` のデリゲート（`splitViewDidResizeSubviews:`。ウィンドウのリサイズもディバイダのドラッグもここに来る）と、`setSearchBar:visible:` から。分割ビューは元のまま autoresizing で追従する。バーは**覆いより手前**（Quick Look で覆っているときも、バーが見える。覆いはペインの全体を覆うので、バーは覆いの下端に重なる）。バーの分だけ一覧を空けるのは、一覧の側（`FileListView::SetBottomInset` → `_MiataFileListLayoutContainer.footerHeight`。スクロール部分の高さが縮み、カーソルが見える位置までスクロールする）。バーの高さは `HeaderHeight()`
+- **バーの出入りは、そのペイン自身の検索の状態だけで決まる**（`SyncSearchBarView`）：`mode != Idle` のあいだ、そのペインの一覧を縮めて、そのバーを出す。中身（検索語・件数）もそのペインのもの。カーソルのペインには依存しないので、`h`/`l` でペインを切り替えても、一覧の高さは変わらず、バーの内容も変わらない。以前は、バーを全幅に1つだけ出し、「どちらかのペインに検索があれば出し続ける」ことで切り替えのガタつきを避けていたが、反対側のペインまで縮み、検索の無いペインにカーソルがあると空の帯が出るので、ペインごとにした
+- **罠：入力欄が first responder を持つ間は `MiataRootView::keyDown:` が呼ばれない**（Normal のキーバインドも効かない）。Enter/Esc/↑↓/Tab は delegate の `doCommandBySelector:` で横取りする。Enter/Esc は `dispatch_async` で次のランループへ（確定・取り消しで first responder を手放す処理を、`doCommandBySelector:` の呼び出しの中で行わないため。`FilterListDialog.mm` は、閉じる過程で delegate 自身が破棄されるため、同じく逃がしている）。Tab は握りつぶす（キービューループで入力欄を失う）。**IME の変換中**（`hasMarkedText`）は、検索語にしない（読みの途中の文字を追いかけて、カーソルが飛び回る）。文字を読む `SearchBar::SettledText()` が、入力中で変換中でないときだけ返し、`BrowserView::PullSearchQuery()` がそれを検索語に取り込む（通知の `controlTextDidChange:` と、毎ティックの照合 `ReconcileSearchInput` の両方が、同じ入口を通る。通知の取りこぼしは、ティックが拾う）
+- **罠：`DialogPanel::Hide()` は first responder を無条件に `MiataRootView` へ戻す**（`Dialog.mm`）。入力中にダイアログ（ファイル操作の完了など）が閉じると、入力欄が first responder を失うが、バーは入力中のまま、打鍵が Normal のキーバインドへ流れる。対策は2つ：(1) `View::OpenNextDialogIfNeeded` が、**ダイアログを開く直前に**入力中の検索を確定する（`CommitSearchInput`。入力欄を持ったままだと、ダイアログ向けの Enter/Esc を入力欄の delegate が受けてしまう）、(2) 毎ティックの `BrowserView::UpdateSearchBar` が、入力欄と各ペインの状態を突き合わせて整える（`UpdateQuickLook` と同じ「状態を見て判断する」方式）：入力欄が first responder を失っていれば確定する。`controlTextDidEndEditing:` は使わない（毎ティックの照合で足りるうえ、通知の中から `makeFirstResponder:` を呼ぶと再入しうる）。**状態を先に落としてから `makeFirstResponder:` を呼ぶ**（再入しても何もしない）
+- **罠：入力欄を first responder にするのは、バーを出した後／バーを隠すのは、手放した後**：隠れたビューは文字を受けられず、first responder を持ったまま隠すとキー入力が beep になる。`BeginSearch` は `SyncSearchBarView()`（バーの出入りと中身だけを合わせる。状態は変えない）→ `BeginInput()` の順。ここで `UpdateSearchBar()`（`ReconcileSearchInput` を含む）を使うと、入力欄がまだ first responder でないので、「フォーカスを失った」と誤って確定する。手放すのは `ReconcileSearchInput`（バーを隠す `SyncSearchBarView` より先）
+- **確定後の入力欄は、編集不可・選択不可・`refusesFirstResponder`**、バー全体の `hitTest:` が自分を返す（`_MiataQuickLookShield` と同じ考え方）。クリックで first responder を奪われると、キー入力が `MiataRootView` に届かなくなる。入力中だけ `hitTest:` を通常に戻す（キャレットを動かせるように）
+- **罠：フィールドエディタ（`NSTextView`）はウィンドウの全テキスト欄が共有する**：入力中のキャレットの色（`insertionPointColor`）を変えると、次に別の入力欄（リネームなどのダイアログ）が同じエディタを使うときにも残る（実測）。`BeginInput` で元の色を控え、`EndInput` で戻す（入力欄が first responder を奪われた後でも、`[window fieldEditor:NO forObject:nil]` で共有のエディタを取れる）。`stringValue` も、編集が終わるまで欄に取り込まれず、終わると取り込まれて残る（以前は、取り消した語が、検索の無いペインの空の帯に残った）ので、`SearchBar::Update` は、覚えていた値ではなく、**欄の実際の中身と比べる**
+- **罠：ビューの `drawRect:` で `dirtyRect` をそのまま塗らない**（`NSIntersectionRect(dirtyRect, self.bounds)` を取る）。macOS 14 以降、ビューは既定で自分の範囲に描画を切り詰めない。親をまるごとビットマップに描く（`cacheDisplayInRect:`）と、`dirtyRect` が子の範囲を超えて渡され、不透明に塗る子（バー）が、隣のビュー（一覧）を塗りつぶす。画面への通常の描画では、dirty 領域が範囲内に収まるので気づきにくい（ヘッドレスの描画テストで発覚した）。`_MiataQuickLookShield::drawRect:` も、以前は `dirtyRect` をそのまま塗っていた（覆いが片側のペインだけのとき、親をまるごと描くと、反対側の一覧まで塗りつぶされることをハーネスで確認した）ので、同じ対策を入れた
+- **Esc**：入力中は検索の取り消し（入力欄が受ける。Quick Look は閉じない）。通常時の Esc（`navigate_cancel` → `View::NavigateForBrowser` の `Cancel`）は、プレビューを閉じ、カーソルのペインの検索を消す（`ClearSearch`）。1回で両方
+- **`n`/`N` が動けないとき（検索なし・ヒット0件）は beep**（`lua_command_search_next/prev`）。ダイアログの表示中は、検索を始められず（`View::BeginSearch` が false）、`n`/`N` も動かない
+- **空の一覧**：検索は始められ（ヒット0）、`GetCurrent()` ではなく `CurrentPath()` と `list_` のサイズで扱う。空ディレクトリで `GetCurrent()` を無ガードで呼ぶ既存の箇所（`View.mm` の `NavigateForBrowser` の `Ok`、`Mark`/`Unmark`/`ToggleMark`）は未解決（未定義動作。検索とは別件）
+- **未確認（実機）**：実際の IME の候補ウィンドウ（`setMarkedText:` での変換中の挙動はハーネスで確認済み）、⌘V（メインメニューに Edit が無いので効かないはず。ダイアログの入力欄と同じ）、暗い背景でのキャレットの見え方（`insertionPointColor` は文字の色にしてある）
+- **テスト**：`FileListView.mm` を `#include` して、実物の `FileListView` で、ヒット（別実装の答え合わせ）、Unicode（絵文字の UTF-16 位置、NFD/NFC、`É`/`é`）、遷移、再スキャン・ソート・移動、空/全件、画素（ハイライトの位置と色）、スクロール、1万件を検証した。実物の `pl_create_main_window`（`makeKeyAndOrderFront:` を差し替えて画面に出さない）+ `views::View` で、バーのレイアウト・first responder・Enter/Esc/Tab/↑↓・IME（`setMarkedText:`/`insertText:`）・ダイアログとの関係・Quick Look との関係・Lua コマンドを検証した。入力は、本物のフィールドエディタ（`field.currentEditor`）に `insertText:`/`doCommandBySelector:` を送って行う（`controlTextDidChange:` と delegate が、実際の経路で動く）。**罠**：(1) 色の読み戻しは、彩度の高い色ほどずれる（黄 `(1,1,0)` → `(255,252,102)`、水色 → `(131,250,254)`、赤 → `(241,75,45)`）ので、しきい値は実測に合わせる。(2) `#define private public` を使うハーネスでは、対象のヘッダ（`FileListView.h`/`SearchState.h` など）を、その前に include しない（先に読むと `private` のまま）。(3) 親をまるごと描くと `dirtyRect` が範囲を超える（上記）
 
 ## ウィンドウ位置・サイズの保存
 
@@ -184,13 +214,14 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 
 ## 色の設定（`Miata.config.color.*`）
 
-Lua からの代入先は `Config::Color`（`Config.h` の `CONFIG_COLOR_LIST` = `background`/`normal_text`/`normal_file`/`directory`）。**この一覧に足しただけでは何も起きない。描く側が `Config::Color().Get(...)` を読んで初めて効く。** `background` と `normal_text` は、最初のコミット（sokol/ImGui 時代）から一度も読まれておらず、設定しても効かなかった（OS が Light だと、背景は OS の純白のまま、白い `normal_file` の文字は白地に消えた）。色を足すときは、読む箇所まで作り、描画の実測（下の「テスト」）で確かめること。
+Lua からの代入先は `Config::Color`（`Config.h` の `CONFIG_COLOR_LIST` = `background`/`normal_text`/`normal_file`/`directory`/`search_match`/`search_current`）。**この一覧に足しただけでは何も起きない。描く側が `Config::Color().Get(...)` を読んで初めて効く。** `background` と `normal_text` は、最初のコミット（sokol/ImGui 時代）から一度も読まれておらず、設定しても効かなかった（OS が Light だと、背景は OS の純白のまま、白い `normal_file` の文字は白地に消えた）。色を足すときは、読む箇所まで作り、描画の実測（下の「テスト」）で確かめること。
 
 | 設定 | 使っている所 |
 |------|--------------|
-| `background` | ペイン本体（`FileListView::Draw` の先頭で全面を塗る）、ヘッダー（`DrawHeader`）、Quick Look の覆い（`_MiataQuickLookShield`）、ウィンドウ自体（`pl_set_window_background_color`。`InitializeImpl()` が `InitializeScript()` の後に一度呼ぶ） |
-| `normal_text` | ヘッダーのパスの文字（`DrawHeader`） |
+| `background` | ペイン本体（`FileListView::Draw` の先頭で全面を塗る）、ヘッダー（`DrawHeader`）、検索バー（`_MiataSearchBarView`）、Quick Look の覆い（`_MiataQuickLookShield`）、ウィンドウ自体（`pl_set_window_background_color`。`InitializeImpl()` が `InitializeScript()` の後に一度呼ぶ） |
+| `normal_text` | ヘッダーのパスの文字（`DrawHeader`）、検索バーの文字（「/」・入力欄・件数。件数は alpha 0.8）・キャレット・上端の線（alpha 0.35）（`SearchBar.mm`） |
 | `normal_file` / `directory` | 行の文字（`Draw`） |
+| `search_match` / `search_current` | 検索で一致した部分の背景（`Draw`。カーソルのある行・フォーカスのあるペインは `search_current`）。既定値は `resources/test.lua`（`Color4f` の既定が不透明な黒なので、`test.lua` に無いと、一致部分が黒く塗られて文字が沈む） |
 
 - **背景の alpha は使わない（常に不透明）**：背景を塗るときは `Color().Get(Background)` を直接使わず、必ず `Config::Background()`（alpha を 1 にして返す）を使う。半透明で塗ると、後ろのOSのテーマの色（Light なら白）が混ざり、OS の設定しだいで見た目が変わる。`pl_set_window_background_color` も不透明に塗る。
 - **背景と文字に、OS の色（`windowBackgroundColor`/`textColor` 等）を使わない**：OS のテーマに従い、Light では背景が純白（実測: Light `#ffffff` / Dark `#1e1e1e`）。ヘッダーの文字を OS の色にすると、背景を暗くしたとき黒文字が沈む（なので `normal_text` を読む）。ダイアログ（`Dialog.mm` ほか）は意図して OS の色のまま（`Miata.config.color` は効かない）。
