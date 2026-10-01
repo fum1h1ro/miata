@@ -14,6 +14,7 @@ rake build:debug      # Debug ビルド
 rake build:release    # Release ビルド
 rake run:debug        # Debug ビルドして実行
 rake run:release      # Release ビルドして実行
+rake 'icon[icon.png]' # アプリアイコン(resources/AppIcon.icns)を PNG から作り直す
 ```
 
 成果物は `_build/debug/Miata.app` および `_build/release/Miata.app` に生成される。
@@ -152,6 +153,15 @@ C++ 側は `Miata.command.*`（`Application.cc` の `commands[]`）と `Miata._p
 - **復元はViewを作る前**：`pl_create_main_window()` は `InitializeImpl()` の最初に呼ばれ、`View` はその後にcontentViewのサイズを基準にレイアウトされるので、復元後のサイズで始まる。復元で `windowDidResize:` が呼ばれても、リサイズのハンドラ(`pl_set_resize_handler`)はまだ未設定なので何も起きない。
 - **保存しているのはウィンドウだけ**：左右ペインの境界(`NSSplitView`)の位置と、各ペインのディレクトリは保存しない(`NSSplitView.autosaveName` は、覆い(プレビュー)の位置追従のデリゲートとの相互作用が未確認なので、入れていない)。
 - **テスト**：実物の `pl_create_main_window` を、`makeKeyAndOrderFront:`/`activateIgnoringOtherApps:` を何もしないものに差し替えて(画面に出さず)呼べる。ハーネスの実行ファイル名のドメインに保存されるので、本物のアプリの設定には触れない。起動をまたぐ復元は、プロセスを分けて確かめる。
+
+## アプリアイコン
+
+`resources/AppIcon.icns` が `.app` のアイコン。`CMakeLists.txt` の `file(GLOB_RECURSE RESOURCES "resources/*")` が、`resources/` の全ファイルを `MACOSX_PACKAGE_LOCATION Resources`（= `Contents/Resources/` 直下に平らにコピー）で `.app` に入れるので、アイコンも同じ経路で入る。`Info.plist` の `CFBundleIconFile` は、`set_target_properties(app PROPERTIES MACOSX_BUNDLE_ICON_FILE "AppIcon")` で登録している（拡張子なしの `AppIcon`）。
+
+- **差し替え**：`rake 'icon[path/to.png]'`（`Rakefile` の `icon` タスク）が、正方形の PNG から `sips` で10サイズ(16〜1024 とその `@2x`)の `.iconset` を作り、`iconutil -c icns` で `resources/AppIcon.icns` を作る。入力が正方形でない/読めない/無い場合は、書き込む前にエラーで止まる(既存の `.icns` は壊れない)。今の `.icns` は、このタスクで作った仮のアイコン。
+- **新しい `resources/` のファイルは cmake の再生成が要る**：`GLOB_RECURSE` は構成時にしか評価されない。`rake build:debug`/`build:release` は cmake を再生成するので、ふつうは気にしなくてよい。直接 `make` するときだけ注意。
+- **macOS のアイコンの作法**：角丸の形と余白(1024 の枠に 824 の角丸四角)は画像の側に含める。システムは形を整えない。
+- **確認のしかた**：`NSWorkspace iconForFile:` に `.app` のパスを渡すと、システムが返すアイコンが分かる(ビルドしたバンドルで、仮のアイコンが返ることを確認済み)。Dock/Finder のキャッシュで古い絵が残る場合は、この方法で `.app` 側が正しいかを切り分けられる。
 
 ## C++ から Lua へ関数を登録する手順
 

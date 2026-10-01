@@ -73,3 +73,39 @@ namespace :run do
   end
 end
 
+
+# アプリアイコン(resources/AppIcon.icns)を、正方形のPNGから作る。resources/ の中身は .app の
+# Contents/Resources/ にそのままコピーされ、CMakeLists.txt の MACOSX_BUNDLE_ICON_FILE で Info.plist に
+# 登録しているので、差し替えるときは、このタスクで作り直して(または、自分で作った AppIcon.icns を置いて)
+# ビルドし直すだけ。
+ICON_FILE = "resources/AppIcon.icns"
+
+desc "Build #{ICON_FILE} from a square PNG (1024x1024 recommended): rake 'icon[path/to/icon.png]'"
+task :icon, [:png] do |_t, args|
+  require 'shellwords'
+  require 'tmpdir'
+  png = args[:png] or abort "usage: rake 'icon[path/to/icon.png]'"
+  abort "file not found: #{png}" unless File.file?(png)
+
+  w, h = %w[pixelWidth pixelHeight].map { |key| `sips -g #{key} #{png.shellescape}`[/#{key}: (\d+)/, 1].to_i }
+  abort "not a readable image: #{png}" if w.zero? || h.zero?
+  abort "the icon must be square (got #{w}x#{h})" unless w == h
+  warn "warning: #{w}x#{h} is smaller than 1024x1024, so the larger sizes are upscaled" if w < 1024
+
+  Dir.mktmpdir do |tmp|
+    iconset = File.join(tmp, "AppIcon.iconset")
+    mkdir_p iconset, verbose: false
+    # iconutil が要求するファイル名と、そのピクセル数(@2x は Retina 用で2倍)
+    {
+      "icon_16x16" => 16,     "icon_16x16@2x" => 32,
+      "icon_32x32" => 32,     "icon_32x32@2x" => 64,
+      "icon_128x128" => 128,  "icon_128x128@2x" => 256,
+      "icon_256x256" => 256,  "icon_256x256@2x" => 512,
+      "icon_512x512" => 512,  "icon_512x512@2x" => 1024,
+    }.each do |name, size|
+      sh "sips -z #{size} #{size} #{png.shellescape} --out #{File.join(iconset, "#{name}.png").shellescape} > /dev/null", verbose: false
+    end
+    sh "iconutil -c icns #{iconset.shellescape} -o #{ICON_FILE}"
+  end
+  puts "wrote #{ICON_FILE} (rebuild to apply: rake build:debug)"
+end
