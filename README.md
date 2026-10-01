@@ -23,16 +23,33 @@ rake build:debug      # Debug ビルド
 rake build:release    # Release ビルド
 rake run:debug        # Debug ビルドして実行
 rake run:release      # Release ビルドして実行
+rake 'icon[icon.png]' # アプリアイコン(resources/AppIcon.icns)を PNG から作り直す
 ```
 
 成果物: `_build/debug/Miata.app` / `_build/release/Miata.app`
+
+`.app` は単体で動く。Lua の既定の設定（`resources/base.lua`・`resources/test.lua`）とアイコンは `Contents/Resources/` にコピーされていて、実行時に読むのはそこだけ（リポジトリのソースツリーは見ない）。`/Applications` などにコピーして使える。`resources/test.lua` を直したときは、ビルドし直すと反映される。ビルドし直さずに設定を変えたいときは、[`~/.config/miata/init.lua`](#設定ファイルinitlua)に書く。
+
+### アプリアイコン
+
+`resources/AppIcon.icns` が `.app` のアイコンになる（`resources/` の中身は `Contents/Resources/` にコピーされ、`CMakeLists.txt` の `MACOSX_BUNDLE_ICON_FILE` で `Info.plist` に登録してある）。**今あるのは仮のアイコン**。差し替えるには、1024×1024 の正方形の PNG を用意して、次を実行する。
+
+```bash
+rake 'icon[path/to/icon.png]'   # resources/AppIcon.icns を作り直す(macOS 標準の sips と iconutil を使う)
+rake build:debug                # ビルドし直す(rake build:release でもよい)
+```
+
+- 自分で作った `.icns`（Icon Composer や画像ツールの出力）を、`resources/AppIcon.icns` に直接置いてもよい
+- macOS のアイコンは、角丸の形と余白（1024 の枠の中に 824 の角丸四角。macOS 11 以降の作法）を、画像の側に含める。システムは形を整えてくれない
+- 正方形でない画像はエラーになる。1024 より小さい画像は、大きいサイズが引き伸ばされる（警告が出る）
+- Dock や Finder に古いアイコンが出続けるときは、macOS のアイコンのキャッシュが残っていることがある（`.app` を `touch` して更新日時を変える、または Dock を再起動する）
 
 ## アーキテクチャ
 
 ```
 src/
 ├── Application.cc/h      # 更新処理(0.05秒タイマー駆動)・イベント処理・コマンド登録（シングルトン）
-├── Script.cc/h           # Lua VM 管理・C++ 関数登録・resources/ の読み込み
+├── Script.cc/h           # Lua VM 管理・C++ 関数登録・設定の読み込み（組み込みの既定の設定 → ~/.config/miata/init.lua）
 ├── KeyBinding.h          # キーストローク解析・モード別キーマップ管理
 ├── misc.h                # Flags・ReactiveProperty・MessageBroker 等のユーティリティ
 ├── platform.h            # OS 依存処理の抽象化（`pl_*` 関数。色・フォント・ファイル操作・ディレクトリ監視・プロセス起動等）
@@ -44,7 +61,8 @@ platforms/
 
 resources/
 ├── base.lua              # コアユーティリティ・ダイアログヘルパー定義
-└── test.lua              # キーバインド設定・コマンド定義（ユーザー設定）
+├── test.lua              # 既定のキーバインド・コマンド定義（.app に埋め込まれる。~/.config/miata/init.lua で上書きできる）
+└── AppIcon.icns          # アプリアイコン（rake icon で作る）
 ```
 
 ## マウス操作
@@ -76,6 +94,56 @@ resources/
 - **キー入力を優先して、プレビューの中のマウス操作はできない**（PDF のスクロール、動画の再生ボタンなど）。プレビューはクリックでキーボードフォーカスを奪えてしまい、奪われるとキーバインドが効かなくなるため、クリックはプレビューに届かないようにしている。覆っている範囲では、マーク済みファイルのドラッグも効かない
 - 見た目は macOS 標準で、`Miata.config.color` は効かない。表示は 1 件ずつ
 - ファイルの中身だけが外部で更新されても、プレビューは自動では作り直さない（カーソル下のファイルが変わったときに作り直す）
+
+## ウィンドウの位置とサイズ
+
+ウィンドウを動かしたり大きさを変えたりするたびに位置とサイズを保存し、次回の起動で同じ位置・サイズで開く（Cmd+Q・ウィンドウを閉じる・強制終了のどれで終わっても、最後の状態が残る）。保存されたものが無いとき（初回）は、1024×768 で画面の中央に開く。
+
+- 保存先は macOS の設定（`defaults`）で、`com.fum1h1ro.miata` の `NSWindow Frame MiataMainWindow`。デバッグ版とリリース版で共有する
+- 保存した位置が今のどの画面にも無い場合（外付けモニタを外した後など）は、画面内に寄せて開く
+- 初期状態（中央・1024×768）に戻すには、`defaults delete com.fum1h1ro.miata "NSWindow Frame MiataMainWindow"` を実行してから起動する
+- 保存するのはウィンドウだけ。左右のペインの境界の位置と、各ペインのディレクトリは保存しない
+
+## 設定ファイル（init.lua）
+
+設定とキーバインドは Lua で書く。Miata は起動時に、次の 2 つをこの順に読み込む。**後から読んだものが、同じ設定を上書きする。**
+
+1. **組み込みの既定の設定**（リポジトリの `resources/test.lua`）。ビルドで `.app` の `Contents/Resources/` にコピーされる。直したときは、ビルドし直す
+2. **ユーザーの設定** `~/.config/miata/init.lua`。環境変数 `XDG_CONFIG_HOME` が絶対パスで設定されていれば `$XDG_CONFIG_HOME/miata/init.lua`（空や相対パスは設定されていないものとして扱う）。ファイルが無ければ読まない（エラーにならない）。ビルドし直す必要は無く、アプリを起動し直すと反映される。シンボリックリンクでもよい（dotfiles の管理用）
+
+何が上書きされるか:
+
+- **キーバインド**（`Miata.command.bind(mode, keys, fn)`）：同じモード・同じキーの割り当ては、後から登録したもので置き換わる。既定のキーを外すには `Miata.command.unbind(mode, keys)`
+- **色・フォント**（`Miata.config.*`）：後から代入・設定した値になる
+
+エラーが起きたとき:
+
+- アプリは起動する。エラーのダイアログを出して、ファイル名と行番号を示す。**エラーが起きた行より前の設定は有効**で、それより後は実行されない（構文エラーのファイルは、1 行も実行されない）。組み込みの既定の設定でエラーが起きても、続けてユーザーの設定を読む
+- 読めないファイル（ディレクトリ、権限が無い、リンク切れ）もエラーとして示す。先頭の BOM や `#!` の行があっても読める
+- ダイアログに出るのは、起動時(設定の読み込み中)のエラーだけ。**キーに割り当てた関数を実行したときのエラーは、これまでどおり標準出力に出るだけ**（ターミナルから起動していないと見えない）
+
+読み込み中に使えるもの:
+
+- `Miata.command.bind` / `unbind`、`Miata.config.*`、`Miata.util.*`、Lua の標準ライブラリ（`os`、`io`、`string` など）
+- ファイルやペインを操作するコマンド（`navigate_*`、`reload`、`quick_look`、`dialog_*` など）は、画面がまだ無いため使えない。読み込み中（ファイルの最上位）に呼ぶと、落ちずにエラーになる。**キーに割り当てた関数の中なら、これまでどおり使える**
+
+```lua
+-- ~/.config/miata/init.lua の例
+
+-- Tab でペインを切り替える
+Miata.command.bind("n", "<tab>", function()
+    Miata.command.toggle_focus()
+end)
+
+-- 既定のキー(p = プレビュー)を外す
+Miata.command.unbind("n", "p")
+
+-- 色とフォント
+Miata.config.color.directory = "#ffaa00ff"
+Miata.config.set_font_size(15)
+```
+
+ウィンドウの位置とサイズは、設定ファイルではなく、自動で保存される（[ウィンドウの位置とサイズ](#ウィンドウの位置とサイズ)）。
 
 ## Lua スクリプト API
 
@@ -299,3 +367,5 @@ Miata.config.color.directory   = "#00ffaaff"
 Miata.config.set_font("フォント名")   -- 未指定時はシステムデフォルトフォント
 Miata.config.set_font_size(14)        -- ファイル一覧の行の高さも連動して変わる
 ```
+
+これらは、[`~/.config/miata/init.lua`](#設定ファイルinitlua) に書いて、組み込みの既定の設定を上書きできる。設定は起動時にだけ読み込む（変えたら、起動し直す）。

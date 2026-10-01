@@ -28,6 +28,7 @@ if (APPLE)
     add_executable(app MACOSX_BUNDLE ${SOURCES})
     set_target_properties(app PROPERTIES MACOSX_BUNDLE_BUNDLE_NAME "Miata")
     set_target_properties(app PROPERTIES MACOSX_BUNDLE_GUI_IDENTIFIER "com.fum1h1ro.miata")
+    set_target_properties(app PROPERTIES MACOSX_BUNDLE_ICON_FILE "AppIcon") # resources/AppIcon.icns(rake icon で作る)
     target_compile_options(app PRIVATE -fobjc-arc -fmodules -Wconversion)
     target_link_libraries(app
         "-framework Cocoa"

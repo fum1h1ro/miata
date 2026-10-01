@@ -104,7 +104,13 @@ void pl_create_main_window(int width, int height, const char* title)
     g_window_delegate.resizeHandler = &g_resize_handler;
     g_window.delegate = g_window_delegate;
 
-    [g_window center];
+    [g_window center]; // 保存済みの位置が無い(初回)ときは、このまま中央に出る
+    // 位置とサイズを自動で保存し、保存済みなら(centerよりも優先して)復元する。保存先はNSUserDefaults
+    // (バンドルIDのドメインの "NSWindow Frame MiataMainWindow")。移動・リサイズのたびに保存されるので、
+    // 終了のしかた(Cmd+Q、ウィンドウを閉じる、強制終了)によらず、最後の状態が残る。
+    // 保存された位置が今のどの画面にも無い場合(外付けモニタを外した後など)は、復元の時点でAppKitが
+    // 画面内へ寄せる。
+    [g_window setFrameAutosaveName:@"MiataMainWindow"];
     [g_window makeKeyAndOrderFront:nil];
     [g_window makeFirstResponder:g_root_view];
     [NSApp activateIgnoringOtherApps:YES];
@@ -339,8 +345,9 @@ std::filesystem::path pl_get_config_dir()
         // 環境変数からXDG_CONFIG_HOMEを取得
         NSString* xdgConfigHome = [[[NSProcessInfo processInfo] environment] objectForKey:@"XDG_CONFIG_HOME"];
 
-        // 環境変数が設定されていない場合はデフォルト値を使用
-        if (!xdgConfigHome)
+        // 環境変数が設定されていない場合はデフォルト値を使用。XDG Base Directoryの仕様どおり、
+        // 空や相対パスは設定されていないものとして扱う(相対パスだと、起動した場所によって設定の場所が変わってしまう)
+        if (xdgConfigHome.length == 0 || ![xdgConfigHome hasPrefix:@"/"])
         {
             NSString* homeDir = NSHomeDirectory();
             xdgConfigHome = [homeDir stringByAppendingPathComponent:@".config"];

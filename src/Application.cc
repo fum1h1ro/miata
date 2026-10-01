@@ -113,51 +113,7 @@ namespace miata {
 
         std::print("config_dir: {}\n", pl_get_config_dir().c_str());
 
-        auto& script = miata::Script::Instance();
-        script.Initialize();
-        static luaL_Reg commands[] = {
-            { "bind", lua_command_bind },
-            { "unbind", lua_command_unbind },
-            { "navigate_up", lua_command_navigate_up },
-            { "navigate_down", lua_command_navigate_down },
-            { "navigate_left", lua_command_navigate_left },
-            { "navigate_right", lua_command_navigate_right },
-            { "navigate_ok", lua_command_navigate_ok },
-            { "navigate_cancel", lua_command_navigate_cancel },
-            { "toggle_focus", lua_command_toggle_focus },
-            { "mark", lua_command_mark },
-            { "unmark", lua_command_unmark },
-            { "toggle_mark", lua_command_toggle_mark },
-            { "copy_marked", lua_command_copy_marked },
-            { "move_marked", lua_command_move_marked },
-            { "make_directory", lua_command_make_directory },
-            { "delete_marked", lua_command_delete_marked },
-            { "current_pane", lua_command_current_pane },
-            { "reload", lua_command_reload },
-            { "quick_look", lua_command_quick_look },
-            { "sort", lua_command_sort },
-        };
-        script.RegisterFunctions(
-            "Miata.command",
-            std::vector<luaL_Reg>(std::begin(commands), std::end(commands))
-        );
-
-        static luaL_Reg privates[] = {
-            { "dialog_open", lua_private_dialog_open },
-            { "dialog_is_open", lua_private_dialog_is_open },
-            { "dialog_result", lua_private_dialog_result },
-            { "rename_target", lua_private_rename_target },
-            { "rename_conflict", lua_private_rename_conflict },
-            { "rename_execute", lua_private_rename_execute },
-        };
-        script.RegisterFunctions(
-            "Miata._private",
-            std::vector<luaL_Reg>(std::begin(privates), std::end(privates))
-        );
-
-        Config::ScriptInitialize();
-
-        script.PostInitialize();
+        auto config_errors = InitializeScript();
 
         auto home = pl_get_home_dir();
         printf("home: %s\n", home.c_str());
@@ -183,6 +139,99 @@ namespace miata {
 
         key_binding_map_[(int)KeyBindingMap::Normal]->DumpAll();
         key_binding_map_[(int)KeyBindingMap::Dialog]->DumpAll();
+
+        // 設定の読み込みで起きたエラーは、Viewとタイマーが動き出してから画面に出す
+        ReportConfigErrors(config_errors);
+    }
+
+    std::vector<Script::ConfigError> Application::InitializeScript()
+    {
+        auto& script = miata::Script::Instance();
+        script.Initialize();
+
+        // 設定ファイルの読み込み中(Viewを作る前)にも使えるコマンド
+        static luaL_Reg config_commands[] = {
+            { "bind", lua_command_bind },
+            { "unbind", lua_command_unbind },
+        };
+        script.RegisterFunctions(
+            "Miata.command",
+            std::vector<luaL_Reg>(std::begin(config_commands), std::end(config_commands))
+        );
+
+        // Viewを操作するコマンド。Viewは設定ファイルの読み込みより後に作るので、読み込み中に呼ばれても
+        // (設定ファイルの最上位でうっかり呼んでも)nullのViewに触って落ちないよう、lua_view_trampolineを
+        // 介して登録する(読み込み中に呼ぶとLuaのエラーになる)。新しいコマンドは、基本的にここに足す。
+        static luaL_Reg view_commands[] = {
+            { "navigate_up", lua_command_navigate_up },
+            { "navigate_down", lua_command_navigate_down },
+            { "navigate_left", lua_command_navigate_left },
+            { "navigate_right", lua_command_navigate_right },
+            { "navigate_ok", lua_command_navigate_ok },
+            { "navigate_cancel", lua_command_navigate_cancel },
+            { "toggle_focus", lua_command_toggle_focus },
+            { "mark", lua_command_mark },
+            { "unmark", lua_command_unmark },
+            { "toggle_mark", lua_command_toggle_mark },
+            { "copy_marked", lua_command_copy_marked },
+            { "move_marked", lua_command_move_marked },
+            { "make_directory", lua_command_make_directory },
+            { "delete_marked", lua_command_delete_marked },
+            { "current_pane", lua_command_current_pane },
+            { "reload", lua_command_reload },
+            { "quick_look", lua_command_quick_look },
+            { "sort", lua_command_sort },
+        };
+        script.RegisterFunctions(
+            "Miata.command",
+            std::vector<luaL_Reg>(std::begin(view_commands), std::end(view_commands)),
+            lua_view_trampoline
+        );
+
+        static luaL_Reg privates[] = {
+            { "dialog_open", lua_private_dialog_open },
+            { "dialog_is_open", lua_private_dialog_is_open },
+            { "dialog_result", lua_private_dialog_result },
+            { "rename_target", lua_private_rename_target },
+            { "rename_conflict", lua_private_rename_conflict },
+            { "rename_execute", lua_private_rename_execute },
+        };
+        script.RegisterFunctions(
+            "Miata._private",
+            std::vector<luaL_Reg>(std::begin(privates), std::end(privates)),
+            lua_view_trampoline
+        );
+
+        Config::ScriptInitialize();
+
+        return script.PostInitialize();
+    }
+
+    void Application::ReportConfigErrors(const std::vector<Script::ConfigError>& errors)
+    {
+        if (errors.empty()) return;
+
+        std::string message = "設定ファイルの読み込みでエラーが起きました。エラーが起きた行より前の設定は有効です。";
+        for (auto& e : errors) {
+            // Luaのエラーメッセージは、ふつうファイル名を含む("ファイル名:行番号: ...")。含まないもの
+            // (error({}) など)は、どのファイルか分かるように足す
+            message += std::format("\n\n{}{}", e.message.find(e.file) == std::string::npos ? e.file + ": " : "", e.message);
+        }
+        view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
+            [](views::IDialog&) {},
+            views::ConfirmDialog::arguments{
+                .message_ = message,
+                .button_text_ = "OK",
+            }
+        ));
+    }
+
+    int Application::lua_view_trampoline(lua_State* L)
+    {
+        if (!Instance().view_) {
+            return luaL_error(L, "this command is not available while the config is loading; call it from a function bound to a key");
+        }
+        return lua_tocfunction(L, lua_upvalueindex(1))(L);
     }
 
     void Application::Update()
