@@ -143,6 +143,16 @@ C++ 側は `Miata.command.*`（`Application.cc` の `commands[]`）と `Miata._p
 - **罠（`QLPreviewView` の `close`、実測。守らないとプロセスが異常終了する）**：`close` は**ウィンドウに載っている間に、1 回だけ**呼ぶ（二重に呼ぶ・ウィンドウから外れた後に呼ぶと、QuickLook の `_QLRaiseAssert` で abort）。`close` した後のビューには**何も触らない**（`previewItem` の設定を含む）。だから `QuickLookView::Hide()` は、外す前に `close` してすぐ手放し、出すたびに `QLPreviewView` を作り直す（1 回 0.5ms 未満）。`shouldCloseWithWindow` は **NO** にする（既定の YES だと、ウィンドウを閉じるときに QuickLook 側も自動で `close` するため、その後の `Hide()` が二重 close になる。ウィンドウを閉じるとアプリは終了するが、その間もタイマーのティックは回る）。
 - **テストの罠**：ヘッドレスのハーネスでも、覆いを載せる親はウィンドウに入れておくこと（ウィンドウ外での `close` は abort する）。`QLPreviewView` の `setPreviewItem:`/`close` をメソッド差し替えで記録すると、`close` 後の設定などの違反を検出できる。
 
+## ウィンドウ位置・サイズの保存
+
+`platforms/osx.mm` の `pl_create_main_window()` が、`[g_window center]` の**後**に `setFrameAutosaveName:@"MiataMainWindow"` を呼ぶ。AppKit が、移動・リサイズのたびに `NSUserDefaults`（バンドルIDのドメインの `NSWindow Frame MiataMainWindow`）へ自動で保存し、この呼び出しの時点で、保存済みなら復元する(初回は保存が無いので `center` のまま)。終了時にまとめて保存する処理は無い(強制終了でも最後の状態が残る)。
+
+- **`center` を先に呼ぶこと**：保存済みなら復元で上書きされ、無ければ中央のまま出る。順序を逆にすると、毎回中央に戻る。
+- **画面外の保存値**：保存された位置がどの画面にも掛からない場合(モニタを外した後など)は、復元の時点でAppKitが画面内へ寄せる(実測。`-20000, 5000` を保存して復元すると画面内に収まった)ので、自前の補正は要らない。
+- **復元はViewを作る前**：`pl_create_main_window()` は `InitializeImpl()` の最初に呼ばれ、`View` はその後にcontentViewのサイズを基準にレイアウトされるので、復元後のサイズで始まる。復元で `windowDidResize:` が呼ばれても、リサイズのハンドラ(`pl_set_resize_handler`)はまだ未設定なので何も起きない。
+- **保存しているのはウィンドウだけ**：左右ペインの境界(`NSSplitView`)の位置と、各ペインのディレクトリは保存しない(`NSSplitView.autosaveName` は、覆い(プレビュー)の位置追従のデリゲートとの相互作用が未確認なので、入れていない)。
+- **テスト**：実物の `pl_create_main_window` を、`makeKeyAndOrderFront:`/`activateIgnoringOtherApps:` を何もしないものに差し替えて(画面に出さず)呼べる。ハーネスの実行ファイル名のドメインに保存されるので、本物のアプリの設定には触れない。起動をまたぐ復元は、プロセスを分けて確かめる。
+
 ## C++ から Lua へ関数を登録する手順
 
 1. `Application.h` の `Application` クラスに `static int lua_command_XXX(lua_State* L)`（`Miata.command.*` 用）または `static int lua_private_XXX(lua_State* L)`（`Miata._private.*` 用）を追加
