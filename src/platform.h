@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <cstdint>
+#include "FileError.h"
 
 struct Color4f {
     float r = 0, g = 0, b = 0, a = 1;
@@ -146,7 +147,14 @@ struct CustomDialogResult {
     std::vector<int> selects; // 0-based selected index
 };
 
-std::expected<void, std::string> pl_trash_file(const std::filesystem::path& path);
+// ファイルをゴミ箱へ移す。失敗(権限が無い・消えた等)はエラーで返す。権限が無い失敗は
+// FileError::permission_deniedで分かる。
+std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path& path);
+
+// システム設定の「プライバシーとセキュリティ > フルディスクアクセス」を開く。OSの保護で止められたファイル操作を、
+// 許可してもらうための案内用。その画面を直接開けなければ、システム設定そのものを開く。何かを開けたらtrue。
+// 許可を与えるのはユーザーで、アプリからは変えられない(許可した後、アプリの起動し直しが要る場合がある)。
+bool pl_open_full_disk_access_settings();
 
 std::filesystem::path pl_find_font_filename(const std::string& font_name);
 std::filesystem::path pl_get_home_dir();

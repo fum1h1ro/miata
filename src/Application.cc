@@ -363,13 +363,17 @@ namespace miata {
             }
         }
 
-        auto message = event.success
-            ? std::string("完了しました")
-            : std::format("エラーが発生しました（{}件失敗）: {}", event.failed_count, event.error_message);
+        if (!event.success) {
+            view_->ReportFileError(
+                std::format("エラーが発生しました（{}件失敗）", event.failed_count),
+                FileError{.message = event.error_message, .permission_denied = event.permission_denied}
+            );
+            return;
+        }
         view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
             [](views::IDialog&) {},
             views::ConfirmDialog::arguments{
-                .message_ = message,
+                .message_ = "完了しました",
                 .button_text_ = "OK",
             }
         ));
@@ -394,14 +398,10 @@ namespace miata {
                 auto& yes_no_dialog = dynamic_cast<views::YesNoDialog&>(dialog);
                 if (!yes_no_dialog.Result()) return;
 
-                auto failed_count = 0;
-                std::string last_error;
+                FileErrorSummary failures;
                 for (auto& target : targets) {
                     auto result = pl_trash_file(target);
-                    if (!result) {
-                        ++failed_count;
-                        last_error = result.error();
-                    }
+                    if (!result) failures.Add(result.error());
                 }
 
                 // 確認ダイアログはモーダルで開いている間ペイン移動できないため、
@@ -410,14 +410,8 @@ namespace miata {
                     view_->ReloadList(list); // ゴミ箱に移せなかったファイルのマークは残る
                 }
 
-                if (failed_count > 0) {
-                    view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
-                        [](views::IDialog&) {},
-                        views::ConfirmDialog::arguments{
-                            .message_ = std::format("エラーが発生しました（{}件失敗）: {}", failed_count, last_error),
-                            .button_text_ = "OK",
-                        }
-                    ));
+                if (failures.count > 0) {
+                    view_->ReportFileError(std::format("エラーが発生しました（{}件失敗）", failures.count), failures.shown);
                 }
             },
             views::YesNoDialog::arguments{
@@ -615,13 +609,7 @@ namespace miata {
             lua_pushboolean(L, true);
         }
         else {
-            app.view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
-                [](views::IDialog&) {},
-                views::ConfirmDialog::arguments{
-                    .message_ = std::format("フォルダを作成できませんでした: {}", ec.message()),
-                    .button_text_ = "OK",
-                }
-            ));
+            app.view_->ReportFileError("フォルダを作成できませんでした", FileError::From(ec));
             lua_pushboolean(L, false);
         }
         return 1;
@@ -686,13 +674,7 @@ namespace miata {
             lua_pushboolean(L, true);
         }
         else {
-            app.view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
-                [](views::IDialog&) {},
-                views::ConfirmDialog::arguments{
-                    .message_ = std::format("リネームできませんでした: {}", ec.message()),
-                    .button_text_ = "OK",
-                }
-            ));
+            app.view_->ReportFileError("リネームできませんでした", FileError::From(ec));
             lua_pushboolean(L, false);
         }
         return 1;
@@ -756,13 +738,10 @@ namespace miata {
         auto result = app.view_->GetFileListView(pane).Reload();
         if (!result) {
             // 反対側のペインも対象にできるので、どのディレクトリで失敗したかも示す
-            app.view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
-                [](views::IDialog&) {},
-                views::ConfirmDialog::arguments{
-                    .message_ = std::format("再読み込みできませんでした ({}): {}", app.view_->GetList(pane).Path().string(), result.error()),
-                    .button_text_ = "OK",
-                }
-            ));
+            app.view_->ReportFileError(
+                std::format("再読み込みできませんでした ({})", app.view_->GetList(pane).Path().string()),
+                result.error()
+            );
         }
         lua_pushboolean(L, result.has_value());
         return 1;

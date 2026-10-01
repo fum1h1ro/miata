@@ -352,7 +352,7 @@ void FileListView::ClearMarks()
     Redraw();
 }
 
-std::expected<void, std::string> FileListView::Reload(std::optional<std::filesystem::path> cursor_to)
+std::expected<void, FileError> FileListView::Reload(std::optional<std::filesystem::path> cursor_to)
 {
     // 再スキャンで旧エントリが破棄される前に、カーソル復元に必要な情報を控える。
     // 復元自体は、再スキャン後のパス変更通知の購読側(コンストラクタ)がFetch()の直後に行う。

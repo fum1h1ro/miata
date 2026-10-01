@@ -9,6 +9,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "FileError.h"
 #include "models/FileListModel.h"
 
 namespace miata {
@@ -25,7 +26,10 @@ namespace miata {
         FileOpType type;
         bool success;
         int failed_count;
+        // 失敗の説明(最後の失敗。権限が無い失敗があれば、その説明)
         std::string error_message;
+        // 失敗の中に、権限が無いもの(OSの保護など)があった。画面で、許可のしかたを案内する
+        bool permission_denied;
         models::FileListModel* src_model;
         models::FileListModel* dest_model;
         std::filesystem::path src_dir;
