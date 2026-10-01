@@ -98,7 +98,7 @@ assets/
 - **被せる範囲**は、既定は両ペインにまたがる 1 枚。`"left"` / `"right"` を指定すると、そのペインだけに被せる（反対側のペインに出せば、カーソルのある一覧は見えたまま操作できる）
 - **閉じる**のは、同じ指定でもう一度 `quick_look` を呼ぶか、`navigate_cancel`（`resources/test.lua` では Esc）。別の範囲を指定して呼ぶと、閉じずに範囲だけ切り替わる
 - **キー入力を優先して、プレビューの中のマウス操作はできない**（PDF のスクロール、動画の再生ボタンなど）。プレビューはクリックでキーボードフォーカスを奪えてしまい、奪われるとキーバインドが効かなくなるため、クリックはプレビューに届かないようにしている。覆っている範囲では、マーク済みファイルのドラッグも効かない
-- 見た目は macOS 標準で、`Miata.config.color` は効かない。表示は 1 件ずつ
+- プレビューの中身の見た目は macOS 標準で、`Miata.config.color` は効かない（読み込み中や空のときに見える下地だけ、`background` の色）。表示は 1 件ずつ
 - ファイルの中身だけが外部で更新されても、プレビューは自動では作り直さない（カーソル下のファイルが変わったときに作り直す）
 
 ## ウィンドウの位置とサイズ
@@ -365,13 +365,20 @@ Miata.util.pp(value)          -- デバッグ出力（pretty print）
 ### 設定
 
 ```lua
-Miata.config.color.background  = "#11223344"  -- RGBA hex
-Miata.config.color.normal_text = "#aaff55ff"
-Miata.config.color.normal_file = "#ffffffff"
-Miata.config.color.directory   = "#00ffaaff"
+Miata.config.color.background  = "#112233ff"  -- 背景（RGBA hex。alpha は使わない）
+Miata.config.color.normal_text = "#aaff55ff"  -- ヘッダー（パスの表示）の文字
+Miata.config.color.normal_file = "#ffffffff"  -- ファイルの名前・サイズ・更新日時
+Miata.config.color.directory   = "#00ffaaff"  -- ディレクトリ
 
 Miata.config.set_font("フォント名")   -- 未指定時はシステムデフォルトフォント
 Miata.config.set_font_size(14)        -- ファイル一覧の行の高さも連動して変わる
 ```
+
+色は `"#rrggbb"` か `"#rrggbbaa"`（16 進）で書く。
+
+- **背景は、OS のテーマ（Light / Dark）に関わらず、設定した色で塗る**（ファイル一覧、ヘッダー、ウィンドウ、Quick Look の覆い）。**alpha は使わない**: `"#rrggbbaa"` と書いても、常に不透明に塗る（半透明にすると、後ろの OS のテーマの色が混ざるため）。
+- 背景の明るさに合わせて、ペインの境目の線やスクロールバー（OS が描く部品）は、暗い背景なら Dark 用、明るい背景なら Light 用の色になる。
+- **タイトルバーと、ダイアログ（`dialog_*`）は、これまでどおり OS のテーマに従う**（`Miata.config.color` は効かない）。
+- 既定の設定（`resources/test.lua`）は、暗い背景に明るい文字の配色。背景を明るくするときは、`normal_text` と `normal_file` も暗い色にする。
 
 これらは、[`~/.config/miata/init.lua`](#設定ファイルinitlua) に書いて、組み込みの既定の設定を上書きできる。設定は起動時にだけ読み込む（変えたら、起動し直す）。

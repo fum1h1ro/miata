@@ -518,14 +518,15 @@ void FileListView::EndDrag(bool accepted)
 void FileListView::DrawHeader()
 {
     NSRect bounds = impl_->header_view.bounds;
-    auto bg = pl_get_color(pl_color_type::window_background_color);
-    [ToNSColor(bg) set];
+    // 背景も文字も設定の色(OSのテーマには従わない)。文字をOSの色(textColor)にすると、背景を暗くしたとき、
+    // Lightのままだと黒文字が暗い背景に沈む
+    [ToNSColor(Config::Background()) set];
     NSRectFill(bounds);
 
     NSString* path = @(model_.Path().c_str());
     NSDictionary* attrs = @{
         NSFontAttributeName: MakeFont(Config::FontSize() + 1),
-        NSForegroundColorAttributeName: ToNSColor(pl_get_color(pl_color_type::text_color)),
+        NSForegroundColorAttributeName: ToNSColor(Config::Color().Get(Config::Color::Type::NormalText)),
     };
     NSSize text_size = [path sizeWithAttributes:attrs];
     NSRect text_rect = NSMakeRect(kPadding, (bounds.size.height - text_size.height) / 2, bounds.size.width - kPadding * 2, text_size.height);
@@ -534,6 +535,12 @@ void FileListView::DrawHeader()
 
 void FileListView::Draw()
 {
+    // 背景。スクロール領域の下(行が足りない部分)まで含めて、見えている範囲を全部塗る
+    // (documentViewは、行数分と表示領域の高さの大きい方に揃えてある: Redraw)。塗らないと、
+    // 後ろのウィンドウの背景(OSのテーマの色)が見える
+    [ToNSColor(Config::Background()) set];
+    NSRectFill(impl_->content_view.bounds);
+
     // リスト本体
     {
         auto dir_color = ToNSColor(Config::Color().Get(Config::Color::Type::Directory));

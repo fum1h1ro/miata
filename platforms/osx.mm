@@ -121,6 +121,13 @@ void* pl_get_content_view()
     return (__bridge void*)ns_content_view();
 }
 
+void pl_set_window_background_color(const Color4f& color)
+{
+    // 既定(windowBackgroundColor)はOSのテーマに従う(Lightだと純白)ので、設定の色で置き換える。
+    // alphaは使わない(不透明)。
+    g_window.backgroundColor = [NSColor colorWithRed:color.r green:color.g blue:color.b alpha:1.0];
+}
+
 void pl_set_key_down_handler(std::function<void(uint16_t, uint16_t)> handler)
 {
     static std::function<void(uint16_t, uint16_t)> holder;

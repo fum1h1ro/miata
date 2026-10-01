@@ -82,6 +82,11 @@ void* pl_get_content_view();
 // メインウィンドウを生成して表示する。
 void pl_create_main_window(int width, int height, const char* title);
 
+// メインウィンドウ自体の背景色。ペインやヘッダーは自分で塗るので、ここで決まるのは、その隙間(ペインの
+// 境目)と、リサイズ中に広がった部分に見える色。alphaは使わず、不透明に塗る。設定の読み込みの後に呼ぶ
+// (pl_create_main_windowの時点では、まだ設定が読まれていない)。
+void pl_set_window_background_color(const Color4f& color);
+
 // キーコードはmacOSのvirtual keycode(NSEvent.keyCode)そのもの。
 // modsはpl_modifier::* のビットOR。
 void pl_set_key_down_handler(std::function<void(uint16_t keycode, uint16_t mods)> handler);
