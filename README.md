@@ -23,7 +23,7 @@ rake build:debug      # Debug ビルド
 rake build:release    # Release ビルド
 rake run:debug        # Debug ビルドして実行
 rake run:release      # Release ビルドして実行
-rake 'icon[icon.png]' # アプリアイコン(resources/AppIcon.icns)を PNG から作り直す
+rake icon             # アプリアイコン(assets/AppIcon.png → resources/AppIcon.icns)を作り直す
 ```
 
 成果物: `_build/debug/Miata.app` / `_build/release/Miata.app`
@@ -32,14 +32,17 @@ rake 'icon[icon.png]' # アプリアイコン(resources/AppIcon.icns)を PNG か
 
 ### アプリアイコン
 
-`resources/AppIcon.icns` が `.app` のアイコンになる（`resources/` の中身は `Contents/Resources/` にコピーされ、`CMakeLists.txt` の `MACOSX_BUNDLE_ICON_FILE` で `Info.plist` に登録してある）。**今あるのは仮のアイコン**。差し替えるには、1024×1024 の正方形の PNG を用意して、次を実行する。
+アイコンの**元画像**は `assets/AppIcon.png`（1024×1024 の正方形の PNG）で、`rake icon` がそれを `resources/AppIcon.icns` に変換する。`resources/AppIcon.icns` が `.app` のアイコンになる（`resources/` の中身は `Contents/Resources/` にコピーされ、`CMakeLists.txt` の `MACOSX_BUNDLE_ICON_FILE` で `Info.plist` に登録してある）。**今あるのは仮のアイコン**。差し替えるには、`assets/AppIcon.png` を自分の画像で置き換えて、次を実行する。
 
 ```bash
-rake 'icon[path/to/icon.png]'   # resources/AppIcon.icns を作り直す(macOS 標準の sips と iconutil を使う)
-rake build:debug                # ビルドし直す(rake build:release でもよい)
+rake icon          # assets/AppIcon.png から resources/AppIcon.icns を作り直す(macOS 標準の sips と iconutil を使う)
+rake build:debug   # ビルドし直す(rake build:release でもよい)
 ```
 
-- 自分で作った `.icns`（Icon Composer や画像ツールの出力）を、`resources/AppIcon.icns` に直接置いてもよい
+- 元画像（`assets/AppIcon.png`）と、変換後（`resources/AppIcon.icns`）の**両方をコミットする**。`.icns` はビルドに必要なので、元画像を直したら、`rake icon` で `.icns` も作り直して、一緒にコミットする
+- 元画像は `resources/` に置かない。`resources/` の中身は全部 `.app` に入ってしまう（`assets/` は `.app` に入らない）
+- `rake icon` は引数を取らない（変換するのは、いつも `assets/AppIcon.png`）。`rake 'icon[x.png]'` のように渡すと、エラーになる
+- デザインツール（Figma・Sketch など）の元ファイルは、`assets/` に置いても、リポジトリの外に置いてもよい。書き出した 1024×1024 の PNG を、`assets/AppIcon.png` に置く
 - macOS のアイコンは、角丸の形と余白（1024 の枠の中に 824 の角丸四角。macOS 11 以降の作法）を、画像の側に含める。システムは形を整えてくれない
 - 正方形でない画像はエラーになる。1024 より小さい画像は、大きいサイズが引き伸ばされる（警告が出る）
 - Dock や Finder に古いアイコンが出続けるときは、macOS のアイコンのキャッシュが残っていることがある（`.app` を `touch` して更新日時を変える、または Dock を再起動する）
@@ -62,7 +65,10 @@ platforms/
 resources/
 ├── base.lua              # コアユーティリティ・ダイアログヘルパー定義
 ├── test.lua              # 既定のキーバインド・コマンド定義（.app に埋め込まれる。~/.config/miata/init.lua で上書きできる）
-└── AppIcon.icns          # アプリアイコン（rake icon で作る）
+└── AppIcon.icns          # アプリアイコン（assets/AppIcon.png から rake icon で作る）
+
+assets/
+└── AppIcon.png           # アプリアイコンの元画像（1024×1024。.app には入らない）
 ```
 
 ## マウス操作

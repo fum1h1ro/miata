@@ -74,18 +74,23 @@ namespace :run do
 end
 
 
-# アプリアイコン(resources/AppIcon.icns)を、正方形のPNGから作る。resources/ の中身は .app の
-# Contents/Resources/ にそのままコピーされ、CMakeLists.txt の MACOSX_BUNDLE_ICON_FILE で Info.plist に
-# 登録しているので、差し替えるときは、このタスクで作り直して(または、自分で作った AppIcon.icns を置いて)
-# ビルドし直すだけ。
+# アプリアイコン: 元画像 assets/AppIcon.png(正方形のPNG)を、resources/AppIcon.icns に変換する。
+# 元画像は resources/ の外に置く(resources/ の中身は、全部 .app の Contents/Resources/ にコピーされるため)。
+# .icns は resources/ に置いてコミットする(ビルドに必要。CMakeLists.txt の MACOSX_BUNDLE_ICON_FILE で
+# Info.plist に登録している)。差し替えるときは、assets/AppIcon.png を置き換えて、rake icon → ビルドし直す。
+ICON_SOURCE = "assets/AppIcon.png"
 ICON_FILE = "resources/AppIcon.icns"
 
-desc "Build #{ICON_FILE} from a square PNG (1024x1024 recommended): rake 'icon[path/to/icon.png]'"
-task :icon, [:png] do |_t, args|
+desc "Build #{ICON_FILE} from #{ICON_SOURCE} (a square PNG, 1024x1024 recommended)"
+task :icon do |_t, args|
   require 'shellwords'
   require 'tmpdir'
-  png = args[:png] or abort "usage: rake 'icon[path/to/icon.png]'"
-  abort "file not found: #{png}" unless File.file?(png)
+  # 変換するのはいつも ICON_SOURCE。以前の rake 'icon[x.png]' の引数を黙って無視すると、x.png を変換した
+  # つもりで別の画像から .icns ができてしまうので、エラーにする
+  abort "rake icon takes no arguments (it always converts #{ICON_SOURCE}): put your image there" unless args.extras.empty?
+
+  png = ICON_SOURCE
+  abort "source image not found: #{png}" unless File.file?(png)
 
   w, h = %w[pixelWidth pixelHeight].map { |key| `sips -g #{key} #{png.shellescape}`[/#{key}: (\d+)/, 1].to_i }
   abort "not a readable image: #{png}" if w.zero? || h.zero?
@@ -107,5 +112,5 @@ task :icon, [:png] do |_t, args|
     end
     sh "iconutil -c icns #{iconset.shellescape} -o #{ICON_FILE}"
   end
-  puts "wrote #{ICON_FILE} (rebuild to apply: rake build:debug)"
+  puts "wrote #{ICON_FILE} from #{png} (rebuild to apply: rake build:debug)"
 end
