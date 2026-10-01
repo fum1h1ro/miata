@@ -6,6 +6,7 @@
 #include <lua.h>
 #include "misc.h"
 #include "KeyBinding.h"
+#include "Script.h"
 #include "views/View.h"
 #include "FileOperation.h"
 
@@ -30,6 +31,10 @@ namespace miata {
         Application();
         ~Application();
         void InitializeImpl();
+        // Luaの準備(base.lua、コマンドの登録、設定の読み込み)。Viewを作る前に行う。
+        // 設定の読み込みで起きたエラーを返す(Viewを作った後にReportConfigErrorsで画面に出す)
+        std::vector<Script::ConfigError> InitializeScript();
+        void ReportConfigErrors(const std::vector<Script::ConfigError>& errors);
         void Update(); // タイマーから定期的に呼ばれる(旧FrameImpl相当)
         void KeyDown(uint16_t key_code, uint16_t mods);
         void KeyUp(uint16_t key_code, uint16_t mods);
@@ -60,6 +65,10 @@ namespace miata {
         static int lua_command_reload(lua_State* L);
         static int lua_command_quick_look(lua_State* L);
         static int lua_command_sort(lua_State* L);
+
+        // Viewを操作するコマンドの入口(Script::RegisterFunctionsのwrapper)。upvalue(1)に本来のC関数を持つ。
+        // Viewは設定ファイルの読み込みより後に作るので、読み込み中に呼ばれたらLuaのエラーにする
+        static int lua_view_trampoline(lua_State* L);
 
         static int lua_private_dialog_open(lua_State* L);
         static int lua_private_dialog_is_open(lua_State* L);

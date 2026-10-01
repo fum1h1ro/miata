@@ -345,8 +345,9 @@ std::filesystem::path pl_get_config_dir()
         // 環境変数からXDG_CONFIG_HOMEを取得
         NSString* xdgConfigHome = [[[NSProcessInfo processInfo] environment] objectForKey:@"XDG_CONFIG_HOME"];
 
-        // 環境変数が設定されていない場合はデフォルト値を使用
-        if (!xdgConfigHome)
+        // 環境変数が設定されていない場合はデフォルト値を使用。XDG Base Directoryの仕様どおり、
+        // 空や相対パスは設定されていないものとして扱う(相対パスだと、起動した場所によって設定の場所が変わってしまう)
+        if (xdgConfigHome.length == 0 || ![xdgConfigHome hasPrefix:@"/"])
         {
             NSString* homeDir = NSHomeDirectory();
             xdgConfigHome = [homeDir stringByAppendingPathComponent:@".config"];

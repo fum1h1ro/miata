@@ -43,7 +43,7 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 | ファイル | 役割 |
 |---------|------|
 | `Application.cc/h` | `pl_start_timer` による 0.05 秒周期の更新処理（`Update()`。旧 `FrameImpl` 相当だが実際のフレームループではない）、キーイベント処理、`Miata.command.*`/`Miata._private.*` のコマンド登録（シングルトン） |
-| `Script.cc/h` | Lua VM 管理、C++ 関数登録（`RegisterFunctions`）、`resources/` の読み込み、コルーチン駆動（`InvokeRefFunctionOnThread`/`Update`） |
+| `Script.cc/h` | Lua VM 管理、C++ 関数登録（`RegisterFunctions`）、設定の読み込み（`PostInitialize`: 組み込みの既定の設定 → ユーザーの `init.lua`。後述）、コルーチン駆動（`InvokeRefFunctionOnThread`/`Update`） |
 | `KeyBinding.h` | キーストローク解析、モード別（Normal/Dialog）キーマップ管理 |
 | `views/View.h/.mm` | ダイアログキュー管理（`RequestDialog`/`CheckDialogState`）、ブラウザ操作へのキー入力ルーティング |
 | `views/Dialog.h/.mm` | ダイアログ基盤。`IDialog`（confirm/yesno/inputtext/custom/filterlist の基底）と `DialogPanel`（実体となる非モーダル NSView オーバーレイ）。詳細は後述 |
@@ -55,9 +55,10 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 
 **Lua スクリプト:**
 - `resources/base.lua` — コアユーティリティとダイアログヘルパー定義
-- `resources/test.lua` — キーバインド設定とコマンド定義
+- `resources/test.lua` — **組み込みの既定の設定**（キーバインドとコマンド定義）。`.app` の `Contents/Resources/` に入る
+- `~/.config/miata/init.lua` — **ユーザーの設定**。無くてよい。あれば、既定の設定の後に読み込まれて上書きする（後述「設定の読み込み」）
 
-C++ 側は `Miata.command.*`（`Application.cc` の `commands[]`）と `Miata._private.*`（同 `privates[]`）の名前空間で Lua 関数を登録し、スクリプト側から呼び出す。ダイアログはコルーチンで非同期制御される（後述）。
+C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の `config_commands[]`/`view_commands[]`）と `Miata._private.*`（同 `privates[]`）の名前空間で Lua 関数を登録し、スクリプト側から呼び出す。ダイアログはコルーチンで非同期制御される（後述）。
 
 ## ダイアログの仕組み（NSAlert は使っていない）
 
@@ -163,13 +164,27 @@ C++ 側は `Miata.command.*`（`Application.cc` の `commands[]`）と `Miata._p
 - **macOS のアイコンの作法**：角丸の形と余白(1024 の枠に 824 の角丸四角)は画像の側に含める。システムは形を整えない。
 - **確認のしかた**：`NSWorkspace iconForFile:` に `.app` のパスを渡すと、システムが返すアイコンが分かる(ビルドしたバンドルで、仮のアイコンが返ることを確認済み)。Dock/Finder のキャッシュで古い絵が残る場合は、この方法で `.app` 側が正しいかを切り分けられる。
 
+## 設定の読み込み（組み込みの既定の設定 + `~/.config/miata/init.lua`）
+
+`Application::InitializeImpl()` → `InitializeScript()`（`Script::Initialize()` で `base.lua` → コマンド登録 → `Config::ScriptInitialize()` → `Script::PostInitialize()`）。`PostInitialize()` が、**組み込みの既定の設定（リソースの `test.lua`）→ ユーザーの設定（`Script::UserConfigFile()` = `pl_get_config_dir()/miata/init.lua`）** の順に、同じ Lua ステートで実行する。後から実行したものが、同じ設定を上書きする(`bind` は同じキーを無言で上書きし、`unbind` で外せる。`Miata.config.*` は後の代入が勝つ)。
+
+- **読み込みは Viewを作る前**：`FileListView` の構築時に、フォントサイズ(ヘッダーの高さ)を読むため、設定はその前に済ませる必要がある。`View` を作った**後**に `ReportConfigErrors()` でエラーのダイアログを出す(`PostInitialize()` はエラーを返すだけで、画面には触らない)。
+- **`.app` への埋め込みは、既にCMakeの仕組みで成立している**：`resources/*` が `Contents/Resources/` にコピーされ、`pl_read_resource_file()` は `[NSBundle mainBundle] pathForResource:` で、そこだけを読む(ソースツリーを見ない。Release の実行ファイルにソースツリーのパスは残っていない)。`resources/test.lua` を直したら、ビルドし直さないと反映されない。ビルドし直さない設定変更は `init.lua` の役目。
+- **エラーの扱い**：`DoFile()`/`DoResourceFile()`/`DoString()` は `std::expected<bool, std::string>` で返し、`PostInitialize()` が `Script::ConfigError { file, message }` の列にして返す。失敗しても起動は続け、エラーの行より前の設定は有効(後は実行されない)。既定の設定が壊れていても、ユーザーの設定は続けて読む。ダイアログは1つにまとめる(`ConfirmDialog`)。キー入力で呼ばれた関数のエラーは、従来どおり標準出力(`KeyDown`)だけ。
+- **ファイルは `luaL_loadfile`、リソースは `luaL_loadbuffer(..., "@名前")` で読む**：エラーメッセージに「ファイル名:行番号:」が付く(`luaL_dostring` だと、`[string "…"]` になって行が分かりにくい)。`luaL_loadfile` は、先頭のBOMと `#!` の行を読み飛ばし、開けない/読めないファイル(ディレクトリ、権限なし)をエラーとして返す。ただし、Luaが長いパスを縮める(`...` で始める)ので、メッセージのパスは欠けることがある。`ReportConfigErrors()` は、メッセージにファイルのパスが含まれなければ足す。
+- **ユーザーの設定が「無い」の判定は `symlink_status`**：`exists` だと、リンク切れのシンボリックリンク(dotfiles管理でありがち)が「無い」扱いで黙って無視される。`not_found` 以外は読みに行き、読めなければエラーにする。
+- **罠：`error({})` のように、文字列でない値を投げる設定**：`lua_tostring` が NULL を返し、そのまま `std::string` にすると未定義動作で落ちる。エラーオブジェクトは `Script.cc` の `ErrorMessage()` を通す(`(error object is a table value)` 等にする)。`InvokeRefFunction`/`InvokeRefFunctionOnThread` のエラー経路も同じ。
+- **罠：読み込み中に、Viewを操作するコマンドを呼ぶ**：`view_` はまだ null なので、`app.view_->…` で落ちる。`view_commands[]` と `privates[]` は、`Script::RegisterFunctions(..., wrapper)` の `wrapper` に `Application::lua_view_trampoline` を渡して**クロージャとして登録**し(本来の関数は upvalue(1))、トランポリンが「`view_` が無ければ `luaL_error`、あれば本来の関数へ中継」する。Luaの関数としては同じ名前・同じ引数のままなので、`Miata.command.X` を Lua で再定義して上書きする使い方も壊れない(登録の順序を変えて対処していない理由)。
+- **`pl_get_config_dir()`**：`$XDG_CONFIG_HOME` が**絶対パス**のときだけ使い、空や相対パスは無視して `~/.config`(XDG の仕様どおり。相対パスだと、起動した場所で設定の場所が変わってしまう)。GUI(Dock/Finder)から起動したアプリには、シェルの環境変数は渡らないので、ふつうは `~/.config/miata/init.lua`。
+- **テスト**：本物の `.app` と同じ構成の「模擬バンドル」(`Fake.app/Contents/{MacOS,Resources}` に、ハーネスの実行ファイルと、ビルド済みの `base.lua`/`test.lua` のコピー)の中から、実物の `Application::InitializeScript()` を呼び、`XDG_CONFIG_HOME` を切り替えて、`init.lua` のパターン(無し/上書き/`unbind`/構文エラー/実行時エラー/`error({})`/読み込み中のViewコマンド/ディレクトリ/権限なし/リンク切れ/BOM/`#!`/空/既定の設定が壊れている…)ごとにプロセスを分けて確かめる。クラッシュするケース(ミュータント)は、シグナルを自分で受けて静かに終了させる(macOS のクラッシュレポートのダイアログを出さないため)。
+
 ## C++ から Lua へ関数を登録する手順
 
 1. `Application.h` の `Application` クラスに `static int lua_command_XXX(lua_State* L)`（`Miata.command.*` 用）または `static int lua_private_XXX(lua_State* L)`（`Miata._private.*` 用）を追加
-2. `Application.cc` の `commands[]`（`Miata.command` 用）または `privates[]`（`Miata._private` 用）に `{ "name", lua_command_XXX }` を追加
+2. `Application.cc` の `InitializeScript()` の `view_commands[]`（`Miata.command` 用）または `privates[]`（`Miata._private` 用）に `{ "name", lua_command_XXX }` を追加。Viewに触らず、設定ファイルの読み込み中にも使えるべきもの(`bind`/`unbind` のような)だけ `config_commands[]` に入れる（後述「設定の読み込み」のトランポリン）
 3. OS 依存の実装が必要な場合は `platform.h` に `pl_*` 関数を宣言し、`platforms/osx.mm` に実装を追加（AppKit 型はここか `views/*.mm` にのみ閉じ込め、`.h` には持ち込まない）
 
-**注意**：`Miata.command.*` と `Miata._private.*` は同じ実装が入り得る別の名前空間ではあるが、`Miata.command` テーブル自身の中で Lua 側（`base.lua`）の関数と C++ 側の関数に同じキー名を使ってはいけない。`Application::InitializeImpl()` は `script.Initialize()`（`base.lua` 読み込み）の後に `RegisterFunctions("Miata.command", commands)` を実行するため、同名なら C++ 側が Lua 側を**無言で上書きする**（コンパイルエラーにも起動時エラーにもならず、該当キーを実際に呼び出した時だけ引数不一致などで失敗する）。Lua ラッパー＋その内部で使う生の C++ 実行関数、という組み合わせを作る場合は、`dialog_input`（`Miata.command`）/ `dialog_open`（`Miata._private`）や `make_folder`（`Miata.command`）/ `make_directory`（`Miata.command`だが別名）のように、公開する名前と内部実装の名前を必ず分ける（内部実装は `Miata._private.*` に置くのが基本）。
+**注意**：`Miata.command.*` と `Miata._private.*` は同じ実装が入り得る別の名前空間ではあるが、`Miata.command` テーブル自身の中で Lua 側（`base.lua`）の関数と C++ 側の関数に同じキー名を使ってはいけない。`Application::InitializeScript()` は `script.Initialize()`（`base.lua` 読み込み）の後に `RegisterFunctions("Miata.command", ...)` を実行するため、同名なら C++ 側が Lua 側を**無言で上書きする**（コンパイルエラーにも起動時エラーにもならず、該当キーを実際に呼び出した時だけ引数不一致などで失敗する）。Lua ラッパー＋その内部で使う生の C++ 実行関数、という組み合わせを作る場合は、`dialog_input`（`Miata.command`）/ `dialog_open`（`Miata._private`）や `make_folder`（`Miata.command`）/ `make_directory`（`Miata.command`だが別名）のように、公開する名前と内部実装の名前を必ず分ける（内部実装は `Miata._private.*` に置くのが基本）。
 
 ## ドキュメントの同期
 

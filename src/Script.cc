@@ -1,5 +1,7 @@
+#include <format>
 #include <print>
 #include <ranges>
+#include <system_error>
 #include "macro.h"
 #include "Script.h"
 #include <stdio.h>
@@ -7,6 +9,16 @@
 
 
 namespace miata {
+    namespace {
+        // スタックトップのエラーオブジェクトを文字列にする。error({}) のように、文字列でない値が投げられても
+        // 落ちない(lua_tostring はNULLを返すので、そのままstd::stringにすると未定義動作になる)。
+        std::string ErrorMessage(lua_State* L)
+        {
+            if (lua_isstring(L, -1)) return lua_tostring(L, -1);
+            return std::format("(error object is a {} value)", luaL_typename(L, -1));
+        }
+    }
+
     Script::Script()
     {
         L_ = lua_newstate(lua_Alloc, nullptr, 0);
@@ -42,12 +54,33 @@ namespace miata {
         SetupCommands();
     }
 
-    void Script::PostInitialize()
+    std::filesystem::path Script::UserConfigFile()
     {
-        auto r = DoResourceFile("test.lua");
-        if (!r) {
-            std::println("error: {}", r.error());
+        return pl_get_config_dir() / "miata" / "init.lua";
+    }
+
+    std::vector<Script::ConfigError> Script::PostInitialize()
+    {
+        std::vector<ConfigError> errors;
+
+        // 組み込みの既定の設定
+        if (auto r = DoResourceFile("test.lua"); !r) {
+            errors.push_back({"test.lua", r.error()});
         }
+
+        // ユーザーの設定。無いのはエラーではない(リンク切れのシンボリックリンクは、あるのに読めないので、エラーにする)
+        auto user_file = UserConfigFile();
+        std::error_code ec;
+        if (std::filesystem::symlink_status(user_file, ec).type() != std::filesystem::file_type::not_found) {
+            if (auto r = DoFile(user_file); !r) {
+                errors.push_back({user_file.string(), r.error()});
+            }
+        }
+
+        for (auto& e : errors) {
+            std::println("error: {}: {}", e.file, e.message);
+        }
+        return errors;
     }
 
     bool Script::Update()
@@ -70,23 +103,36 @@ namespace miata {
 
     std::expected<bool, std::string> Script::DoFile(std::filesystem::path path)
     {
-        auto file = pl_read_file(path.c_str());
-        return DoString(file.c_str());
+        // luaL_loadfile は、先頭の文字コードの印(BOM)と#!行を読み飛ばし、開けない・読めないファイルは
+        // エラーとして返し、エラーメッセージにファイル名と行番号を付ける
+        auto orig = lua_gettop(L_);
+        if (luaL_loadfile(L_, path.c_str()) != LUA_OK || lua_pcall(L_, 0, 0, 0) != LUA_OK) {
+            auto error = ErrorMessage(L_);
+            lua_settop(L_, orig);
+            return std::unexpected(error);
+        }
+        lua_settop(L_, orig);
+        return true;
     }
 
     std::expected<bool, std::string> Script::DoResourceFile(std::filesystem::path path)
     {
         auto file = pl_read_resource_file(path.c_str());
         if (!file) return std::unexpected(file.error());
-        return DoString(file.value().c_str());
+        return DoBuffer(file.value(), "@" + path.string());
     }
 
     std::expected<bool, std::string> Script::DoString(const char* str)
     {
+        return DoBuffer(str, str);
+    }
+
+    std::expected<bool, std::string> Script::DoBuffer(const std::string& code, const std::string& chunk_name)
+    {
         auto orig = lua_gettop(L_);
-        if (luaL_dostring(L_, str)) {
-            auto error = std::string(lua_tostring(L_, -1));
-            lua_pop(L_, 1);
+        if (luaL_loadbuffer(L_, code.data(), code.size(), chunk_name.c_str()) != LUA_OK || lua_pcall(L_, 0, 0, 0) != LUA_OK) {
+            auto error = ErrorMessage(L_);
+            lua_settop(L_, orig);
             return std::unexpected(error);
         }
         lua_settop(L_, orig);
@@ -114,7 +160,7 @@ namespace miata {
         }
     }
 
-    void Script::RegisterFunctions(const std::string_view& table, const std::vector<luaL_Reg>& funcs)
+    void Script::RegisterFunctions(const std::string_view& table, const std::vector<luaL_Reg>& funcs, lua_CFunction wrapper)
     {
         auto orig = lua_gettop(L_);
         int count = 0;
@@ -129,6 +175,7 @@ namespace miata {
         }
         for (auto& f : funcs) {
             lua_pushcfunction(L_, f.func);
+            if (wrapper) lua_pushcclosure(L_, wrapper, 1); // 本来の関数をupvalue(1)に持つクロージャにする
             lua_setfield(L_, -2, f.name);
         }
         lua_settop(L_, orig);
@@ -153,7 +200,7 @@ namespace miata {
         auto orig = lua_gettop(L_);
         lua_rawgeti(L_, LUA_REGISTRYINDEX, ref);
         if (lua_pcall(L_, 0, 0, 0)) {
-            auto error = std::string(lua_tostring(L_, -1));
+            auto error = ErrorMessage(L_);
             lua_pop(L_, 1);
             return std::unexpected(error);
         }
@@ -172,7 +219,7 @@ namespace miata {
             }
             if (param->status_ != LUA_OK) {
                 if (lua_closethread(param->L_, nullptr)) {
-                    auto error = std::string(lua_tostring(param->L_, -1));
+                    auto error = ErrorMessage(param->L_);
                     lua_pop(param->L_, 1);
                     return std::unexpected(error);
                 }
@@ -190,7 +237,7 @@ namespace miata {
         lua_xmove(L_, param->L_, 1);
         param->status_ = lua_resume(param->L_, nullptr, 0, &param->nresult_);
         if (param->status_ != LUA_OK && param->status_ != LUA_YIELD) {
-            auto error = std::string(lua_tostring(param->L_, -1));
+            auto error = ErrorMessage(param->L_);
             lua_pop(param->L_, 1);
             return std::unexpected(error);
         }

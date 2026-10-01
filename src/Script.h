@@ -8,6 +8,7 @@
 #include <map>
 #include <expected>
 #include <print>
+#include <vector>
 
 extern "C" {
 #include <lua.h>
@@ -85,8 +86,20 @@ namespace miata {
         }
 
 
+        // 設定の読み込みで起きたエラー
+        struct ConfigError {
+            std::string file;    // 読み込もうとしたファイル(組み込みの既定の設定は "test.lua"、ユーザーの設定はそのパス)
+            std::string message; // Luaのエラーメッセージ(ふつう "ファイル名:行番号: ..." の形)
+        };
+
         void Initialize();
-        void PostInitialize();
+        // 設定を読み込む。組み込みの既定の設定(resources/test.lua。.appのContents/Resourcesに埋め込まれる)の
+        // 後に、ユーザーの設定(UserConfigFile())があれば読み込み、同じ設定は後に読むユーザーの設定が上書きする。
+        // 失敗した設定は返す(エラーが起きた行より前の設定は有効)。ユーザーの設定が無いのはエラーではない。
+        // この時点ではまだViewが無いので、エラーを画面に出すのは呼び出し側(Application)に任せる。
+        std::vector<ConfigError> PostInitialize();
+        // ユーザーの設定ファイル。$XDG_CONFIG_HOME/miata/init.lua(未設定なら ~/.config/miata/init.lua)
+        static std::filesystem::path UserConfigFile();
         bool Update();
         std::expected<bool, std::string> DoFile(std::filesystem::path path);
         std::expected<bool, std::string> DoResourceFile(std::filesystem::path path);
@@ -94,7 +107,10 @@ namespace miata {
 
         void StackUsing(std::function<void()> func);
         void GetGlobal(const std::string_view& name);
-        void RegisterFunctions(const std::string_view& table, const std::vector<luaL_Reg>& funcs);
+        // wrapperを渡すと、各関数をそのまま登録する代わりに、wrapper(C関数)をクロージャとして登録し、
+        // 本来の関数をそのupvalue(1)に持たせる。wrapperの中から lua_tocfunction(L, lua_upvalueindex(1)) で
+        // 呼び出す(呼び出しの前に共通の確認を挟むための仕組み)。
+        void RegisterFunctions(const std::string_view& table, const std::vector<luaL_Reg>& funcs, lua_CFunction wrapper = nullptr);
         void RegisterFunctionsToMetaTable(const std::vector<luaL_Reg>& funcs);
 
         std::expected<bool, std::string> InvokeRefFunction(int ref);
@@ -115,6 +131,8 @@ namespace miata {
         virtual ~Script();
         static void* lua_Alloc(void* ud, void* ptr, size_t osize, size_t nsize);
         void SetupCommands();
+        // chunk_nameは、エラーメッセージの "ファイル名:行番号:" に出る名前("@"で始まるとファイル名として扱われる)
+        std::expected<bool, std::string> DoBuffer(const std::string& code, const std::string& chunk_name);
 
 
 

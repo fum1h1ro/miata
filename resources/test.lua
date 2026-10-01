@@ -1,3 +1,6 @@
+-- 組み込みの既定の設定(.app の Contents/Resources に入る。直したらビルドし直す)。
+-- 自分用の設定は ~/.config/miata/init.lua に書く。この後に読み込まれて、同じ設定を上書きする。
+
 Miata.config.color.background = "#11223344"
 Miata.config.color.normal_text = "#aaff55ff"
 Miata.config.color.normal_file = "#ffffffff"
