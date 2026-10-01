@@ -88,6 +88,16 @@ namespace miata {
             return Instance().font_size_;
         }
 
+        // 背景色(Miata.config.color.background)。alphaは使わず、常に不透明にして返す。半透明で塗ると、
+        // 後ろのOSのテーマの色(Lightなら白)が混ざって、OSの設定しだいで見た目が変わってしまうため。
+        // 背景を塗る箇所は、Color().Get(...)ではなく必ずこれを使う(alphaの扱いをここに揃える)。
+        static inline Color4f Background()
+        {
+            auto c = Color().Get(Color::Type::Background);
+            c.a = 1.0f;
+            return c;
+        }
+
     private:
         static inline Config& Instance()
         {

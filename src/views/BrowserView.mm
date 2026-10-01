@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #include "BrowserView.h"
 #include "../models/Model.h"
+#include "NSColorUtil.h"
 
 namespace {
     // カーソル下のファイルが変わってから、プレビューを切り替えるまでの待ち。カーソルを動かし続けている間は
@@ -67,6 +68,9 @@ BrowserView::BrowserView() : impl_(std::make_unique<Impl>())
     // 分割ビューの上にプレビューの覆いを重ねる(覆いは、表示するまで隠れている)
     NSView* overlay = (__bridge NSView*)quick_look_->NativeView();
     impl_->container = [[_MiataBrowserContainer alloc] initWithFrame:impl_->split_view.frame];
+    // ペインの境目やスクロールバー、プレビューの見た目を、背景の明るさに合わせる(NSColorUtil.h参照)。
+    // 子のビューすべてに効く。ダイアログはこのビューの外(contentViewの直下)なので、OSのテーマのまま
+    impl_->container.appearance = AppearanceForBackground();
     [impl_->container addSubview:impl_->split_view];
     [impl_->container addSubview:overlay];
     impl_->container.splitView = impl_->split_view;

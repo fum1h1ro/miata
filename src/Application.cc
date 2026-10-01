@@ -115,6 +115,10 @@ namespace miata {
 
         auto config_errors = InitializeScript();
 
+        // 設定を読み終えたので、ウィンドウ自体の背景色を決める(ペインやヘッダーは、自分で塗る)。
+        // ウィンドウを作った時点では設定が読まれていないので、ここで設定する
+        pl_set_window_background_color(Config::Background());
+
         auto home = pl_get_home_dir();
         printf("home: %s\n", home.c_str());
 

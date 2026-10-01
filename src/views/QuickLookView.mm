@@ -2,15 +2,18 @@
 #import <Quartz/Quartz.h>
 #include <system_error>
 #include "QuickLookView.h"
+#include "../Config.h"
+#include "NSColorUtil.h"
 
 // プレビューを載せる覆い。中のQLPreviewViewにマウスを渡さず、一覧が透けて見えないよう不透明に塗る。
+// 色は一覧と同じ(設定の背景色)。読み込み中や空のときに、ここが見える。
 @interface _MiataQuickLookShield : NSView
 @end
 @implementation _MiataQuickLookShield
 - (BOOL)isOpaque { return YES; }
 - (void)drawRect:(NSRect)dirtyRect
 {
-    [[NSColor windowBackgroundColor] setFill];
+    [miata::views::ToNSColor(miata::Config::Background()) setFill];
     NSRectFill(dirtyRect);
 }
 // マウスは常にこのビューが受ける(何もしない)。中のQLPreviewViewがヒットしないので、クリックしても

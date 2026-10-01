@@ -138,7 +138,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 
 `Miata.command.quick_look([pane])` → `Application::lua_command_quick_look` → `View::ToggleQuickLook` → `BrowserView::ToggleQuickLook`。カーソル下のファイルを `QLPreviewView`（QuickLookUI）で、一覧の上に被せて表示する。別ウィンドウの `QLPreviewPanel`（旧 `pl_quick_preview`）は使わない（パネルはウィンドウで、ビューにできないため。旧実装は削除済み）。
 
-- **構造**：`BrowserView::NativeView()` は `_MiataBrowserContainer`（`BrowserView.mm`）で、`NSSplitView`（左右ペイン）と、その上に重ねる覆い（`QuickLookView::NativeView()` = `_MiataQuickLookShield`）を子に持つ。覆いの中に `QLPreviewView` を入れる。覆いの位置は、範囲（`constants::QuickLookArea` = `Both`/`Left`/`Right`）に応じてペインの frame から決め、**`NSSplitView` のデリゲート（`splitViewDidResizeSubviews:`）で追従**する（ウィンドウのリサイズもディバイダのドラッグもここに来る）。覆いは不透明に塗る（読み込み中や空のとき、下の一覧が透けないように）。
+- **構造**：`BrowserView::NativeView()` は `_MiataBrowserContainer`（`BrowserView.mm`）で、`NSSplitView`（左右ペイン）と、その上に重ねる覆い（`QuickLookView::NativeView()` = `_MiataQuickLookShield`）を子に持つ。覆いの中に `QLPreviewView` を入れる。覆いの位置は、範囲（`constants::QuickLookArea` = `Both`/`Left`/`Right`）に応じてペインの frame から決め、**`NSSplitView` のデリゲート（`splitViewDidResizeSubviews:`）で追従**する（ウィンドウのリサイズもディバイダのドラッグもここに来る）。覆いは不透明に塗る（読み込み中や空のとき、下の一覧が透けないように）。色は一覧と同じ設定の背景色（`Config::Background()`。後述「色の設定」）。
 - **範囲と「何を見せるか」は別**：見せるのは常に「カーソルのあるペインのカーソル下のファイル」で、範囲は被せる場所だけを決める。Lua には `"both"`/`"left"`/`"right"`（省略・nil は both）で公開し、変換は `Application.cc` の `ParseQuickLookArea()`（`ParsePane()` に `"both"` を足したもの）に集約している。`ToggleQuickLook(area)` は、同じ範囲なら閉じ、別の範囲なら範囲だけ切り替える（`QLPreviewView` は作り直さない）。`Navigate::Cancel`（Esc）でも閉じる。
 - **追従はティック駆動**：カーソル下のファイルは、カーソル移動・ペイン切替・ディレクトリ移動・再読み込み・ソートなど多くの経路で変わり、通知点が 1 つに揃っていない。通知を集めず、`Application::Update()` → `BrowserView::UpdateQuickLook()` が毎ティック `FileListView::CurrentPath()` を見て、直近の値（`quick_look_target_`）とプレビューに渡した値（`quick_look_shown_`）を比べる（`UpdateAutoReload` と同じく、状態を見て判断する方式）。変わってから 0.1 秒（`kQuickLookSettleDelay`）落ち着いたら切り替える。出した時点のファイルは待たずに設定する。`FileListView::GetCurrent()` は一覧が空だと範囲外を読むので、空になり得る場所では `CurrentPath()`（空なら nullopt）を使う。
 - **キー入力の安全（実測済み）**：`QLPreviewView` は `acceptsFirstResponder` が YES で、**クリックすると first responder を奪う**（覆い無しで確認済み）。奪われるとキー入力が `MiataRootView` に届かなくなる恐れがあるので、覆いが `hitTest:` で常に自分を返し、クリックを `QLPreviewView` に渡さない（`_MiataFileListNSView` が first responder にならないのと同じ考え方）。代償として、プレビューの中のマウス操作（PDF のスクロール、動画の再生ボタン）と、覆った範囲でのマーク済みファイルのドラッグはできない。一方、`QLPreviewView` は読み込み（`previewItem` の設定）では first responder を取りに来ず（キーウィンドウでも確認済み）、`performKeyEquivalent:` も横取りしなかったので、「奪われたら戻す」処理は入れていない。
@@ -171,6 +171,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 `Application::InitializeImpl()` → `InitializeScript()`（`Script::Initialize()` で `base.lua` → コマンド登録 → `Config::ScriptInitialize()` → `Script::PostInitialize()`）。`PostInitialize()` が、**組み込みの既定の設定（リソースの `test.lua`）→ ユーザーの設定（`Script::UserConfigFile()` = `pl_get_config_dir()/miata/init.lua`）** の順に、同じ Lua ステートで実行する。後から実行したものが、同じ設定を上書きする(`bind` は同じキーを無言で上書きし、`unbind` で外せる。`Miata.config.*` は後の代入が勝つ)。
 
 - **読み込みは Viewを作る前**：`FileListView` の構築時に、フォントサイズ(ヘッダーの高さ)を読むため、設定はその前に済ませる必要がある。`View` を作った**後**に `ReportConfigErrors()` でエラーのダイアログを出す(`PostInitialize()` はエラーを返すだけで、画面には触らない)。
+- **読み込みの直後に、ウィンドウ自体の背景色を反映する**：ウィンドウ(`pl_create_main_window`)は設定を読むより前に作るので、設定の背景色は、読み込んだ後に `pl_set_window_background_color(Config::Background())` で渡す（後述「色の設定」）。
 - **`.app` への埋め込みは、既にCMakeの仕組みで成立している**：`resources/*` が `Contents/Resources/` にコピーされ、`pl_read_resource_file()` は `[NSBundle mainBundle] pathForResource:` で、そこだけを読む(ソースツリーを見ない。Release の実行ファイルにソースツリーのパスは残っていない)。`resources/test.lua` を直したら、ビルドし直さないと反映されない。ビルドし直さない設定変更は `init.lua` の役目。
 - **エラーの扱い**：`DoFile()`/`DoResourceFile()`/`DoString()` は `std::expected<bool, std::string>` で返し、`PostInitialize()` が `Script::ConfigError { file, message }` の列にして返す。失敗しても起動は続け、エラーの行より前の設定は有効(後は実行されない)。既定の設定が壊れていても、ユーザーの設定は続けて読む。ダイアログは1つにまとめる(`ConfirmDialog`)。キー入力で呼ばれた関数のエラーは、従来どおり標準出力(`KeyDown`)だけ。
 - **ファイルは `luaL_loadfile`、リソースは `luaL_loadbuffer(..., "@名前")` で読む**：エラーメッセージに「ファイル名:行番号:」が付く(`luaL_dostring` だと、`[string "…"]` になって行が分かりにくい)。`luaL_loadfile` は、先頭のBOMと `#!` の行を読み飛ばし、開けない/読めないファイル(ディレクトリ、権限なし)をエラーとして返す。ただし、Luaが長いパスを縮める(`...` で始める)ので、メッセージのパスは欠けることがある。`ReportConfigErrors()` は、メッセージにファイルのパスが含まれなければ足す。
@@ -179,6 +180,25 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 - **罠：読み込み中に、Viewを操作するコマンドを呼ぶ**：`view_` はまだ null なので、`app.view_->…` で落ちる。`view_commands[]` と `privates[]` は、`Script::RegisterFunctions(..., wrapper)` の `wrapper` に `Application::lua_view_trampoline` を渡して**クロージャとして登録**し(本来の関数は upvalue(1))、トランポリンが「`view_` が無ければ `luaL_error`、あれば本来の関数へ中継」する。Luaの関数としては同じ名前・同じ引数のままなので、`Miata.command.X` を Lua で再定義して上書きする使い方も壊れない(登録の順序を変えて対処していない理由)。
 - **`pl_get_config_dir()`**：`$XDG_CONFIG_HOME` が**絶対パス**のときだけ使い、空や相対パスは無視して `~/.config`(XDG の仕様どおり。相対パスだと、起動した場所で設定の場所が変わってしまう)。GUI(Dock/Finder)から起動したアプリには、シェルの環境変数は渡らないので、ふつうは `~/.config/miata/init.lua`。
 - **テスト**：本物の `.app` と同じ構成の「模擬バンドル」(`Fake.app/Contents/{MacOS,Resources}` に、ハーネスの実行ファイルと、ビルド済みの `base.lua`/`test.lua` のコピー)の中から、実物の `Application::InitializeScript()` を呼び、`XDG_CONFIG_HOME` を切り替えて、`init.lua` のパターン(無し/上書き/`unbind`/構文エラー/実行時エラー/`error({})`/読み込み中のViewコマンド/ディレクトリ/権限なし/リンク切れ/BOM/`#!`/空/既定の設定が壊れている…)ごとにプロセスを分けて確かめる。クラッシュするケース(ミュータント)は、シグナルを自分で受けて静かに終了させる(macOS のクラッシュレポートのダイアログを出さないため)。
+
+## 色の設定（`Miata.config.color.*`）
+
+Lua からの代入先は `Config::Color`（`Config.h` の `CONFIG_COLOR_LIST` = `background`/`normal_text`/`normal_file`/`directory`）。**この一覧に足しただけでは何も起きない。描く側が `Config::Color().Get(...)` を読んで初めて効く。** `background` と `normal_text` は、最初のコミット（sokol/ImGui 時代）から一度も読まれておらず、設定しても効かなかった（OS が Light だと、背景は OS の純白のまま、白い `normal_file` の文字は白地に消えた）。色を足すときは、読む箇所まで作り、描画の実測（下の「テスト」）で確かめること。
+
+| 設定 | 使っている所 |
+|------|--------------|
+| `background` | ペイン本体（`FileListView::Draw` の先頭で全面を塗る）、ヘッダー（`DrawHeader`）、Quick Look の覆い（`_MiataQuickLookShield`）、ウィンドウ自体（`pl_set_window_background_color`。`InitializeImpl()` が `InitializeScript()` の後に一度呼ぶ） |
+| `normal_text` | ヘッダーのパスの文字（`DrawHeader`） |
+| `normal_file` / `directory` | 行の文字（`Draw`） |
+
+- **背景の alpha は使わない（常に不透明）**：背景を塗るときは `Color().Get(Background)` を直接使わず、必ず `Config::Background()`（alpha を 1 にして返す）を使う。半透明で塗ると、後ろのOSのテーマの色（Light なら白）が混ざり、OS の設定しだいで見た目が変わる。`pl_set_window_background_color` も不透明に塗る。
+- **背景と文字に、OS の色（`windowBackgroundColor`/`textColor` 等）を使わない**：OS のテーマに従い、Light では背景が純白（実測: Light `#ffffff` / Dark `#1e1e1e`）。ヘッダーの文字を OS の色にすると、背景を暗くしたとき黒文字が沈む（なので `normal_text` を読む）。ダイアログ（`Dialog.mm` ほか）は意図して OS の色のまま（`Miata.config.color` は効かない）。
+- **ブラウザ領域のビューの `appearance` を、背景の明るさに合わせる**：`BrowserView` のコンテナに `AppearanceForBackground()`（`NSColorUtil.h`。輝度 < 0.5 なら Dark）を設定する。ペインの境目の線（`NSSplitView` のディバイダ）やスクロールバーは OS が描き、Light 用は「黒の薄い線」「明るい帯」なので、暗い背景だと線が消える（実測: OS が Light で背景が黒だと、境目が `#000000` に消えた。Dark 用の外観なら `#212121`）。
+- **罠：ウィンドウやアプリ全体の `appearance` は切り替えない**：`pl_get_color`（`osx.mm`）は、描画の外（ダイアログの作成時など）では、`NSApp.appearance`/`window.appearance` を変えても OS の外観のままの色を返す（実測: `NSApp.appearance` を Dark にしても `windowBackgroundColor` は `#ffffff`）。全体を切り替えると、ダイアログの背景（`pl_get_color`）は白いまま、中のコントロールだけが Dark になって壊れる。切り替えるのは、`pl_get_color` を使わないビュー（ブラウザ領域のコンテナ）に限る。タイトルバーとダイアログは OS のテーマのまま。
+- **ウィンドウ自体の背景は起動時に一度だけ**（設定は起動時にだけ読むため）。ペインとヘッダーは描画のたびに設定を読む。ウィンドウ自体の背景は、ペインの境目の隙間と、リサイズ中に広がった部分にだけ見える。
+- **色の解釈**：`ToNSColor`（`colorWithRed:`）は sRGB（`colorWithSRGBRed:` と同じ。実測）。`"#rrggbb"`/`"#rrggbbaa"` は 16 進のとおりの色になる。
+- **未確認（実機）**：従来型スクロールバー（マウス接続時などに常時表示されるタイプ）の見た目（ヘッドレスの描画では描かれない）、タイトルバーとダイアログの見た目。
+- **テスト**：実物の `pl_create_main_window` と `views::View` を、画面に出さずに（`makeKeyAndOrderFront:`/`activateIgnoringOtherApps:` を何もしないものに差し替える）ウィンドウごとビットマップに描き（`bitmapImageRepForCachingDisplayInRect:` + `cacheDisplayInRect:toBitmapImageRep:`）、決めた位置の色を測る（`window.appearance` で OS の Light/Dark を模す。PNG にも保存して目で確かめられる）。ペインがウィンドウの背景に頼らず自分で塗れているかは、`pl_set_window_background_color` を呼ばずに測る。起動の配線（設定 → ウィンドウの背景）は、設定読み込みのテストと同じ模擬バンドルの中から、実物の `Application::Initialize()` を呼んで確かめる。**罠**：ウィンドウの描画を `colorAtX:y:` で読み戻すと、中間色の数値がずれる（`#112233` → `#1b2e41`。sRGB を明示した見本でも同じなので測定の癖で、黒と白はずれない）。中間色は許容誤差で比べる。
 
 ## C++ から Lua へ関数を登録する手順
 
