@@ -81,8 +81,9 @@ namespace miata::views {
         // 場合は、再スキャン前の画面上の並びで次に残っているファイル(無ければその前)へ寄せる。
         // cursor_toを渡すと、再スキャン後にそのパスのファイルへカーソルを合わせる(リネームの
         // 直後など、旧パスが消えて新しいパスに移るとき用。一覧に無ければ上記の通常の寄せ方)。
-        // 失敗時(ディレクトリが読めない等)は何も変えずにエラーメッセージを返す。
-        std::expected<void, std::string> Reload(std::optional<std::filesystem::path> cursor_to = std::nullopt);
+        // 失敗時(ディレクトリが読めない等)は何も変えずにエラーを返す(権限が無い失敗は、
+        // FileError::permission_deniedで分かる)。
+        std::expected<void, FileError> Reload(std::optional<std::filesystem::path> cursor_to = std::nullopt);
 
         // --- マーク済みファイルのドラッグ&ドロップ(他アプリへの持ち出し) ---
         // 実際のドラッグ開始とドラッグ画像はFileListView.mm内のNSViewが担い、ここは

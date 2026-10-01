@@ -71,8 +71,7 @@ namespace miata {
             ? (std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing)
             : (std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing);
 
-        auto failed_count = 0;
-        std::string last_error;
+        FileErrorSummary failures;
 
         for (auto& src : sources) {
             auto dst = dest_dir / src.filename();
@@ -87,8 +86,7 @@ namespace miata {
                     if (!overwrite) continue; // ユーザーがスキップを選択済み。rename()の暗黙の上書きに頼らない
                     std::filesystem::remove_all(dst, ec);
                     if (ec) {
-                        ++failed_count;
-                        last_error = ec.message();
+                        failures.Add(FileError::From(ec));
                         continue;
                     }
                 }
@@ -104,16 +102,16 @@ namespace miata {
             }
 
             if (ec) {
-                ++failed_count;
-                last_error = ec.message();
+                failures.Add(FileError::From(ec));
             }
         }
 
         FileOperationCompleted completed{
             .type = type,
-            .success = failed_count == 0,
-            .failed_count = failed_count,
-            .error_message = last_error,
+            .success = failures.count == 0,
+            .failed_count = failures.count,
+            .error_message = failures.shown.message,
+            .permission_denied = failures.shown.permission_denied,
             .src_model = src_model,
             .dest_model = dest_model,
             .src_dir = src_dir,

@@ -1,6 +1,20 @@
 #import <AppKit/AppKit.h>
+#include <format>
 #include "View.h"
 #include "../platform.h"
+
+namespace {
+    // 権限が無い失敗のときに添える、許可のしかたの案内。権限が無い失敗(EPERM / EACCES)のうち、OSの保護(プライバシーと
+    // セキュリティ)で止められたものは、システム設定の「フルディスクアクセス」で許可すれば解消する。ファイル自体の権限
+    // (所有者・アクセス権)が原因のものは、それでは解消しないので、その旨も添える(どちらも同じ「権限が無い」として届く
+    // ので、原因は区別できない)。アプリ本体(.app)の削除・変更は、フルディスクアクセスとは別に「App管理」の許可が要る。
+    constexpr const char* kPermissionGuide =
+        "権限がないため、操作できませんでした。\n\n"
+        "macOS の保護で止められた場合は、システム設定の「プライバシーとセキュリティ」→"
+        "「フルディスクアクセス」で Miata を許可すると、操作できるようになります（アプリ本体の削除や変更は「App管理」）。"
+        "許可したあと、反映されないときは Miata を起動し直してください。\n\n"
+        "ファイル自体の権限が原因のときは、Finder の「情報を見る」で、所有者とアクセス権を確認してください。";
+}
 
 namespace miata::views {
     View::View() : browser_(std::make_unique<BrowserView>())
@@ -33,6 +47,48 @@ namespace miata::views {
         OpenNextDialogIfNeeded();
     }
 
+    void View::ReportFileError(const std::string& what, const FileError& error)
+    {
+        auto reason = std::format("{}: {}", what, error.message);
+        if (!error.permission_denied) {
+            RequestDialog(std::make_shared<ConfirmDialog>(
+                [](IDialog&) {},
+                ConfirmDialog::arguments{
+                    .message_ = reason,
+                    .button_text_ = "OK",
+                }
+            ));
+            return;
+        }
+
+        // 権限が無い(OSの保護など)。許可のしかたを案内し、システム設定を開けるようにする。
+        // 既定は「閉じる」(エラーを閉じようとしたEnterで、システム設定が開いてしまわないように)
+        RequestDialog(std::make_shared<YesNoDialog>(
+            [](IDialog& dialog) {
+                if (dynamic_cast<YesNoDialog&>(dialog).Result()) pl_open_full_disk_access_settings();
+            },
+            YesNoDialog::arguments{
+                .message_ = reason + "\n\n" + kPermissionGuide,
+                .default_select_ = false,
+                .yes_text_ = "システム設定を開く",
+                .no_text_ = "閉じる",
+            }
+        ));
+    }
+
+    void View::MoveToParentOrReport(models::FileListModel& list)
+    {
+        auto parent = list.Path().parent_path();
+        auto result = list.NavigateToParent();
+        if (!result) ReportFileError(std::format("移動できませんでした ({})", parent.string()), result.error());
+    }
+
+    void View::JumpToOrReport(models::FileListModel& list, const std::filesystem::path& path)
+    {
+        auto result = list.TryJumpTo(path);
+        if (!result) ReportFileError(std::format("移動できませんでした ({})", path.string()), result.error());
+    }
+
     void View::OpenNextDialogIfNeeded()
     {
         if (current_dialog_ != nullptr) return;
@@ -61,7 +117,7 @@ namespace miata::views {
         switch (dir) {
         case constants::Navigate::Left:
             if (browser_->IsLeft()) {
-                browser_model.Left().NavigateToParent();
+                MoveToParentOrReport(browser_model.Left());
             }
             else {
                 browser_->FocusLeft();
@@ -69,7 +125,7 @@ namespace miata::views {
             break;
         case constants::Navigate::Right:
             if (browser_->IsRight()) {
-                browser_model.Right().NavigateToParent();
+                MoveToParentOrReport(browser_model.Right());
             }
             else {
                 browser_->FocusRight();
@@ -86,12 +142,10 @@ namespace miata::views {
                 auto& entry_model = browser_->CurrentFileEntryModel();
                 if (entry_model.IsDirectory()) {
                     if (browser_->IsLeft()) {
-                        auto new_path = browser_model.Left().Path() / entry_model.Name();
-                        browser_model.Left().JumpTo(new_path);
+                        JumpToOrReport(browser_model.Left(), browser_model.Left().Path() / entry_model.Name());
                     }
                     else {
-                        auto new_path = browser_model.Right().Path() / entry_model.Name();
-                        browser_model.Right().JumpTo(new_path);
+                        JumpToOrReport(browser_model.Right(), browser_model.Right().Path() / entry_model.Name());
                     }
                 }
             }

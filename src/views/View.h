@@ -7,6 +7,7 @@
 #include <queue>
 #include "Dialog.h"
 #include "BrowserView.h"
+#include "../FileError.h"
 #include "../models/Model.h"
 
 namespace miata::views {
@@ -18,6 +19,10 @@ namespace miata::views {
         void Navigate(constants::Navigate dir);
 
         void RequestDialog(std::shared_ptr<IDialog> dialog);
+        // ファイル操作の失敗を、ダイアログで知らせる。whatは何に失敗したか("リネームできませんでした"など)で、
+        // 画面には「what: OSの説明」と出る。権限が無い失敗(OSの保護など)のときは、許可のしかた(システム設定の
+        // 「フルディスクアクセス」)も案内し、システム設定を開くボタンを付ける。
+        void ReportFileError(const std::string& what, const FileError& error);
         bool IsAnyDialogOpened() const
         {
             return current_dialog_ != nullptr;
@@ -56,6 +61,10 @@ namespace miata::views {
 
     private:
         void OpenNextDialogIfNeeded();
+        // 親ディレクトリ/pathへ移動する。読めない場合(権限が無い等)は、移動せずに、ダイアログで知らせる
+        // (例外で落とさない)。
+        void MoveToParentOrReport(models::FileListModel& list);
+        void JumpToOrReport(models::FileListModel& list, const std::filesystem::path& path);
         // listを表示しているペイン(どちらでもなければnullptr)
         FileListView* FindFileListView(const models::FileListModel& list);
 

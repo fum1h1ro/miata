@@ -15,6 +15,19 @@ namespace miata::models {
         }
     }
 
+    // FileEntryModelのコンストラクタはFileListModelだけが呼べるので、メンバー(private)にしている
+    std::expected<std::vector<std::unique_ptr<FileEntryModel>>, std::error_code> FileListModel::Scan(const std::filesystem::path& dir)
+    {
+        std::vector<std::unique_ptr<FileEntryModel>> scanned;
+        std::error_code ec;
+        std::filesystem::directory_iterator it(dir, ec);
+        for (; !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+            scanned.emplace_back(std::unique_ptr<FileEntryModel>(new FileEntryModel(*it)));
+        }
+        if (ec) return std::unexpected(ec);
+        return scanned;
+    }
+
     FileListModel::FileListModel()
     {
         entries_.reserve(1024);
@@ -36,7 +49,20 @@ namespace miata::models {
         path_.Value(path);
     }
 
-    std::expected<void, std::string> FileListModel::Reload()
+    std::expected<void, FileError> FileListModel::TryJumpTo(const std::filesystem::path& path)
+    {
+        // 先に新しい一覧を作り、失敗した場合は現在の状態(一覧もパスも)に一切触れない
+        auto mtime = DirectoryMtime(path); // 走査より前に取る
+        auto scanned = Scan(path);
+        if (!scanned) return std::unexpected(FileError::From(scanned.error()));
+
+        scanned_mtime_ = mtime;
+        entries_ = std::move(*scanned);
+        path_.Value(path);
+        return {};
+    }
+
+    std::expected<void, FileError> FileListModel::Reload()
     {
         auto path = path_.Value();
 
@@ -44,45 +70,37 @@ namespace miata::models {
         // 再読み込みは外部でディレクトリが変わった後に使うため、JumpToと違って
         // 消えた/権限の無いディレクトリでも例外を投げずにエラーとして返す。
         auto mtime = DirectoryMtime(path); // 走査より前に取る
-        std::vector<std::unique_ptr<FileEntryModel>> scanned;
-        std::error_code ec;
-        std::filesystem::directory_iterator it(path, ec);
-        for (; !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
-            scanned.emplace_back(std::unique_ptr<FileEntryModel>(new FileEntryModel(*it)));
-        }
-        if (ec) return std::unexpected(ec.message());
+        auto scanned = Scan(path);
+        if (!scanned) return std::unexpected(FileError::From(scanned.error()));
 
         std::unordered_set<std::filesystem::path> marked;
         for (auto& entry : entries_) {
             if (entry->IsMarked()) marked.insert(entry->Path());
         }
-        for (auto& entry : scanned) {
+        for (auto& entry : *scanned) {
             if (marked.contains(entry->Path())) entry->Mark(true);
         }
 
-        entries_ = std::move(scanned);
+        entries_ = std::move(*scanned);
         scanned_mtime_ = mtime;
         path_.Value(path);
         return {};
     }
 
-    void FileListModel::NavigateToParent()
+    std::expected<void, FileError> FileListModel::NavigateToParent()
     {
-        if (path_.Value().has_parent_path()) {
-            JumpTo(path_.Value().parent_path());
-        }
+        if (!path_.Value().has_parent_path()) return {};
+        return TryJumpTo(path_.Value().parent_path());
     }
 
-    void FileListModel::Invoke(int idx)
+    std::expected<void, FileError> FileListModel::Invoke(int idx)
     {
-        if (idx < 0 || idx >= entries_.size()) return;
+        if (idx < 0 || idx >= entries_.size()) return {};
         auto& entry = entries_[(size_t)idx];
         printf("invoke: %s\n", entry->Name().c_str());
-        if (entry->IsDirectory()) {
-            printf("go to: %s\n", (path_.Value() / entry->Name()).c_str());
-            auto new_path = path_.Value() / entry->Name();
-            JumpTo(new_path);
-        }
+        if (!entry->IsDirectory()) return {};
+        printf("go to: %s\n", (path_.Value() / entry->Name()).c_str());
+        return TryJumpTo(path_.Value() / entry->Name());
     }
 
     void FileListModel::Mark(int idx)

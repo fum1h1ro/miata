@@ -364,16 +364,51 @@ std::filesystem::path pl_get_config_dir()
     }
 }
 
-std::expected<void, std::string> pl_trash_file(const std::filesystem::path& path)
+// NSErrorから、FileErrorを作る。権限が無い失敗(trashItemAtURL:では、書き込めない・OSの保護で止められた場合に
+// NSCocoaErrorDomainの513が返る。実測)を、権限の失敗として区別する。Cocoaのコードに加えて、元になったエラー
+// (NSUnderlyingErrorKey)のPOSIXのEPERM/EACCES、OSStatusのafpAccessDenied(-5000)も見る。
+static miata::FileError ToFileError(NSError* error)
+{
+    miata::FileError result;
+    result.message = error.localizedDescription.length > 0 ? error.localizedDescription.UTF8String : "unknown error";
+    for (NSError* e = error; e; e = e.userInfo[NSUnderlyingErrorKey]) {
+        if ([e.domain isEqualToString:NSCocoaErrorDomain]) {
+            if (e.code == NSFileReadNoPermissionError || e.code == NSFileWriteNoPermissionError) result.permission_denied = true;
+        }
+        else if ([e.domain isEqualToString:NSPOSIXErrorDomain]) {
+            if (e.code == EPERM || e.code == EACCES) result.permission_denied = true;
+        }
+        else if ([e.domain isEqualToString:NSOSStatusErrorDomain]) {
+            if (e.code == -5000) result.permission_denied = true; // afpAccessDenied
+        }
+    }
+    return result;
+}
+
+std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path& path)
 {
     @autoreleasepool {
         NSURL* url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
         NSError* error = nil;
         BOOL ok = [[NSFileManager defaultManager] trashItemAtURL:url resultingItemURL:nil error:&error];
         if (!ok) {
-            return std::unexpected(std::string(error.localizedDescription.UTF8String));
+            return std::unexpected(ToFileError(error));
         }
         return {};
+    }
+}
+
+bool pl_open_full_disk_access_settings()
+{
+    @autoreleasepool {
+        NSWorkspace* workspace = [NSWorkspace sharedWorkspace];
+        // 「プライバシーとセキュリティ > フルディスクアクセス」を直接開く(System Settingsも、この形式のURLを解釈する)
+        NSURL* pane = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"];
+        if ([workspace openURL:pane]) return true;
+        // 開けなかった(OSの版で、画面のURLが変わった場合など)ときは、システム設定そのものを開く
+        // (案内の文面に、「プライバシーとセキュリティ」→「フルディスクアクセス」とたどる手順がある)
+        NSURL* settings = [workspace URLForApplicationWithBundleIdentifier:@"com.apple.systempreferences"];
+        return settings && [workspace openURL:settings];
     }
 }
 
