@@ -1,6 +1,5 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
-#import <Quartz/Quartz.h>
 #import <CoreServices/CoreServices.h>
 #include "../src/platform.h"
 #include <unistd.h>
@@ -643,57 +642,3 @@ Color4f pl_get_color(pl_color_type type)
         }
     }
 }
-
-
-
-
-@interface MiataQuickLookController : NSViewController <QLPreviewPanelDataSource, QLPreviewPanelDelegate>
-@property (nonatomic, strong) NSArray* previewFilePathArray;
-@end
-
-@implementation MiataQuickLookController
-- (void)showPreviewForFileList:(NSArray*)filePathArray
-{
-    self.previewFilePathArray = filePathArray;
-    QLPreviewPanel* panel = [QLPreviewPanel sharedPreviewPanel];
-    [panel setDataSource:self];
-    [panel setDelegate:self];
-    [panel makeKeyAndOrderFront:nil];
-}
-- (NSInteger)numberOfPreviewItemsInPreviewPanel:(QLPreviewPanel*)panel
-{
-    return (NSInteger)self.previewFilePathArray.count;
-}
-- (id<QLPreviewItem>)previewPanel:(QLPreviewPanel*)panel previewItemAtIndex:(NSInteger)index
-{
-    return self.previewFilePathArray[(NSUInteger)index];
-}
-- (BOOL)acceptsPreviewPanelControl:(QLPreviewPanel*)panel
-{
-    return YES;
-}
-- (void)beginPreviewPanelControl:(QLPreviewPanel*)panel
-{
-    panel.delegate = self;
-    panel.dataSource = self;
-}
-- (void)endPreviewPanelControl:(QLPreviewPanel*)panel
-{
-}
-@end
-
-void pl_quick_preview(const std::vector<std::string>& path_list)
-{
-    @autoreleasepool {
-        NSMutableArray* items = [NSMutableArray arrayWithCapacity:path_list.size()];
-        for (const auto& path : path_list) {
-            [items addObject:[NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]]];
-        }
-        MiataQuickLookController* controller = [[MiataQuickLookController alloc] init];
-        [controller showPreviewForFileList:items];
-    }
-}
-
-
-
-

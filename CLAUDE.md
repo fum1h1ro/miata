@@ -33,7 +33,7 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 
 **構成:**
 - `src/models/` — データモデル（`FileListModel`、`FileEntryModel`、`BrowserModel`）
-- `src/views/` — UI レイヤー。`View`（ダイアログキュー管理・ブラウザ操作の起点）、`BrowserView`（左右ペインの `NSSplitView` コンテナ）、`FileListView`（ファイル一覧本体。`NSScrollView` + 自前 `NSView.drawRect` で描画）、`Dialog`（`IDialog`/`DialogPanel` によるダイアログ基盤）
+- `src/views/` — UI レイヤー。`View`（ダイアログキュー管理・ブラウザ操作の起点）、`BrowserView`（左右ペインの `NSSplitView` と、その上に被せるプレビューの覆いを持つコンテナ）、`FileListView`（ファイル一覧本体。`NSScrollView` + 自前 `NSView.drawRect` で描画）、`QuickLookView`（Quick Look のプレビューを載せる覆い）、`Dialog`（`IDialog`/`DialogPanel` によるダイアログ基盤）
 - `src/widgets/` は存在しない（過去のドキュメントの残骸。汎用ウィジェットは今のところ `views/` 直下に個別実装されている）
 - `platforms/` — OS 固有実装（`.mm`）。現状 macOS 用の `osx.mm` と `main.mm` のみ
 
@@ -47,6 +47,7 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 | `views/View.h/.mm` | ダイアログキュー管理（`RequestDialog`/`CheckDialogState`）、ブラウザ操作へのキー入力ルーティング |
 | `views/Dialog.h/.mm` | ダイアログ基盤。`IDialog`（confirm/yesno/inputtext/custom/filterlist の基底）と `DialogPanel`（実体となる非モーダル NSView オーバーレイ）。詳細は後述 |
 | `views/FileListView.h/.mm` | ファイル一覧の描画・スクロール・キーボードカーソル移動（`NSScrollView` + 自前描画）。マーク済みファイルのドラッグ元（`NSDraggingSource`）も兼ねる（後述） |
+| `views/QuickLookView.h/.mm` | Quick Look（`QLPreviewView`）のプレビューを一覧の上に被せる覆い。クリックを止めてキー入力を守る（後述） |
 | `misc.h` | `Flags`、`ReactiveProperty`、`MessageBroker` などのユーティリティ |
 | `platform.h` | OS 依存処理の抽象境界（`pl_*` 関数群の宣言）。色・フォント・ダイアログ用構造体・ファイル操作・ディレクトリ監視（`pl_watch_directory`）・プロセス起動など |
 | `platforms/osx.mm` | `platform.h` の macOS 実装。AppKit 型はこの層（と `views/*.mm`）にのみ閉じ込め、ヘッダ（`.h`）には持ち込まない規約 |
@@ -130,6 +131,17 @@ C++ 側は `Miata.command.*`（`Application.cc` の `commands[]`）と `Miata._p
 - **ダイアログ表示中は保留する**：`View::UpdateAutoReload()` が `!IsAnyDialogOpened()` を渡す。リネームの入力中に外部でそのファイルが消えると、反映によってカーソルが隣のファイルへ動き、確定時の `rename_execute`（カーソル位置のエントリを改名する）が**別のファイルを改名してしまう**ため。`Application::Update()` では `Script::Update()`（コルーチンがダイアログの結果を受けて `rename_execute` などを呼ぶ）と `CheckDialogState()` の**後**に `UpdateAutoReload()` を呼ぶこと。
 - **待ちとスロットル**（`FileListView.mm` の定数）：検知から 300ms 待って反映し、自動リロードどうしは最短 500ms（走査に時間がかかるときは、かかった時間の 8 倍）あける。失敗（ディレクトリが消えた等）は再試行しない（次のイベントか、手動のリロードを待つ）。
 - **テストの罠**：`rxcpp` の subscription はスコープを抜けても購読解除されない。ローカル変数を参照するラムダを `ObservePath().subscribe` に渡したら、変数の寿命が切れる前に `unsubscribe()` すること（アプリ側は `misc::SubscriptionGuard`）。
+
+## プレビュー（Quick Look）
+
+`Miata.command.quick_look([pane])` → `Application::lua_command_quick_look` → `View::ToggleQuickLook` → `BrowserView::ToggleQuickLook`。カーソル下のファイルを `QLPreviewView`（QuickLookUI）で、一覧の上に被せて表示する。別ウィンドウの `QLPreviewPanel`（旧 `pl_quick_preview`）は使わない（パネルはウィンドウで、ビューにできないため。旧実装は削除済み）。
+
+- **構造**：`BrowserView::NativeView()` は `_MiataBrowserContainer`（`BrowserView.mm`）で、`NSSplitView`（左右ペイン）と、その上に重ねる覆い（`QuickLookView::NativeView()` = `_MiataQuickLookShield`）を子に持つ。覆いの中に `QLPreviewView` を入れる。覆いの位置は、範囲（`constants::QuickLookArea` = `Both`/`Left`/`Right`）に応じてペインの frame から決め、**`NSSplitView` のデリゲート（`splitViewDidResizeSubviews:`）で追従**する（ウィンドウのリサイズもディバイダのドラッグもここに来る）。覆いは不透明に塗る（読み込み中や空のとき、下の一覧が透けないように）。
+- **範囲と「何を見せるか」は別**：見せるのは常に「カーソルのあるペインのカーソル下のファイル」で、範囲は被せる場所だけを決める。Lua には `"both"`/`"left"`/`"right"`（省略・nil は both）で公開し、変換は `Application.cc` の `ParseQuickLookArea()`（`ParsePane()` に `"both"` を足したもの）に集約している。`ToggleQuickLook(area)` は、同じ範囲なら閉じ、別の範囲なら範囲だけ切り替える（`QLPreviewView` は作り直さない）。`Navigate::Cancel`（Esc）でも閉じる。
+- **追従はティック駆動**：カーソル下のファイルは、カーソル移動・ペイン切替・ディレクトリ移動・再読み込み・ソートなど多くの経路で変わり、通知点が 1 つに揃っていない。通知を集めず、`Application::Update()` → `BrowserView::UpdateQuickLook()` が毎ティック `FileListView::CurrentPath()` を見て、直近の値（`quick_look_target_`）とプレビューに渡した値（`quick_look_shown_`）を比べる（`UpdateAutoReload` と同じく、状態を見て判断する方式）。変わってから 0.1 秒（`kQuickLookSettleDelay`）落ち着いたら切り替える。出した時点のファイルは待たずに設定する。`FileListView::GetCurrent()` は一覧が空だと範囲外を読むので、空になり得る場所では `CurrentPath()`（空なら nullopt）を使う。
+- **キー入力の安全（実測済み）**：`QLPreviewView` は `acceptsFirstResponder` が YES で、**クリックすると first responder を奪う**（覆い無しで確認済み）。奪われるとキー入力が `MiataRootView` に届かなくなる恐れがあるので、覆いが `hitTest:` で常に自分を返し、クリックを `QLPreviewView` に渡さない（`_MiataFileListNSView` が first responder にならないのと同じ考え方）。代償として、プレビューの中のマウス操作（PDF のスクロール、動画の再生ボタン）と、覆った範囲でのマーク済みファイルのドラッグはできない。一方、`QLPreviewView` は読み込み（`previewItem` の設定）では first responder を取りに来ず（キーウィンドウでも確認済み）、`performKeyEquivalent:` も横取りしなかったので、「奪われたら戻す」処理は入れていない。
+- **罠（`QLPreviewView` の `close`、実測。守らないとプロセスが異常終了する）**：`close` は**ウィンドウに載っている間に、1 回だけ**呼ぶ（二重に呼ぶ・ウィンドウから外れた後に呼ぶと、QuickLook の `_QLRaiseAssert` で abort）。`close` した後のビューには**何も触らない**（`previewItem` の設定を含む）。だから `QuickLookView::Hide()` は、外す前に `close` してすぐ手放し、出すたびに `QLPreviewView` を作り直す（1 回 0.5ms 未満）。`shouldCloseWithWindow` は **NO** にする（既定の YES だと、ウィンドウを閉じるときに QuickLook 側も自動で `close` するため、その後の `Hide()` が二重 close になる。ウィンドウを閉じるとアプリは終了するが、その間もタイマーのティックは回る）。
+- **テストの罠**：ヘッドレスのハーネスでも、覆いを載せる親はウィンドウに入れておくこと（ウィンドウ外での `close` は abort する）。`QLPreviewView` の `setPreviewItem:`/`close` をメソッド差し替えで記録すると、`close` 後の設定などの違反を検出できる。
 
 ## C++ から Lua へ関数を登録する手順
 

@@ -1,13 +1,17 @@
 #ifndef VIEWS_BROWSER_VIEW_H__
 #define VIEWS_BROWSER_VIEW_H__
 
+#include <chrono>
+#include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include "Constants.h"
 #include "FileListView.h"
+#include "QuickLookView.h"
 
 namespace miata::views {
-    // 左右2ペインのファイルリストをNSSplitViewで並べる。
+    // 左右2ペインのファイルリストをNSSplitViewで並べ、その上にQuick Lookのプレビューを被せられる。
     class BrowserView {
     public:
         BrowserView();
@@ -57,10 +61,33 @@ namespace miata::views {
             right_->SetDragGuard(guard);
         }
 
+        // --- Quick Look(プレビューを一覧の上に被せる) ---
+        // プレビューするのは、カーソルのあるペインのカーソル下のファイル。被せる範囲(areaは両ペイン/左/右)は
+        // それとは無関係に選べる(反対側のペインだけに被せれば、カーソルのある一覧は見えたまま操作できる)。
+        // すでに同じ範囲に出していれば閉じる(トグル)。別の範囲に出していれば範囲だけ切り替える。
+        // 呼んだ後に表示中ならtrueを返す。
+        bool ToggleQuickLook(constants::QuickLookArea area);
+        void HideQuickLook();
+        inline bool IsQuickLookShown() const
+        {
+            return quick_look_area_.has_value();
+        }
+        // 毎ティック(Application::Update)から呼ぶ。カーソル下のファイルが変わったら、カーソルの動きが
+        // 落ち着くのを少し待ってからプレビューを切り替える(動かし続けている間は切り替えない)。
+        void UpdateQuickLook();
+
     private:
         std::shared_ptr<FileListView> left_;
         std::shared_ptr<FileListView> right_;
         int cursorIndex_ = 0;
+
+        std::unique_ptr<QuickLookView> quick_look_;
+        std::optional<constants::QuickLookArea> quick_look_area_; // 表示中の範囲。表示していなければnullopt
+        // カーソル下のファイル(nulloptは一覧が空)。shown_はプレビューに渡した分、target_は直近に見た分で、
+        // 食い違っている間が「切り替え待ち」(target_since_からの経過で、落ち着いたかを見る)
+        std::optional<std::filesystem::path> quick_look_shown_;
+        std::optional<std::filesystem::path> quick_look_target_;
+        std::chrono::steady_clock::time_point quick_look_target_since_;
 
         struct Impl;
         std::unique_ptr<Impl> impl_;

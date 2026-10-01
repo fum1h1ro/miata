@@ -58,6 +58,7 @@ namespace miata {
         static int lua_command_delete_marked(lua_State* L);
         static int lua_command_current_pane(lua_State* L);
         static int lua_command_reload(lua_State* L);
+        static int lua_command_quick_look(lua_State* L);
         static int lua_command_sort(lua_State* L);
 
         static int lua_private_dialog_open(lua_State* L);

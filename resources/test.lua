@@ -99,6 +99,15 @@ end)
 Miata.command.bind("n", "<C-r>", function()
     Miata.command.reload()
 end)
+-- プレビュー(Quick Look)。カーソル下のファイルを、引数なしなら両ペインに被せて表示する。もう一度押すか Esc で閉じる
+Miata.command.bind("n", "p", function()
+    Miata.command.quick_look()
+end)
+-- 反対側のペインだけに被せる(カーソルのある一覧は見えたまま)
+Miata.command.bind("n", "<S-p>", function()
+    local other = Miata.command.current_pane() == "left" and "right" or "left"
+    Miata.command.quick_look(other)
+end)
 Miata.command.bind("n", "s", function()
     local result = Miata.command.dialog_custom({
         title = "ソート",

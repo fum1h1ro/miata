@@ -134,6 +134,7 @@ namespace miata {
             { "delete_marked", lua_command_delete_marked },
             { "current_pane", lua_command_current_pane },
             { "reload", lua_command_reload },
+            { "quick_look", lua_command_quick_look },
             { "sort", lua_command_sort },
         };
         script.RegisterFunctions(
@@ -192,6 +193,8 @@ namespace miata {
         // Luaのコルーチン(Script::Update)とダイアログの後始末(CheckDialogState)の後に行う。
         // リネームなど、ダイアログの結果を受けて一覧のカーソルに作用する処理が終わってから反映するため。
         view_->UpdateAutoReload();
+        // 自動リロードの後に行う(リロードで動いたカーソルに、同じティックで追従を始められるように)
+        view_->UpdateQuickLook();
     }
 
     void Application::KeyDown(uint16_t key_code, uint16_t mods)
@@ -663,6 +666,15 @@ namespace miata {
         return std::nullopt;
     }
 
+    // Quick Lookを被せる範囲。ペイン名に、両ペインを表す "both" を足したもの
+    static std::optional<views::constants::QuickLookArea> ParseQuickLookArea(const char* name)
+    {
+        if (std::strcmp(name, "both") == 0) return views::constants::QuickLookArea::Both;
+        auto pane = ParsePane(name);
+        if (!pane) return std::nullopt;
+        return *pane == views::constants::Pane::Left ? views::constants::QuickLookArea::Left : views::constants::QuickLookArea::Right;
+    }
+
     // Miata.command.current_pane() -> "left" | "right"  (カーソルのあるペイン)
     int Application::lua_command_current_pane(lua_State* L)
     {
@@ -700,6 +712,29 @@ namespace miata {
             ));
         }
         lua_pushboolean(L, result.has_value());
+        return 1;
+    }
+
+    // Miata.command.quick_look([pane]) -> boolean
+    // カーソルのあるペインのカーソル下のファイルを、Quick Lookのプレビューとして一覧の上に被せて表示する。
+    // paneは被せる範囲で、"left" / "right" はそのペインだけ、省略・nil・"both" は両ペインにまたがる1枚。
+    // 表示中に同じ指定で呼ぶと閉じる(別の指定なら範囲だけ切り替える)。呼んだ後に表示中ならtrueを返す。
+    int Application::lua_command_quick_look(lua_State* L)
+    {
+        auto& app = Application::Instance();
+
+        auto area = views::constants::QuickLookArea::Both;
+        if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
+            Script::CheckArgType(L, 1, LUA_TSTRING);
+            auto parsed = ParseQuickLookArea(lua_tostring(L, 1));
+            if (!parsed) {
+                luaL_error(L, "unknown pane: %s (expected \"both\", \"left\" or \"right\")", lua_tostring(L, 1));
+                return 0;
+            }
+            area = *parsed;
+        }
+
+        lua_pushboolean(L, app.view_->ToggleQuickLook(area));
         return 1;
     }
 
