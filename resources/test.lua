@@ -5,6 +5,9 @@ Miata.config.color.background = "#11223344"
 Miata.config.color.normal_text = "#aaff55ff"
 Miata.config.color.normal_file = "#ffffffff"
 Miata.config.color.directory = "#00ffaaff"
+-- 検索で一致した部分の背景色。search_current は、カーソルのある行(今いるマッチ)の一致部分
+Miata.config.color.search_match = "#7a5c00ff"
+Miata.config.color.search_current = "#c06000ff"
 -- Miata.config.set_font("フォント名") / Miata.config.set_font_size(size) でファイル一覧のフォントを指定できる(未指定ならデフォルト)
 
 local command <const> = Miata.command
@@ -110,6 +113,17 @@ end)
 Miata.command.bind("n", "<S-p>", function()
     local other = Miata.command.current_pane() == "left" and "right" or "left"
     Miata.command.quick_look(other)
+end)
+-- ファイル名の検索(vim の / n N)。/ でそのペインの下に入力欄が出て、打つたびにカーソルがマッチへ飛ぶ。
+-- Enter で確定(n / N で次・前のマッチへ)、入力中の Esc で取り消し、通常時の Esc で検索を消す
+Miata.command.bind("n", "/", function()
+    Miata.command.search()
+end)
+Miata.command.bind("n", "n", function()
+    Miata.command.search_next()
+end)
+Miata.command.bind("n", "<S-n>", function()
+    Miata.command.search_prev()
 end)
 Miata.command.bind("n", "s", function()
     local result = Miata.command.dialog_custom({

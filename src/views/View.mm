@@ -93,6 +93,9 @@ namespace miata::views {
     {
         if (current_dialog_ != nullptr) return;
         if (dialog_requests_.empty()) return;
+        // 検索の入力中なら、先に確定して、入力欄のfirst responderを手放す(理由は
+        // BrowserView::CommitSearchInput。ファイル操作の完了を知らせるダイアログなどが、入力中に割り込むことがある)
+        browser_->CommitSearchInput();
         current_dialog_ = dialog_requests_.front();
         dialog_requests_.pop();
         current_dialog_->Open();
@@ -151,11 +154,16 @@ namespace miata::views {
             }
             break;
         case constants::Navigate::Cancel:
+            // Escは、プレビューも、カーソルのペインの検索(ハイライトと、下端のバー)も閉じる
             browser_->HideQuickLook();
+            browser_->ClearSearch();
             break;
         default:
             break;
         }
+        // カーソルの移動・ペインの切り替え・ディレクトリの移動で、検索バーの件数やバーの出入りが変わるので、
+        // 次のティックを待たずに更新する
+        browser_->UpdateSearchBar();
     }
 
     models::FileListModel& View::CurrentList()
@@ -226,6 +234,28 @@ namespace miata::views {
     void View::UpdateQuickLook()
     {
         browser_->UpdateQuickLook();
+    }
+
+    bool View::BeginSearch()
+    {
+        if (IsAnyDialogOpened()) return false;
+        return browser_->BeginSearch();
+    }
+
+    bool View::StepSearch(int dir)
+    {
+        if (IsAnyDialogOpened()) return false;
+        return browser_->StepSearch(dir);
+    }
+
+    bool View::ClearSearch()
+    {
+        return browser_->ClearSearch();
+    }
+
+    void View::UpdateSearchBar()
+    {
+        browser_->UpdateSearchBar();
     }
 
     void View::ToggleFocus()

@@ -53,7 +53,7 @@
 
 // クリッピング付きの一覧描画ビュー。drawRect:のdirtyRectの範囲だけを描画対象にすることで、
 // 候補が数千件あっても実際に見えている行数分しか描画コストがかからないようにする
-// (FileListView::Draw()は行数が少ない前提で全行を無条件描画しており、それとの意図的な差分)。
+// (FileListView::Draw()も同じ方式)。
 @interface _MiataFilterListNSView : NSView
 @property (nonatomic, assign) miata::views::FilterListDialog* owner;
 @end

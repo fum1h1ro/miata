@@ -15,6 +15,8 @@ extern "C" {
     X(NormalText, normal_text) \
     X(NormalFile, normal_file) \
     X(Directory, directory) \
+    X(SearchMatch, search_match) \
+    X(SearchCurrent, search_current) \
 
 
 

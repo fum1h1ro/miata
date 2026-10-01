@@ -7,6 +7,7 @@
 #include "../platform.h"
 #include "../Config.h"
 #include "NSColorUtil.h"
+#include "ViewMetrics.h"
 
 namespace {
     constexpr CGFloat kDragStartDistance = 4; // 押下位置からこれ以上動いたらドラッグ開始とみなす(pt)
@@ -29,7 +30,7 @@ namespace {
 - (BOOL)acceptsFirstMouse:(NSEvent*)event { return YES; }
 - (void)drawRect:(NSRect)dirtyRect
 {
-    if (self.owner) self.owner->Draw();
+    if (self.owner) self.owner->Draw(NSMinY(dirtyRect), NSMaxY(dirtyRect));
 }
 - (void)mouseDown:(NSEvent*)event
 {
@@ -106,6 +107,8 @@ namespace {
 @property (nonatomic, weak) NSView* headerView;
 @property (nonatomic, weak) NSView* scrollView;
 @property (nonatomic, assign) CGFloat headerHeight;
+// スクロール部分の下に空ける高さ。検索バーを重ねる帯(FileListView::SetBottomInset)
+@property (nonatomic, assign) CGFloat footerHeight;
 - (void)layoutChildren;
 @end
 @implementation _MiataFileListLayoutContainer
@@ -115,7 +118,13 @@ namespace {
     CGFloat w = self.bounds.size.width;
     CGFloat h = self.bounds.size.height;
     self.headerView.frame = NSMakeRect(0, 0, w, self.headerHeight);
-    self.scrollView.frame = NSMakeRect(0, self.headerHeight, w, MAX((CGFloat)0, h - self.headerHeight));
+    self.scrollView.frame = NSMakeRect(0, self.headerHeight, w, MAX((CGFloat)0, h - self.headerHeight - self.footerHeight));
+}
+- (void)setFooterHeight:(CGFloat)height
+{
+    if (_footerHeight == height) return;
+    _footerHeight = height;
+    [self layoutChildren];
 }
 - (void)setFrameSize:(NSSize)newSize
 {
@@ -134,31 +143,15 @@ namespace {
 namespace miata::views {
 
 namespace {
-    constexpr CGFloat kPadding = 6;
+    constexpr CGFloat kPadding = kListPadding;
     constexpr CGFloat kRowVerticalMargin = 8; // 行の上下に確保する余白の合計
-    constexpr CGFloat kHeaderVerticalMargin = 13;
 
-    // ファイル一覧・ヘッダーの行の高さは、フォントサイズに応じて動的に決める
+    // ファイル一覧の行の高さは、フォントサイズに応じて動的に決める
     // (固定値のままだとフォントサイズを上げた時に行同士が重なってしまうため)。
+    // ヘッダーの高さとフォントはViewMetrics.h(検索バーと共有)。
     CGFloat RowHeight()
     {
         return Config::FontSize() + kRowVerticalMargin;
-    }
-    CGFloat HeaderHeight()
-    {
-        return Config::FontSize() + 1 + kHeaderVerticalMargin;
-    }
-
-    // Miata.config.set_font(name) で指定されたフォントを使う。未指定、または
-    // 指定された名前が解決できない場合はシステムデフォルトフォントにフォールバックする。
-    NSFont* MakeFont(CGFloat size)
-    {
-        auto& family = Config::FontFamily();
-        if (!family.empty()) {
-            NSFont* f = [NSFont fontWithName:@(family.c_str()) size:size];
-            if (f) return f;
-        }
-        return [NSFont systemFontOfSize:size];
     }
 
     // ls -lh 風の簡易フォーマット。将来的に外部指定できるようにするまでの固定実装。
@@ -197,6 +190,23 @@ namespace {
     {
         std::error_code ec;
         return std::filesystem::symlink_status(path, ec).type() == std::filesystem::file_type::not_found;
+    }
+
+    // name(UTF-16)の中の、needleの出現箇所をすべて、左から重ならないように見つける。範囲はnameの添字
+    // (検索語の長さと同じとは限らない。合成済みと分解された文字は同じ文字として一致するため)なので、
+    // そのまま属性文字列の範囲に使える。
+    std::vector<SearchRange> FindAllOccurrences(NSString* name, NSString* needle, NSStringCompareOptions options)
+    {
+        std::vector<SearchRange> found;
+        NSUInteger length = name.length;
+        NSUInteger position = 0;
+        while (position < length) {
+            NSRange range = [name rangeOfString:needle options:options range:NSMakeRange(position, length - position)];
+            if (range.location == NSNotFound || range.length == 0) break;
+            found.push_back(SearchRange{range.location, range.length});
+            position = NSMaxRange(range);
+        }
+        return found;
     }
 }
 
@@ -255,6 +265,9 @@ FileListView::FileListView(models::FileListModel& list) : model_(list), impl_(st
     subscriptions_.push_back(
         model_.ObservePath()
             .subscribe([this](const std::filesystem::path& path) {
+                // 再スキャン(Reload)ではない通知は、別のディレクトリへの移動。検索は消す(再スキャンでは、
+                // 検索語を保ったまま、Fetch()でヒットを作り直す)
+                if (!reload_memo_) search_.Clear();
                 Fetch();
                 // Reload()経由の通知ならカーソルを復元する。ディレクトリ移動(JumpTo)は先頭から
                 cursorIndex_ = reload_memo_ ? RestoreCursor(*reload_memo_) : 0;
@@ -344,6 +357,9 @@ void FileListView::Fetch()
             return CaseInsensitiveCompare(x->Model().Name(), y->Model().Name()) == NSOrderedAscending;
         }
     });
+
+    // ヒットは表示順の添字なので、並べ直したら作り直す(検索していなければ何もしない)
+    RebuildSearchHits();
 }
 
 void FileListView::ClearMarks()
@@ -423,6 +439,155 @@ void FileListView::Redraw()
 
     [impl_->header_view setNeedsDisplay:YES];
     [impl_->content_view setNeedsDisplay:YES];
+}
+
+void FileListView::RebuildSearchHits()
+{
+    std::vector<SearchHit> hits;
+    // 検索していないとき(Idle)の語は、常に空(SearchState::Query)。不正なUTF-8だとneedleはnilで、長さは0
+    NSString* needle = @(search_.Query().c_str());
+    if (needle.length > 0) {
+        // スマートケース: 検索語に大文字(Unicodeの大文字を含む)があれば大文字小文字を区別し、無ければ区別しない。
+        // NSLiteralSearchは付けない(付けると、合成済みの文字と分解された文字(「が」と「か」+濁点)が一致しなくなる)。
+        bool has_upper = [needle rangeOfCharacterFromSet:[NSCharacterSet uppercaseLetterCharacterSet]].location != NSNotFound;
+        NSStringCompareOptions options = has_upper ? 0 : NSCaseInsensitiveSearch;
+        for (size_t i = 0; i < list_.size(); ++i) {
+            @autoreleasepool {
+                NSString* name = @(list_[i]->Model().Name().c_str());
+                if (!name) continue;
+                auto ranges = FindAllOccurrences(name, needle, options);
+                if (!ranges.empty()) hits.push_back(SearchHit{(int)i, std::move(ranges)});
+            }
+        }
+    }
+    search_.SetHits(std::move(hits));
+}
+
+int FileListView::ResolveRow(const SearchPosition& position) const
+{
+    if (list_.empty()) return -1;
+    if (position.path) {
+        for (size_t i = 0; i < list_.size(); ++i) {
+            if (list_[i]->Model().Path() == *position.path) return (int)i;
+        }
+    }
+    // パスが一覧に無い(消えた等)。代わりに、控えておいた添字の近くへ
+    return std::clamp(position.row, 0, (int)list_.size() - 1);
+}
+
+SearchPosition FileListView::PositionAt(int row) const
+{
+    if (row < 0 || (size_t)row >= list_.size()) return {};
+    return SearchPosition{list_[(size_t)row]->Model().Path(), row};
+}
+
+void FileListView::JumpCursorTo(int row)
+{
+    if (list_.empty()) {
+        Redraw();
+        return;
+    }
+    row = std::clamp(row, 0, (int)list_.size() - 1);
+
+    CGFloat row_height = RowHeight();
+    NSRect row_rect = NSMakeRect(0, (CGFloat)row * row_height, 1, row_height);
+    bool was_visible = NSContainsRect(impl_->content_view.visibleRect, row_rect);
+
+    cursorIndex_ = row;
+    Redraw(); // 行が見える最小限のスクロールも、ここで行われる
+
+    // 見えている範囲の外へ飛んだときは、行を画面の中央に出す(見えている範囲の中なら、画面は動かさない)
+    if (!was_visible && focus_) {
+        CGFloat visible_height = impl_->content_view.visibleRect.size.height;
+        CGFloat document_height = impl_->content_view.frame.size.height;
+        CGFloat y = (CGFloat)row * row_height + row_height / 2 - visible_height / 2;
+        y = std::clamp(y, (CGFloat)0, std::max((CGFloat)0, document_height - visible_height));
+        [impl_->content_view scrollPoint:NSMakePoint(0, y)];
+    }
+}
+
+void FileListView::BeginSearch()
+{
+    if (search_.Mode() == SearchMode::Typing) return;
+
+    search_.Begin(PositionAt(cursorIndex_)); // 入力するまでヒットは無い(前の検索のハイライトも隠れる)
+    Redraw();
+}
+
+void FileListView::SetSearchQuery(const std::string& query)
+{
+    if (search_.Mode() != SearchMode::Typing || query == search_.Query()) return;
+
+    search_.SetQuery(query);
+    RebuildSearchHits();
+    // 語を全部消したら、検索を始めた位置からやり直す(↓ / ↑で動かした起点も戻す)
+    if (query.empty()) search_.SetAnchor(search_.Origin());
+
+    // 起点から前方の最初のマッチ(起点自身を含む)へ。マッチが無ければ起点に戻る
+    int base = ResolveRow(search_.Anchor());
+    auto target = search_.FirstHitFrom(std::max(base, 0));
+    JumpCursorTo(target.value_or(base));
+}
+
+bool FileListView::StepSearch(int dir)
+{
+    if (!search_.Active()) return false;
+
+    auto row = search_.Step(cursorIndex_, dir);
+    if (!row) return false;
+
+    // 入力中に↓ / ↑で移ったときは、以降の入力を、移った先から探す
+    if (search_.Mode() == SearchMode::Typing) search_.SetAnchor(PositionAt(*row));
+    JumpCursorTo(*row);
+    return true;
+}
+
+void FileListView::CommitSearch()
+{
+    if (search_.Mode() != SearchMode::Typing) return;
+
+    // 語があれば、確定しても語もヒットも変わらない。語が空のときは、検索を始める前の状態に戻る
+    // (確定済みの検索があれば、その語に戻る)ので、ヒットを作り直す
+    bool had_query = !search_.Query().empty();
+    search_.Commit();
+    if (!had_query) RebuildSearchHits();
+    Redraw();
+}
+
+void FileListView::CancelSearch()
+{
+    if (search_.Mode() != SearchMode::Typing) return;
+
+    search_.Cancel(); // 戻り先(Origin)は消えない。消えるのはClear()のとき
+    RebuildSearchHits();
+    JumpCursorTo(ResolveRow(search_.Origin()));
+}
+
+bool FileListView::ClearSearch()
+{
+    if (!search_.Active()) return false;
+
+    search_.Clear();
+    Redraw();
+    return true;
+}
+
+void FileListView::SetBottomInset(double height)
+{
+    if (impl_->container.footerHeight == (CGFloat)height) return;
+    impl_->container.footerHeight = (CGFloat)height;
+    // 一覧が縮んだので、カーソルが見える位置を保つ
+    Redraw();
+}
+
+SearchStatus FileListView::GetSearchStatus() const
+{
+    SearchStatus status;
+    status.mode = search_.Mode();
+    status.query = search_.Query();
+    status.hit_count = search_.HitCount();
+    status.ordinal = search_.Ordinal(cursorIndex_);
+    return status;
 }
 
 void FileListView::WatchDirectory(const std::filesystem::path& dir)
@@ -533,7 +698,7 @@ void FileListView::DrawHeader()
     [path drawInRect:text_rect withAttributes:attrs];
 }
 
-void FileListView::Draw()
+void FileListView::Draw(double min_y, double max_y)
 {
     // 背景。スクロール領域の下(行が足りない部分)まで含めて、見えている範囲を全部塗る
     // (documentViewは、行数分と表示領域の高さの大きい方に揃えてある: Redraw)。塗らないと、
@@ -545,11 +710,16 @@ void FileListView::Draw()
     {
         auto dir_color = ToNSColor(Config::Color().Get(Config::Color::Type::Directory));
         auto file_color = ToNSColor(Config::Color().Get(Config::Color::Type::NormalFile));
+        auto match_color = ToNSColor(Config::Color().Get(Config::Color::Type::SearchMatch));
+        auto current_color = ToNSColor(Config::Color().Get(Config::Color::Type::SearchCurrent));
         NSFont* font = MakeFont(Config::FontSize());
         CGFloat row_height = RowHeight();
 
+        // 描き直す範囲にかかる行だけ描く(行ごとにファイルの大きさを調べるので、全行描くと数万件で重い)
         auto size = (int)list_.size();
-        for (int i = 0; i < size; i++) {
+        int first = std::max(0, (int)std::floor(min_y / row_height));
+        int last = std::min(size - 1, (int)std::ceil(max_y / row_height) - 1);
+        for (int i = first; i <= last; i++) {
             auto& entry_model = list_[(size_t)i]->Model();
             CGFloat y = (CGFloat)i * row_height;
             NSRect row_rect = NSMakeRect(0, y, impl_->content_view.bounds.size.width, row_height);
@@ -587,7 +757,23 @@ void FileListView::Draw()
                 row_rect.size.width - right_size.width - kPadding * 3,
                 name_size.height
             );
-            [name drawInRect:name_rect withAttributes:attrs];
+
+            // 検索で一致した行は、一致した部分(すべての出現)に背景色を付ける。カーソルのある行(今いるマッチ)は
+            // 別の色にする。カーソルの下線と同じく、フォーカスのあるペインだけ
+            auto* matches = name ? search_.RangesFor(i) : nullptr;
+            if (matches) {
+                NSMutableAttributedString* highlighted = [[NSMutableAttributedString alloc] initWithString:name attributes:attrs];
+                NSColor* background = (i == cursorIndex_ && focus_) ? current_color : match_color;
+                for (const auto& match : *matches) {
+                    // 範囲外はNSRangeExceptionになるので、一覧が作り直された直後などの食い違いは捨てる
+                    if (match.location + match.length > highlighted.length) continue;
+                    [highlighted addAttribute:NSBackgroundColorAttributeName value:background range:NSMakeRange(match.location, match.length)];
+                }
+                [highlighted drawInRect:name_rect];
+            }
+            else {
+                [name drawInRect:name_rect withAttributes:attrs];
+            }
         }
     }
 }
