@@ -14,7 +14,7 @@ rake build:debug      # Debug ビルド
 rake build:release    # Release ビルド
 rake run:debug        # Debug ビルドして実行
 rake run:release      # Release ビルドして実行
-rake 'icon[icon.png]' # アプリアイコン(resources/AppIcon.icns)を PNG から作り直す
+rake icon             # アプリアイコン(assets/AppIcon.png → resources/AppIcon.icns)を作り直す
 ```
 
 成果物は `_build/debug/Miata.app` および `_build/release/Miata.app` に生成される。
@@ -157,12 +157,14 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 
 ## アプリアイコン
 
-`resources/AppIcon.icns` が `.app` のアイコン。`CMakeLists.txt` の `file(GLOB_RECURSE RESOURCES "resources/*")` が、`resources/` の全ファイルを `MACOSX_PACKAGE_LOCATION Resources`（= `Contents/Resources/` 直下に平らにコピー）で `.app` に入れるので、アイコンも同じ経路で入る。`Info.plist` の `CFBundleIconFile` は、`set_target_properties(app PROPERTIES MACOSX_BUNDLE_ICON_FILE "AppIcon")` で登録している（拡張子なしの `AppIcon`）。
+**元画像は `assets/AppIcon.png`（1024×1024 の正方形の PNG）、変換後が `resources/AppIcon.icns`**。`rake icon`（`Rakefile` の `icon` タスク）が、前者から後者を作る。**両方をコミットする**：`.icns` はビルドに必要で（CMake は `.icns` を作らない）、元画像は次に直すときに必要。元画像を直したら `rake icon` で `.icns` も作り直して、一緒にコミットする（今コミットしてある `.icns` は、`assets/AppIcon.png` から `rake icon` を実行すると、バイト単位で同一のものができる）。
 
-- **差し替え**：`rake 'icon[path/to.png]'`（`Rakefile` の `icon` タスク）が、正方形の PNG から `sips` で10サイズ(16〜1024 とその `@2x`)の `.iconset` を作り、`iconutil -c icns` で `resources/AppIcon.icns` を作る。入力が正方形でない/読めない/無い場合は、書き込む前にエラーで止まる(既存の `.icns` は壊れない)。今の `.icns` は、このタスクで作った仮のアイコン。
+- **元画像を `resources/` に置かない理由**：`CMakeLists.txt` の `file(GLOB_RECURSE RESOURCES "resources/*")` が、`resources/` の全ファイルを `MACOSX_PACKAGE_LOCATION Resources`（= `Contents/Resources/` 直下に平らにコピー）で `.app` に入れるため。1024px の PNG が `.app` に同梱されてしまう。`assets/` は CMake が見ないので入らない。
+- **`Info.plist` への登録**：`set_target_properties(app PROPERTIES MACOSX_BUNDLE_ICON_FILE "AppIcon")`（拡張子なしの `AppIcon`）。`resources/AppIcon.icns` は、他の `resources/` のファイルと同じ経路で `.app` に入る。
+- **`rake icon` の変換元は固定**（`ICON_SOURCE`）で、引数を取らない。以前の `rake 'icon[x.png]'` の形で呼ばれたときに、引数を黙って無視すると、x.png を変換したつもりで別の画像から `.icns` ができてしまうので、`args.extras` が空でなければエラーにする（引数を宣言すると `rake -T` に擬似的な引数名が出てしまうので、宣言していない）。元画像が無い/正方形でない/画像として読めない場合は、書き込む前にエラーで止まる（既存の `.icns` は壊れない）。`sips` で10サイズ（16〜1024 とその `@2x`）の `.iconset` を作り、`iconutil -c icns` で `.icns` を作る。
 - **新しい `resources/` のファイルは cmake の再生成が要る**：`GLOB_RECURSE` は構成時にしか評価されない。`rake build:debug`/`build:release` は cmake を再生成するので、ふつうは気にしなくてよい。直接 `make` するときだけ注意。
-- **macOS のアイコンの作法**：角丸の形と余白(1024 の枠に 824 の角丸四角)は画像の側に含める。システムは形を整えない。
-- **確認のしかた**：`NSWorkspace iconForFile:` に `.app` のパスを渡すと、システムが返すアイコンが分かる(ビルドしたバンドルで、仮のアイコンが返ることを確認済み)。Dock/Finder のキャッシュで古い絵が残る場合は、この方法で `.app` 側が正しいかを切り分けられる。
+- **macOS のアイコンの作法**：角丸の形と余白（1024 の枠に 824 の角丸四角）は画像の側に含める。システムは形を整えない。
+- **確認のしかた**：`NSWorkspace iconForFile:` に `.app` のパスを渡すと、システムが返すアイコンが分かる（ビルドしたバンドルで、仮のアイコンが返ることを確認済み）。Dock/Finder のキャッシュで古い絵が残る場合は、この方法で `.app` 側が正しいかを切り分けられる。
 
 ## 設定の読み込み（組み込みの既定の設定 + `~/.config/miata/init.lua`）
 
