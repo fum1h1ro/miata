@@ -493,36 +493,44 @@ namespace miata {
         ));
     }
 
+    // Miata.command.bind(mode, keys, fn)
+    // モードごとに、別々の Lua の参照を作る。1つの参照を複数のモード("nd")で共有すると、unbind("n", ...) が、Dialog 側が
+    // まだ使っている参照を解放し、その参照を再利用した別の関数が、Dialog 側のキーで呼ばれてしまう(二重に解放もする)。
+    // luaL_error は longjmp なので、デストラクタを持つオブジェクト(std::string など)は、luaL_error の前に作らない。
     int Application::lua_command_bind(lua_State* L)
     {
-        //auto& script = miata::Script::Instance();
         auto& app = Application::Instance();
-        //int n = lua_gettop(L);
         Script::CheckArgType(L, 1, LUA_TSTRING);
         Script::CheckArgType(L, 2, LUA_TSTRING);
         Script::CheckArgType(L, 3, LUA_TFUNCTION);
 
-        const std::string map_string = lua_tostring(L, 1);
+        const char* modes = lua_tostring(L, 1);
         const char* key_string = lua_tostring(L, 2);
-        //std::println("key_stroke: {}\n", key_string);
-        lua_pushvalue(L, 3);
-        int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-        //std::println("lua_command_bind {}\n", ref);
 
-        for (size_t i = 0; i < map_string.size(); ++i) {
-            auto map_c = map_string[i];
-            auto map_index = app.GetKeyBinding((char)map_c);
-            if (map_index) {
-                auto& kb = app.key_binding_map_[(size_t)map_index.value()];
-                auto r = kb->Register(key_string, ref);
-                if (!r) {
-                    luaL_unref(L, LUA_REGISTRYINDEX, ref);
-                    luaL_error(L, "key binding error: %d", r.error());
-                }
+        // 登録の前に、モードの文字を全部確かめる(途中で失敗して、一部のモードにだけ登録されるのを避ける)
+        for (const char* m = modes; *m; ++m) {
+            const bool known = app.GetKeyBinding(*m).has_value();
+            if (!known) luaL_error(L, "unknown map");
+        }
+
+        for (const char* m = modes; *m; ++m) {
+            auto& kb = app.key_binding_map_[(size_t)app.GetKeyBinding(*m).value()];
+
+            // 同じキーが既に割り当てられていたら、外して、その関数の参照を解放する(上書きしても、参照が漏れない。
+            // 外すときに、キー列の経路の数も戻るので、あとで unbind したキーが「続きを待つ」状態にならない)。
+            // "nn" のように同じモードを2回書いても、2回目が1回目を置き換えるだけ
+            if (auto old = kb->Has(key_string)) {
+                kb->Unregister(key_string);
+                luaL_unref(L, LUA_REGISTRYINDEX, old.value());
             }
-            else {
+
+            lua_pushvalue(L, 3);
+            const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+            auto r = kb->Register(key_string, ref);
+            if (!r) {
+                // キーの書き方の誤りは、どのモードでも同じなので、最初のモードで失敗する(他のモードには登録していない)
                 luaL_unref(L, LUA_REGISTRYINDEX, ref);
-                luaL_error(L, "unknown map");
+                luaL_error(L, "key binding error: %d", (int)r.error());
             }
         }
         return 0;
@@ -530,31 +538,28 @@ namespace miata {
 
     int Application::lua_command_unbind(lua_State* L)
     {
-        //auto& script = miata::Script::Instance();
         auto& app = Application::Instance();
-        //int n = lua_gettop(L);
         Script::CheckArgType(L, 1, LUA_TSTRING);
         Script::CheckArgType(L, 2, LUA_TSTRING);
 
-        const std::string map_string = lua_tostring(L, 1);
+        const char* modes = lua_tostring(L, 1);
         const char* key_string = lua_tostring(L, 2);
 
-        for (size_t i = 0; i < map_string.size(); ++i) {
-            auto map_c = map_string[i];
-            auto map_index = app.GetKeyBinding((char)map_c);
-            if (map_index) {
-                auto& kb = app.key_binding_map_[(size_t)map_index.value()];
-                auto r = kb->Unregister(key_string);
-                if (r) {
-                    luaL_unref(L, LUA_REGISTRYINDEX, r.value());
-                }
-                else {
-                    luaL_error(L, "key binding error: %d", r.error());
-                }
-            }
-            else {
-                luaL_error(L, "unknown map");
-            }
+        for (const char* m = modes; *m; ++m) {
+            const bool known = app.GetKeyBinding(*m).has_value();
+            if (!known) luaL_error(L, "unknown map");
+        }
+
+        std::array<bool, (size_t)KeyBindingMap::Max> done{}; // "nn" のように同じモードを2回書いても、1回だけ外す(2回目は割り当てが無くてエラーになる)
+        for (const char* m = modes; *m; ++m) {
+            const auto index = (size_t)app.GetKeyBinding(*m).value();
+            if (done[index]) continue;
+            done[index] = true;
+
+            // そのモードの参照だけを解放する(モードごとに別々の参照なので、他のモードの割り当ては残る)
+            auto r = app.key_binding_map_[index]->Unregister(key_string);
+            if (!r) luaL_error(L, "key binding error: %d", (int)r.error());
+            luaL_unref(L, LUA_REGISTRYINDEX, r.value());
         }
         return 0;
     }
