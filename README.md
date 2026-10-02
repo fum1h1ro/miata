@@ -295,7 +295,7 @@ Miata.command.current_pane()     -- カーソルのあるペイン: "left" ま�
 
 ダイアログは `NSAlert` ではなく、非モーダルな `NSView` オーバーレイ（`DialogPanel`）で表示される。テキスト入力欄は本物の `NSTextField` を使うため macOS IME（日本語入力）にそのまま対応する。
 
-ボタンやチェックボックスを持つダイアログ（`dialog_confirm`、`dialog_yes_no`、`dialog_custom`）の中には、**カーソル**（枠が付いた項目）が 1 つある。`resources/test.lua` の既定では、`j` `k` `h` `l` と矢印キー（`<down>` `<up>` `<left>` `<right>`）で動かし、Enter でカーソルの項目を実行し（ボタン = 押す、チェックボックス = 切り替える、`dialog_custom` の選択リストの行 = 選んで閉じる）、Esc で取り消す。「既定」の見た目（強調）のボタンがあっても、Enter が押すのは、カーソルのある項目（`dialog_yes_no` で `default` を `true` にすると、強調されるのは「はい」だが、カーソルは先頭の「いいえ」から始まる）。入力欄のあるダイアログ（`dialog_input`、`dialog_filter_list`）は、入力欄がキーを受けるので、ここに書いたキー操作は効かない（[モード](#モードmode)）。
+ボタンやチェックボックスを持つダイアログ（`dialog_confirm`、`dialog_yes_no`、`dialog_custom`）の中には、**カーソル**（枠が付いた項目）が 1 つある。`resources/test.lua` の既定では、`j` `k` `h` `l` と矢印キー（`<down>` `<up>` `<left>` `<right>`）で動かし、Enter でカーソルの項目を実行し（ボタン = 押す、チェックボックス = 切り替える、`dialog_custom` の選択リストの行 = 選んで閉じる）、Esc で取り消す。「既定」の見た目（強調）のボタンがあっても、Enter が押すのは、カーソルのある項目（`dialog_yes_no` は、強調したボタンにカーソルを置いて開くので、結果として、強調されたボタンが押される。`dialog_custom` は、`select` があればその行から、無ければ最初の項目から始まる）。入力欄のあるダイアログ（`dialog_input`、`dialog_filter_list`）は、入力欄がキーを受けるので、ここに書いたキー操作は効かない（[モード](#モードmode)）。
 
 #### `dialog_confirm`
 
@@ -309,6 +309,8 @@ Miata.command.dialog_confirm("メッセージ", "ボタンラベル")
 local result = Miata.command.dialog_yes_no("メッセージ", default, "はい", "いいえ")
 -- result: true / false
 ```
+
+`default` は、開いたときにカーソルが載る（「既定」の見た目で強調される）ボタン: `true`（省略時）なら「はい」、`false` なら「いいえ」。Enter はそのボタンを押す。`h` / `l`（矢印）でもう一方へ移せる。Esc は、`default` に依らず `false`。
 
 #### `dialog_input`
 
