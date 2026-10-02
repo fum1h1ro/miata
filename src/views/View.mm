@@ -166,13 +166,14 @@ namespace miata::views {
             break;
         case constants::Navigate::Ok:
             {
-                auto& entry_model = browser_->CurrentFileEntryModel();
-                if (entry_model.IsDirectory()) {
+                // 一覧が空(ファイルもフォルダも1つも無い)なら、入るものが無い
+                auto* entry_model = browser_->CurrentFileEntryModel();
+                if (entry_model && entry_model->IsDirectory()) {
                     if (browser_->IsLeft()) {
-                        JumpToOrReport(browser_model.Left(), browser_model.Left().Path() / entry_model.Name());
+                        JumpToOrReport(browser_model.Left(), browser_model.Left().Path() / entry_model->Name());
                     }
                     else {
-                        JumpToOrReport(browser_model.Right(), browser_model.Right().Path() / entry_model.Name());
+                        JumpToOrReport(browser_model.Right(), browser_model.Right().Path() / entry_model->Name());
                     }
                 }
             }
@@ -202,7 +203,7 @@ namespace miata::views {
         return browser_->IsLeft() ? browser_model.Right() : browser_model.Left();
     }
 
-    models::FileEntryModel& View::CurrentEntry()
+    models::FileEntryModel* View::CurrentEntry()
     {
         return browser_->CurrentFileEntryModel();
     }
@@ -287,22 +288,28 @@ namespace miata::views {
         browser_->ToggleFocus();
     }
 
+    // マークの操作は、一覧が空(ファイルもフォルダも1つも無い)なら、何もしない(マークする対象が無い)
     void View::Mark()
     {
-        browser_->CurrentFileEntryModel().Mark(true);
+        auto* entry_model = browser_->CurrentFileEntryModel();
+        if (!entry_model) return;
+        entry_model->Mark(true);
         CurrentFileListView().Redraw();
     }
 
     void View::Unmark()
     {
-        browser_->CurrentFileEntryModel().Mark(false);
+        auto* entry_model = browser_->CurrentFileEntryModel();
+        if (!entry_model) return;
+        entry_model->Mark(false);
         CurrentFileListView().Redraw();
     }
 
     void View::ToggleMark()
     {
-        auto& entry_model = browser_->CurrentFileEntryModel();
-        entry_model.Mark(!entry_model.IsMarked());
+        auto* entry_model = browser_->CurrentFileEntryModel();
+        if (!entry_model) return;
+        entry_model->Mark(!entry_model->IsMarked());
         CurrentFileListView().Redraw();
     }
 }

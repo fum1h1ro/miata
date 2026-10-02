@@ -40,7 +40,8 @@ namespace miata::views {
         void ToggleMark();
         models::FileListModel& CurrentList();
         models::FileListModel& OtherList();
-        models::FileEntryModel& CurrentEntry();
+        // カーソルのペインの、カーソル下のエントリ。一覧が空(ファイルもフォルダも1つも無い)ならnullptr
+        models::FileEntryModel* CurrentEntry();
         FileListView& CurrentFileListView();
         // カーソル(フォーカス)のあるペインと、ペインを指定して取得するアクセサ
         constants::Pane CurrentPane() const;

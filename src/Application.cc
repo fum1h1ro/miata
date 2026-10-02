@@ -329,8 +329,9 @@ namespace miata {
             auto& entry = src_model.GetEntry(i);
             if (entry.IsMarked()) sources.push_back(entry.Path());
         }
-        if (sources.empty() && src_model.Size() > 0) {
-            sources.push_back(view_->CurrentEntry().Path());
+        if (sources.empty()) {
+            // マークが無ければ、カーソル下の1件(一覧が空なら、対象が無い)
+            if (auto* current = view_->CurrentEntry()) sources.push_back(current->Path());
         }
         if (sources.empty()) return;
 
@@ -650,11 +651,12 @@ namespace miata {
         auto& app = Application::Instance();
         auto& list = app.view_->CurrentList();
 
-        if (list.Size() == 0 || AnyMarked(list)) {
+        auto* current = app.view_->CurrentEntry();
+        if (!current || AnyMarked(list)) {
             lua_pushnil(L);
             return 1;
         }
-        lua_pushstring(L, app.view_->CurrentEntry().Name().c_str());
+        lua_pushstring(L, current->Name().c_str());
         return 1;
     }
 
@@ -678,16 +680,16 @@ namespace miata {
         const std::string new_name = lua_tostring(L, 1);
 
         auto& list = app.view_->CurrentList();
-        if (list.Size() == 0 || AnyMarked(list)) {
+        auto* entry = app.view_->CurrentEntry();
+        if (!entry || AnyMarked(list)) {
             lua_pushboolean(L, false);
             return 1;
         }
 
-        auto& entry = app.view_->CurrentEntry();
         auto dest = list.Path() / new_name;
 
         std::error_code ec;
-        std::filesystem::rename(entry.Path(), dest, ec);
+        std::filesystem::rename(entry->Path(), dest, ec);
 
         if (!ec) {
             app.view_->ReloadList(list, dest); // 旧名は消えるので、カーソルは新しい名前に合わせる

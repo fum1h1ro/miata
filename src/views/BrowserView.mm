@@ -180,9 +180,10 @@ void BrowserView::ToggleFocus()
         FocusLeft();
     }
 }
-models::FileEntryModel& BrowserView::CurrentFileEntryModel()
+models::FileEntryModel* BrowserView::CurrentFileEntryModel()
 {
-    return GetCurrentFileListView()->GetCurrent().Model();
+    auto* entry = GetCurrentFileListView()->CurrentOrNull();
+    return entry ? &entry->Model() : nullptr;
 }
 
 bool BrowserView::ToggleQuickLook(constants::QuickLookArea area)

@@ -33,7 +33,8 @@ namespace miata::views {
         void FocusLeft();
         void FocusRight();
         void ToggleFocus();
-        models::FileEntryModel& CurrentFileEntryModel();
+        // カーソルのペインの、カーソル下のエントリ。一覧が空(ファイルもフォルダも1つも無い)ならnullptr
+        models::FileEntryModel* CurrentFileEntryModel();
 
         inline std::shared_ptr<FileListView>& GetCurrentFileListView()
         {
