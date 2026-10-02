@@ -57,9 +57,9 @@ Miata = {
             end
             return Miata._private.dialog_result(handle, "filterlist")
         end,
-        -- フォルダの履歴(ペインごと。新しい順)から、fzfで絞り込んで1つ選び、そのペインをそのフォルダへ移す。
+        -- フォルダの履歴(左右のペインで共有する。新しい順)から、fzfで絞り込んで1つ選び、paneのペインをそのフォルダへ移す。
         -- paneは "left" / "right"(省略したら、いまカーソルのあるペイン)。履歴が空なら、案内を出すだけ。
-        -- 履歴の中身は Miata.command.history_list(pane)、移動は Miata.command.jump_to(path, pane)。
+        -- 履歴の中身は Miata.command.history_list(pane)(paneの今いるフォルダを除く)、移動は Miata.command.jump_to(path, pane)。
         -- ペインは最初に決めて、両方に渡す(ダイアログを開いている間も、同じペインを対象にする)。
         history = function(pane)
             pane = pane or Miata.command.current_pane()
@@ -70,8 +70,8 @@ Miata = {
             end
             local picked = Miata.command.dialog_filter_list({
                 items = items,
-                title = pane == "left" and "履歴（左のペイン）" or "履歴（右のペイン）",
-                message = "移動先のフォルダを選択してください",
+                title = "履歴",
+                message = pane == "left" and "左のペインの移動先を選択してください" or "右のペインの移動先を選択してください",
             })
             if picked then
                 Miata.command.jump_to(picked, pane)

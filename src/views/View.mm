@@ -107,7 +107,7 @@ namespace miata::views {
         // ヘッダーに末尾の/が出ないよう、履歴と同じ形(末尾の/なし)にそろえて移る
         std::filesystem::path target(models::PathHistory::TrimTrailingSlash(path.string()));
         bool jumped = JumpToOrReport(list, target);
-        if (!jumped && IsKnownNotDirectory(target)) list.History().Remove(target);
+        if (!jumped && IsKnownNotDirectory(target)) models::BrowserModel::Instance().History().Remove(target);
         // 移動で検索は消えるので、次のティックを待たずに検索バーを整える(NavigateForBrowserの末尾と同じ)
         browser_->UpdateSearchBar();
         return jumped;
