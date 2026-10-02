@@ -532,6 +532,9 @@ void YesNoDialog::OnOpen()
     panel_.Show("", args_.message_, GetIdealSize());
     no_id_ = panel_.AddButton(args_.no_text_, !args_.default_select_);
     yes_id_ = panel_.AddButton(args_.yes_text_, args_.default_select_);
+    // 最初のカーソルは、「既定」の強調を付けたボタンにする。Enter は(強調ではなく)カーソルの項目に作用するので、
+    // 先頭に登録した「いいえ」のままだと、強調された「はい」と食い違って、Enter が「いいえ」を押してしまう
+    panel_.SetInitialFocus(args_.default_select_ ? yes_id_ : no_id_);
 }
 void YesNoDialog::OnButton(int button_id)
 {
