@@ -272,6 +272,10 @@ FileListView::FileListView(models::FileListModel& list) : model_(list), impl_(st
                 // Reload()経由の通知ならカーソルを復元する。ディレクトリ移動(JumpTo)は先頭から
                 cursorIndex_ = reload_memo_ ? RestoreCursor(*reload_memo_) : 0;
                 Redraw();
+                // 別のディレクトリへの移動なら、先頭から表示する。Redraw()がカーソルの行へスクロールするのはフォーカスの
+                // あるペインだけなので、フォーカスの無いペインを移したとき(jump_to(path, pane))に、前のディレクトリの
+                // スクロール位置が残らないようにする
+                if (!reload_memo_) [impl_->content_view scrollPoint:NSZeroPoint];
                 // 走査した内容が最新になったので、反映待ちは不要。監視は、表示するパスが変わったときだけ
                 // 張り直す(張り直しの中で、走査より後の変更を見つけたら、また反映待ちになる)
                 stale_ = false;

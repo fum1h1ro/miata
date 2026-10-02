@@ -14,6 +14,17 @@ namespace {
         "「フルディスクアクセス」で Miata を許可すると、操作できるようになります（アプリ本体の削除や変更は「App管理」）。"
         "許可したあと、反映されないときは Miata を起動し直してください。\n\n"
         "ファイル自体の権限が原因のときは、Finder の「情報を見る」で、所有者とアクセス権を確認してください。";
+
+    // pathが、フォルダとして存在しないと確かめられたか(無い、またはフォルダでなくなった)。権限や一時的なI/Oエラー、
+    // シンボリックリンクの循環などで調べられなかったとき(typeがnone)は、有無が分からないのでfalse。権限が無い失敗でも、
+    // フォルダ自体は調べられる(存在する)か、調べられない(false)かのどちらかなので、これだけで「権限が無いだけなら
+    // 外さない」になる。(FileListView.mmにも同じ名前の別の判定があるので、名前を変えている)
+    bool IsKnownNotDirectory(const std::filesystem::path& path)
+    {
+        std::error_code ec;
+        auto type = std::filesystem::status(path, ec).type();
+        return type != std::filesystem::file_type::none && type != std::filesystem::file_type::directory;
+    }
 }
 
 namespace miata::views {
@@ -83,10 +94,23 @@ namespace miata::views {
         if (!result) ReportFileError(std::format("移動できませんでした ({})", parent.string()), result.error());
     }
 
-    void View::JumpToOrReport(models::FileListModel& list, const std::filesystem::path& path)
+    bool View::JumpToOrReport(models::FileListModel& list, const std::filesystem::path& path)
     {
         auto result = list.TryJumpTo(path);
         if (!result) ReportFileError(std::format("移動できませんでした ({})", path.string()), result.error());
+        return result.has_value();
+    }
+
+    bool View::JumpToPath(constants::Pane pane, const std::filesystem::path& path)
+    {
+        auto& list = GetList(pane);
+        // ヘッダーに末尾の/が出ないよう、履歴と同じ形(末尾の/なし)にそろえて移る
+        std::filesystem::path target(models::PathHistory::TrimTrailingSlash(path.string()));
+        bool jumped = JumpToOrReport(list, target);
+        if (!jumped && IsKnownNotDirectory(target)) list.History().Remove(target);
+        // 移動で検索は消えるので、次のティックを待たずに検索バーを整える(NavigateForBrowserの末尾と同じ)
+        browser_->UpdateSearchBar();
+        return jumped;
     }
 
     void View::OpenNextDialogIfNeeded()

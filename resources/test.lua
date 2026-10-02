@@ -9,6 +9,7 @@ Miata.config.color.directory = "#00ffaaff"
 Miata.config.color.search_match = "#7a5c00ff"
 Miata.config.color.search_current = "#c06000ff"
 -- Miata.config.set_font("フォント名") / Miata.config.set_font_size(size) でファイル一覧のフォントを指定できる(未指定ならデフォルト)
+-- Miata.config.set_history_limit(n) でフォルダの履歴の件数(ペインごと)を指定できる(0〜10000。未指定なら 100。0 なら記録しない)
 
 local command <const> = Miata.command
 
@@ -138,20 +139,9 @@ Miata.command.bind("n", "s", function()
     end
 end)
 
+-- フォルダの履歴(ペインごと。新しい順)。fzf で絞り込んで選ぶと、そのペインがそのフォルダへ移る
 Miata.command.bind("n", "<S-h>", function()
-    local items = {}
-    for i = 1, 3000 do
-        items[i] = string.format("/path/to/some/file_%d.txt", i)
-    end
-    table.insert(items, "/Users/example/デスクトップ/日本語のファイル名.txt")
-    local picked = Miata.command.dialog_filter_list({
-        items = items, title = "テスト", message = "選択してください"
-    })
-    if picked then
-        print("picked: " .. picked)
-    else
-        print("cancelled")
-    end
+    Miata.command.history()
 end)
 
 

@@ -58,6 +58,7 @@ namespace miata::models {
 
         scanned_mtime_ = mtime;
         entries_ = std::move(*scanned);
+        history_.Record(path); // 通知より前に記録する(購読側が履歴を読んでも、この移動が入っている)
         path_.Value(path);
         return {};
     }

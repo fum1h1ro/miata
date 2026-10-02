@@ -90,6 +90,16 @@ namespace miata {
             return Instance().font_size_;
         }
 
+        // フォルダの履歴の、ペインごとの上限(件数)。0なら記録しない。Miata.config.set_history_limit(n)で指定する。
+        // 上限を大きくするほど、移動のたびに保存する量と、履歴を開いたときのfzfに渡す量が増える。今いるフォルダも
+        // 履歴に数えるので、履歴を開いたときの一覧に出るのは、最大でn-1件。
+        static inline size_t HistoryLimit()
+        {
+            return Instance().history_limit_;
+        }
+        // set_history_limitに指定できる最大(0〜この値の整数)
+        static constexpr int kHistoryLimitMax = 10000;
+
         // 背景色(Miata.config.color.background)。alphaは使わず、常に不透明にして返す。半透明で塗ると、
         // 後ろのOSのテーマの色(Lightなら白)が混ざって、OSの設定しだいで見た目が変わってしまうため。
         // 背景を塗る箇所は、Color().Get(...)ではなく必ずこれを使う(alphaの扱いをここに揃える)。
@@ -115,11 +125,13 @@ namespace miata {
         static int lua_color_newindex(lua_State* L);
         static int lua_set_font(lua_State* L);
         static int lua_set_font_size(lua_State* L);
+        static int lua_set_history_limit(lua_State* L);
 
         static Config* _instance;
         class Color color_;
         std::string font_family_;
         float font_size_ = 12.0f;
+        size_t history_limit_ = 100;
     };
 }
 

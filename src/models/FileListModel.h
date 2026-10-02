@@ -10,6 +10,7 @@
 #include "../FileError.h"
 #include "../misc.h"
 #include "FileEntryModel.h"
+#include "PathHistory.h"
 
 namespace miata::models {
     class FileListModel {
@@ -18,15 +19,18 @@ namespace miata::models {
         ~FileListModel();
         // ディレクトリへ移動する。読めない(権限が無い・消えた等)と例外(std::filesystem::filesystem_error)を
         // 投げる。ユーザーの操作による移動では、落ちないよう、エラーを返すTryJumpToを使うこと。
+        // 履歴(History())には記録しない(起動時のホームが、履歴に入らないようにするため)。
         void JumpTo(const std::filesystem::path& path);
         // JumpToの、例外を投げない版。読めない場合は、一覧もパスも変えずにエラーを返す(権限が無い失敗は
-        // FileError::permission_deniedで分かる)。成功時はJumpToと同じ(ObservePath()へ通知する)。
+        // FileError::permission_deniedで分かる)。成功時はJumpToと同じ(ObservePath()へ通知する)が、それに加えて、
+        // 移動先をこのペインの履歴(History())に記録する。履歴に記録するのはここだけ: JumpTo(起動時のホーム)と
+        // Reload(再スキャン)は記録しない。ユーザー操作の移動(Enter・親へ戻る・履歴からのジャンプ)は、すべてここを通る。
         std::expected<void, FileError> TryJumpTo(const std::filesystem::path& path);
         // 現在のディレクトリを再スキャンする。JumpTo(Path())と違い、マークは同じパスの
         // エントリに引き継ぐ(消えたファイルのマークは落ち、新しいファイルは未マーク)。
         // ディレクトリが消えた/読めない場合は、何も変えずにエラーを返す。
         // 成功時はJumpToと同様にObservePath()へ通知する(購読側は旧エントリへの参照を
-        // 捨てて作り直す必要がある。旧エントリは通知の前に破棄される)。
+        // 捨てて作り直す必要がある。旧エントリは通知の前に破棄される)。履歴(History())には記録しない。
         std::expected<void, FileError> Reload();
         // 直近に走査(JumpTo/Reload)したときのディレクトリの更新日時。走査の直前に取るので、これより
         // 後にディレクトリの中身が変わっていれば、現在の更新日時と食い違う(走査から変更の監視を
@@ -59,12 +63,23 @@ namespace miata::models {
         {
             return path_.Observe();
         }
+        // このペインが移動したフォルダの履歴(新しい順。TryJumpToの成功ごとに記録される)。上限と、前回までの
+        // 記録の復元は、起動時にBrowserModel::RestoreHistory()が行う
+        PathHistory& History()
+        {
+            return history_;
+        }
+        const PathHistory& History() const
+        {
+            return history_;
+        }
     private:
         // dirの直下を走査して、エントリのモデルを作る。例外は投げない(読めない・消えた・権限が無い等は
         // エラーコードで返す)。
         static std::expected<std::vector<std::unique_ptr<FileEntryModel>>, std::error_code> Scan(const std::filesystem::path& dir);
 
         misc::ReactiveProperty<std::filesystem::path> path_;
+        PathHistory history_;
         std::vector<std::unique_ptr<FileEntryModel>> entries_;
         std::optional<std::filesystem::file_time_type> scanned_mtime_;
     };
