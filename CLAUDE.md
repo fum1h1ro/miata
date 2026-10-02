@@ -21,7 +21,7 @@ rake icon             # アプリアイコン(assets/AppIcon.png → resources/A
 
 ## アーキテクチャ概要
 
-macOS 専用のファイルブラウザアプリケーション「Miata」。**フルネイティブ AppKit**（`NSWindow`/`NSView`/`NSScrollView`/`NSTextField`/`NSButton`/`NSPopUpButton` 等）で描画し、Lua スクリプトでキーバインドとコマンドを定義する。
+macOS 専用のファイルブラウザアプリケーション「Miata」。**フルネイティブ AppKit**（`NSWindow`/`NSView`/`NSScrollView`/`NSTextField`/`NSButton` 等）で描画し、Lua スクリプトでキーバインドとコマンドを定義する。
 
 以前は sokol + Dear ImGui でレンダリングしていたが、**現在は完全にネイティブ AppKit へ移行済み**。`packages/sokol`・`packages/imgui` は Git submodule として存在するが、`CMakeLists.txt` はどちらもビルド・リンク対象に含めていない（`add_subdirectory(packages)` は `lua` のみをビルドする）。sokol/ImGui 関連の API（`simgui_*`、`sapp_*`、`MTKView`、`CADisplayLink` 等）はコードベース中に一切登場しない。
 
@@ -82,7 +82,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 | `dialog_confirm(message, button_text)` | `"confirm"` | OK ボタンのみ |
 | `dialog_yes_no(message, default_focus, yes_text, no_text)` | `"yesno"` | YES/NO ボタン |
 | `dialog_input(message, initial)` | `"inputtext"` | `NSTextField` 1つ。戻り値は文字列 or nil |
-| `dialog_custom(spec)` | `"custom"` | チェックボックス・ポップアップ・複数ボタン |
+| `dialog_custom(spec)` | `"custom"` | チェックボックス・選択リスト（縦の行。行で Enter すると即確定）・複数ボタン。詳細は後述「選択リスト」 |
 | `dialog_filter_list(spec)` | `"filterlist"` | 大量の文字列(`items`)から `fzf` 絞り込みで1件選択。戻り値は文字列 or nil。行の幅に収まらない文字列は先頭を「…」で省く（フォルダの履歴など、パスの一覧向け） |
 
 `dialog_custom` の `spec` テーブル形式：
@@ -90,18 +90,40 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 {
     title = "タイトル",
     message = "説明文",          -- optional
-    buttons = {"OK", "キャンセル"},
     checkboxes = { { label = "ラベル", checked = false } },
-    selects   = { { label = "ラベル", options = {"A","B"}, selected = 1 } },
+    select  = { options = {"A","B"}, selected = 1 },   -- optional。1ダイアログに1つ。selected は最初にカーソルがある行
+    buttons = {"OK", "キャンセル"},                     -- optional。select があれば省略時はボタン無し、無ければ {"OK"}
 }
--- 戻り値: { button=1, checkboxes={false}, selects={2} } または nil
+-- 戻り値: 行で Enter/クリックして閉じた → { select=2, checkboxes={false} }（button は無い）
+--         ボタンで閉じた               → { button=1, checkboxes={false} }（select は無い）
+--         Esc                          → nil
 ```
 
 **注意（テキストフィールドとキー入力の関係）**：`NSTextField` がダイアログ内で first responder になっている間（`dialog_input`/`dialog_filter_list` 表示中など）、`MiataRootView::keyDown:`（`platforms/osx.mm`）は一切呼ばれない。つまり通常のキーバインド経路（`KeyBindingMap::Dialog` → `IDialog::Navigate()` → `DialogPanel::NavigateUp/Down/...`）はテキストフィールドには効かない。矢印キー/Enter/Escape をテキスト入力と共存させる必要がある場合は、`FilterListDialog.mm` のように `NSTextFieldDelegate` の `control:textView:doCommandBySelector:`（IME 変換中は呼ばれないため日本語入力と安全に共存できる）で個別に横取りする。
 
+## 選択リスト（`dialog_custom` の `select`）
+
+`dialog_custom` の `select = { options = {...}, selected = 1 }` は、選択肢を縦の行で並べ、カーソルを上下に動かして、行で Enter（またはクリック）すると、その場でダイアログを閉じて選択を確定する。以前は `selects`（`NSPopUpButton` のプルダウン、ラベル付き、複数可）だった。ユーザー向けの仕様は README の `dialog_custom`。ここには、設計の決定と罠を書く。
+
+- **構造**：`DialogPanel::AddSelectList`（`Dialog.mm`）が、リストを囲む細い箱（飾り。`focusables` に入れない）と、行（`_MiataSelectRow`。`NSControl` のサブクラス）を作る。行は `background` の**直接の子**で、他のコントロールと同じ `focusables` の1項目に登録する（カーソルのときの薄い塗りは、`UpdateFocusHighlight` が `isKindOfClass:` で行を見分けて付ける）。**行を箱の子にしない**：`NavigateDir` が、全 focusable の frame を `background` の座標系のまま比べるため。専用の部品にはせず（`FilterListDialog` の行リストとも共有せず）、`Dialog.mm` の中に閉じ込めた（十数行・1ダイアログ1リストで足りるため。スクロールや複数リストが要るようになったら、内部カーソルを持つ部品にする）
+- **移動と Enter は、既存の仕組みをそのまま使う**（新しい移動のコードは無い）：行も、チェックボックスやボタンと同じ `focusables` の1項目で、`NavigateDir`（幾何学的な最近傍）が動かす。だから、リストの端を超えると、その先のチェックボックス・ボタンへ移る。折り返さない。リストへ戻ると、入ってきた側に近い行に着く（上から入れば先頭、下から入れば末尾。カーソルの記憶は無い）。行の高さは 22（`kSelectRowHeight`）、行間は 0（隙間があると、行の間のクリックが後ろの箱に当たる）。左右キーで隣の行へ動かないのは、行が同じ x・同じ幅で並び、左右の探索の帯が行の左端・右端に接するだけで重ならないため（`Overlaps` は厳密な不等号）。行の高さには依らない（22.3 や 22.7 でも、全行で動かないことを実測した）
+- **Enter が届く先（実測）**：先頭ボタンの `keyEquivalent = "\r"`（「既定」の強調）は、Return を奪わない。`MiataRootView::keyDown:` が `super` を呼ばずに消費するので、AppKit の `performKeyEquivalent:` に回らない（`MiataRootView` が first responder の、confirm / yes_no / custom のダイアログで。合成した Return を `[window sendEvent:]` に送って確かめた）。先頭ボタンが既定でも、カーソルを Cancel に移して Return すると Cancel が押される（Lua の `<enter>` → `navigate_ok` → `NavigateOk` → カーソルの項目に `performClick:`）。`[window performKeyEquivalent:]` を直接呼ぶと既定のボタンが押されるが、通常のキー入力ではその経路に来ない。入力欄が first responder の `dialog_input` は、ヘッドレスではウィンドウがキーでないため、Return の挙動を再現できなかった（未確認）。矢印キーは、以前は Dialog モードに束縛が無く（ビープ）、`resources/test.lua` で Dialog モードにも束縛した。**`"nd"` で1回 bind せず、モードごとに別々の関数で bind している**：1つの関数の Lua の参照が両モードで共有され、`unbind("n", "<down>")` が Dialog 側の参照まで解放して、後から bind した関数が `<down>` で呼ばれてしまうため（`lua_command_bind` / `lua_command_unbind` の既存の問題を、`"nd"` の矢印にした変異で再現した。`j` `k` `h` `l` `<enter>` `<esc>` の `"nd"` は同じ状態で、未対応）
+- **確定の通知は次のランループ**：ボタンと同じ `_MiataControlTarget::fire:`（`MakeTarget`）が `dispatch_async` で逃がす。`NavigateOk` の中で同期的に閉じてはいけない（`Hide()` が `focusables` を clear する）。値（チェックボックス）は、`CloseDialog()` の前に読む（`Hide()` の後は `GetCheckbox` が false しか返さない）
+- **閉じた後に届いた通知は捨てる**（`IDialog` のコンストラクタで `on_button_` に渡すラムダの `!is_opened_`。全ダイアログに効く）：`fire:` の block は `Hide()` で取り消されない。Enter の連打などで、確定が block の実行前に2回呼ばれると、2発目が閉じた後に届き、`OnButton` が `Hide()` で消えた値（チェックボックスは false、入力欄は ""）で結果を上書きしてしまう。`CustomDialog`（`double_fire`）と `InputTextDialog`（`double_fire_input`）で確かめた。行のダブルクリックでは起きにくい（1発目の block が走ると、行がビューから外れる）
+- **結果は排他**：`CustomDialogResult` の `button_index` と `select_index` のどちらか一方（`std::optional`）。Lua では `result.button` か `result.select`。行の確定を `button = 1` にしない（ボタンが無いダイアログでも `button = 1` が返って紛らわしい）
+- **`buttons` 省略時**：select があれば OK を足さない（閉じるのは行の Enter か Esc）。select があるとき、先頭ボタンの「既定」の強調も付けない（Enter の主な作用が行の確定で、強調された OK は「Enter で OK」と誤解させる。Enter はカーソルの項目に作用する）。強調されたボタンと、Enter が押す項目の食い違いは、既存の `YesNoDialog` にある：`dialog_yes_no(msg, true, …)` は、強調が「はい」（ウィンドウの `defaultButtonCell`）で、カーソルと Enter は先頭に登録した「いいえ」（実測。`yesno_default`）。直すなら `YesNoDialog::OnOpen` で `SetInitialFocus(default_select_ ? yes_id_ : no_id_)`（未対応）
+- **検証は厳格、`luaL_error` の前に**：`CheckCustomDialogSelect`（`Application.cc`）を、`lua_private_dialog_open` の `custom` の分岐の先頭、spec（`std::string` を持つ）を作る前に呼ぶ（`luaL_error` は longjmp。`type_string` は `std::string_view` にして、デストラクタを持つオブジェクトを、`luaL_error` の前に作らない）。Lua の C API と整数だけを使い、メッセージの書式は固定で、埋め込むのは整数だけ。`select` がテーブルでない・`options` がテーブルでない/空・文字列（数値も可）でない要素がある・`selected` が整数でない/範囲外はエラー（要素を黙って捨てると、行の番号がずれて、意図しない行が確定するため）。旧 `selects` は、移行を案内するエラー（黙って無視すると、リストの無いダイアログが開いて、`result.selects[1]` の nil 参照という遠いエラーになる）。通った後の `ParseCustomDialogSpec` の select の読み取りは、エラーを投げない書き方で、`CustomDialog` は検証済みを前提にする（`selected` を丸めない）。`buttons` / `checkboxes` は従来どおり寛容（型違いを黙って捨てる。捨てると添字がずれる同じ問題が残る。別件）
+- **文字列の修復**：`dialog_custom` の Lua からの文字列（`title`・`message`・ボタン・チェックボックスのラベル・選択肢）は、`ParseCustomDialogSpec` で `RepairUtf8` に通す（不正なバイトのままだと NSString にできず、ラベルの作成（`labelWithString:nil`）で例外になる）。ほかの `dialog_*` の文字列は未対応（「名前が UTF-8 として不正なファイル」を参照）
+- **見た目**：カーソル行は、既存の 2pt の枠（`UpdateFocusHighlight`）に加えて、`selectedContentBackgroundColor` の薄い塗り（`kCursorFillAlpha = 0.25`）。文字色は反転しない（不透明な選択色だと、Light で黒文字が青地に載ってコントラストが落ち、反転が要る）。リストは細い箱で囲む（箱が無いと、選べる行だと分からない）。カーソルがチェックボックスやボタンにあるときは、行はどれも塗られない（カーソルは1つ）。`FilterListDialog` の選択行（不透明な塗りだけ、枠なし、`pl_get_color`）とは見た目が違う：他のダイアログの項目の枠と揃えた。共通化するときは、揃えるかを決める。長い選択肢は、1行のまま末尾が「…」で省かれる（PNG で確認）
+- **クリック**：`_MiataSelectRow` は `acceptsFirstResponder` が NO（キー入力は `MiataRootView` に届き続ける必要がある。`_MiataFileListNSView` と同じ）。`mouseDown:` は何もしない実装で上書きして `mouseUp:` を行に届け、`mouseUp:` が行の内側のときだけ確定する（押しただけ、外で離したときは何もしない）。セルを持たない `NSControl` なので、target/action は使わず、`activator`（`_MiataControlTarget`）を持つ。標準の `NSPopUpButton` が持っていたアクセシビリティの代わりに、ボタンとして読まれる自前の4メソッドを持つ（読み上げの内容は未確認。旧ポップアップが読んでいたグループ名・現在値は、読まれない）
+- **名前**：行の確定も `on_button_` / `OnButton` / `button_id` に届く（ボタンだけだった頃の名前のまま）。3種類目の部品を足すときに、`on_activate_` / `OnActivate` などへ改名する
+- **限界**：カーソルの記憶が無い。スクロールも高さの上限も無い（十数行まで。計算上、25 行前後で、既定のウィンドウより高くなる）。1ダイアログに1リスト。ホバー・押下中の表示・タイプしてジャンプは無い
+- **テスト**（リポジトリ外のスクラッチ）：実物の `Application::Initialize()` を模擬 `.app` から起動し（1 回の起動で 1 シナリオ）、合成した `NSEvent` を `[window sendEvent:]` で実物のウィンドウに送る。キー（j/k/h/l・矢印・Enter・Esc）は、`MiataRootView::keyDown:` から Lua まで全経路を通る。結果は、キーに束縛した関数が Lua のグローバルに書いたものを読む。カーソルは、ダイアログの背景の子で `layer.borderWidth` が 1.5 以上（2pt の枠）のものを探して読む（リストの箱は 1pt なので区別できる）。確かめたのは、初期カーソル、端と範囲を超える移動、行で左右キーが動かないこと（15 行の全行）、行・チェックボックス・ボタンの Enter、Esc、`buttons` の省略規則、検証エラー（各メッセージと、ダイアログが開かないこと）、不正な UTF-8、二重確定、クリック、15 行の収まり、Light/Dark の描画（PNG と画素）、実物の `test.lua` のソートとデモ、Confirm・YesNo・InputText の回帰、`unbind` した後の矢印（26 シナリオ。AddressSanitizer でも通る）。実装を 1 か所ずつ壊す変異（26 件）は、全て検出した。**罠**：(1) マウスのイベントは、表示されていないウィンドウでは `[window sendEvent:]` / `[NSApp sendEvent:]` でビューに届かない（実測。`isVisible` / `isKeyWindow` を装っても届かない）。`[contentView.superview hitTest:]` で当たるビューを求め、`mouseDown:` / `mouseUp:` を直接届ける。この方法では、ウィンドウがクリックで first responder にする経路を通らないので、`acceptsFirstResponder` は直接アサートする。(2) Dark は、プロセスの引数 `-AppleInterfaceStyle Dark` では変わらない（実測）。ダイアログの作成とカーソル移動を `[[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua] performAsCurrentDrawingAppearance:…]` で包み、ウィンドウの `appearance` も Dark にする。(3) ブロックの `(id sender)` の型を、`int id` という名前の引数が隠して、コンパイルエラーになる。(4) 色の読み戻しはずれるので、絶対値ではなく、行どうし・余白との差がしきい値以上かで比べる。(5) 変異テストのスクリプトは、実行中に編集しない（bash はスクリプトを読みながら実行するので、構文エラーで途中から壊れる）。(6) `NSButton.keyEquivalent` の値 `"\r"` は、ターミナルに出力すると見えない（空に見える）。既定のボタンかどうかは、`window.defaultButtonCell == button.cell` で比べる。(7) 変異が「検出された」だけでは足りない：行の高さを 22.3 などにした変異は、「高さが整数」という不要な制約のアサートだけで検出され、設計時の「非整数だと左右キーで動く」が誤りだと分かった。何で検出されたかも見る
+- **未確認（実機）**：実際のマウスでのクリック（ウィンドウ経由の配送、first responder を奪われないこと、ウィンドウが非アクティブのときの最初のクリック）、キーリピート、`dialog_input` の入力欄にフォーカスがあるときの Return、VoiceOver、実機の Light/Dark の見た目（ヘッドレスの PNG では確認済み）
+
 ## マーク済みファイルのドラッグ&ドロップ（他アプリへの持ち出し）
 
-一覧は基本キーボード操作で、マウスを受け付けるのはこれだけ（クリックでのカーソル移動等は無い）。実装は `views/FileListView.mm` の `_MiataFileListNSView`（`mouseDown:`/`mouseDragged:` + `NSDraggingSource`）と `FileListView::BeginDrag()`/`EndDrag()`。
+ファイル一覧は基本キーボード操作で、マウスを受け付けるのはこれだけ（クリックでのカーソル移動等は無い。ダイアログの選択リストの行のクリックは別。後述「選択リスト」）。実装は `views/FileListView.mm` の `_MiataFileListNSView`（`mouseDown:`/`mouseDragged:` + `NSDraggingSource`）と `FileListView::BeginDrag()`/`EndDrag()`。
 
 - **運ぶのは「そのペインのマーク済みファイル」だけ**。押した行がどれかは判定しない（未マークの行から始めても同じ）。マークが0件なら何もしない。順序は画面表示順（`list_` 順）。
 - **ダイアログ表示中は無効**。`DialogPanel` は画面中央の小さな `NSView` でマウスを遮らないため、裏の一覧にもマウスが届く。`View` のコンストラクタが `SetDragGuard`（`BrowserView` 経由で左右ペインへ）で `!IsAnyDialogOpened()` を注入している（`FileListView` は `View` を知らない）。

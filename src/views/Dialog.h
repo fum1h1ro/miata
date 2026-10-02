@@ -25,14 +25,19 @@ namespace miata::views {
 
         void Show(const std::string& title, const std::string& message, Size2D ideal_size);
         void Hide();
-        // ボタン行の右寄せ配置とパネル全体のサイズ確定、画面中央への表示を行う。
-        // コントロールを一通り追加し終えた後、IDialog::Open()の最後に一度だけ呼ぶ。
+        // ボタン行の右寄せ配置とパネル全体のサイズ確定、画面中央への表示、最初のカーソルの位置(SetInitialFocusの項目。
+        // 無ければ先頭)の決定を行う。コントロールを一通り追加し終えた後、IDialog::Open()の最後に一度だけ呼ぶ。
         void Layout();
 
         // 戻り値はコールバックで識別するためのID
         int AddButton(const std::string& label, bool is_default);
         int AddCheckbox(const std::string& label, bool initial);
-        int AddPopup(const std::string& label, const std::vector<std::string>& options, int initial);
+        // 縦に並んだ選択肢の行(optionsの順。行間なし)を、細い箱で囲んで追加する。戻り値は行ごとのID(AddButtonと同じ番号空間)。
+        // 各行はフォーカス可能で、カーソルを置いてNavigateOkするか、クリックすると、その行のIDで on_button_ が呼ばれる。
+        // 行どうしと、チェックボックス・ボタンの間のカーソル移動は、他のコントロールと同じ(幾何学的な最近傍)。
+        std::vector<int> AddSelectList(const std::vector<std::string>& options);
+        // Layout() で最初にカーソルを置く項目(AddButton/AddCheckbox/AddSelectListの戻り値)。呼ばない、または見つからなければ先頭。
+        void SetInitialFocus(int id);
         // テキストフィールドはフォーカス可能リストに入れない(IME/標準入力を優先させるため)
         void AddTextField(const std::string& initial);
         // 直前にAddTextFieldで作ったフィールドにdelegateを設定する
@@ -44,16 +49,16 @@ namespace miata::views {
         void AddCustomView(void* native_view, float height);
 
         bool GetCheckbox(int id) const;
-        int GetPopupSelection(int id) const;
         std::string GetTextFieldValue() const;
 
         void NavigateUp();
         void NavigateDown();
         void NavigateLeft();
         void NavigateRight();
-        void NavigateOk(); // フォーカス中コントロールのアクションを実行(ボタン押下/チェックボックストグル)
+        void NavigateOk(); // フォーカス中コントロールのアクションを実行(ボタン押下/チェックボックストグル/選択リストの行の確定)
 
-        // ボタン押下時に呼ばれる(idはAddButtonの戻り値)
+        // ボタン、または選択リストの行が確定されたときに呼ばれる(idはAddButton/AddSelectListの戻り値)。
+        // 呼び出し元(NavigateOkやクリック)のコールスタックを抜けた、次のランループで呼ばれる。
         std::function<void(int)> on_button_;
 
     private:
@@ -142,16 +147,16 @@ namespace miata::views {
     class CustomDialog : public IDialog {
     public:
         CustomDialog(std::function<void(IDialog&)> on_close, const CustomDialogSpec& spec);
-        // キャンセル時は nullopt
+        // キャンセル(Esc)時は nullopt。ボタンで閉じたら button_index、選択リストの行で閉じたら select_index のどちらか一方だけが入る
         const std::optional<CustomDialogResult>& Result() const { return result_; }
     protected:
         void OnOpen() override;
-        void OnButton(int button_id) override;
+        void OnButton(int button_id) override; // ボタンと、選択リストの行の両方が、ここに届く
     private:
         CustomDialogSpec spec_;
         std::optional<CustomDialogResult> result_;
         std::vector<int> checkbox_ids_;
-        std::vector<int> select_ids_;
+        std::vector<int> select_ids_; // 選択リストの行のID(行の順)
         std::vector<int> button_ids_;
     };
 }

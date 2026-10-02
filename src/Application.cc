@@ -14,14 +14,73 @@
 #include "Application.h"
 #include "Config.h"
 #include "misc.h"
+#include "Utf8.h"
 
 namespace miata {
-    // tidx にあるテーブル(title/message/buttons/checkboxes/selects)から CustomDialogSpec を組み立てる。
+    // tidx にあるテーブルの select(選択リスト)を検証する。不正なら luaL_error(Lua のエラー。ダイアログは開かない)。
+    // luaL_error は longjmp なので、スタックにあるデストラクタ付きのオブジェクト(std::string など)のデストラクタが走らない。
+    // だから、C++ のオブジェクトを作る前に呼ぶこと。この関数自身も、Lua の C API と整数だけを使い、メッセージの書式は固定で、
+    // 埋め込むのは整数だけにする。
+    // 添字は戻り値の select と1対1なので、要素を黙って捨てたり、範囲外の selected を丸めたりしない(ずれた行が確定してしまう)。
+    // buttons / checkboxes は、従来どおり寛容なパース(型違いを黙って捨てる)のまま。
+    static void CheckCustomDialogSelect(lua_State* L, int tidx)
+    {
+        tidx = lua_absindex(L, tidx);
+
+        // 旧 API。黙って無視すると、リストの無いダイアログが開いて、戻り値の result.selects[1] の nil 参照という遠いエラーになる
+        lua_getfield(L, tidx, "selects");
+        if (!lua_isnil(L, -1)) {
+            luaL_error(L, "dialog_custom: 'selects' was replaced by 'select' (one list per dialog): select = { options = {...}, selected = 1 }");
+        }
+        lua_pop(L, 1);
+
+        lua_getfield(L, tidx, "select");
+        if (lua_isnil(L, -1)) {
+            lua_pop(L, 1);
+            return;
+        }
+        if (!lua_istable(L, -1)) {
+            luaL_error(L, "dialog_custom: select must be a table: { options = {...}, selected = 1 }");
+        }
+        const int sel = lua_gettop(L);
+
+        lua_getfield(L, sel, "options");
+        if (!lua_istable(L, -1)) {
+            luaL_error(L, "dialog_custom: select.options must be a table of strings");
+        }
+        const lua_Integer n = (lua_Integer)lua_rawlen(L, -1);
+        if (n == 0) {
+            luaL_error(L, "dialog_custom: select.options must not be empty");
+        }
+        for (lua_Integer i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (!lua_isstring(L, -1)) { // 文字列と数値(dialog_filter_list の items と同じ)
+                luaL_error(L, "dialog_custom: select.options[%d] must be a string", (int)i);
+            }
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1); // options
+
+        lua_getfield(L, sel, "selected");
+        if (!lua_isnil(L, -1)) {
+            // 数値だけ(文字列の "2" は不可)。3.0 は整数として受け付け、3.5 と NaN は受け付けない(set_history_limit と同じ)
+            int is_integer = 0;
+            const lua_Integer v = lua_type(L, -1) == LUA_TNUMBER ? lua_tointegerx(L, -1, &is_integer) : 0;
+            if (!is_integer || v < 1 || v > n) {
+                luaL_error(L, "dialog_custom: select.selected must be an integer from 1 to %d", (int)n);
+            }
+        }
+        lua_pop(L, 2); // selected, select
+    }
+
+    // tidx にあるテーブル(title/message/buttons/checkboxes/select)から CustomDialogSpec を組み立てる。
+    // select は CheckCustomDialogSelect で検証済みの前提で、エラーを投げない読み取りにしてある。
+    // 文字列は、UTF-8 として不正なバイトを U+FFFD に置き換える(そのままだと NSString にできず、ラベルの作成で例外になる)。
     static CustomDialogSpec ParseCustomDialogSpec(lua_State* L, int tidx)
     {
         auto get_str = [&](int idx, const char* key) -> std::string {
             lua_getfield(L, idx, key);
-            std::string v = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            std::string v = lua_isstring(L, -1) ? RepairUtf8(lua_tostring(L, -1)) : "";
             lua_pop(L, 1);
             return v;
         };
@@ -36,7 +95,7 @@ namespace miata {
             int n = (int)lua_rawlen(L, -1);
             for (int i = 1; i <= n; i++) {
                 lua_rawgeti(L, -1, i);
-                if (lua_isstring(L, -1)) spec.buttons.push_back(lua_tostring(L, -1));
+                if (lua_isstring(L, -1)) spec.buttons.push_back(RepairUtf8(lua_tostring(L, -1)));
                 lua_pop(L, 1);
             }
         }
@@ -61,32 +120,22 @@ namespace miata {
         }
         lua_pop(L, 1);
 
-        // selects
-        lua_getfield(L, tidx, "selects");
+        // select(検証済み。select.label など、使わないキーは読まない)
+        lua_getfield(L, tidx, "select");
         if (lua_istable(L, -1)) {
-            int n = (int)lua_rawlen(L, -1);
-            for (int i = 1; i <= n; i++) {
-                lua_rawgeti(L, -1, i);
-                if (lua_istable(L, -1)) {
-                    CustomDialogSelect sel;
-                    sel.label = get_str(lua_gettop(L), "label");
-                    lua_getfield(L, -1, "selected");
-                    sel.selected = lua_isnumber(L, -1) ? (int)lua_tointeger(L, -1) - 1 : 0; // 1-based → 0-based
-                    lua_pop(L, 1);
-                    lua_getfield(L, -1, "options");
-                    if (lua_istable(L, -1)) {
-                        int m = (int)lua_rawlen(L, -1);
-                        for (int j = 1; j <= m; j++) {
-                            lua_rawgeti(L, -1, j);
-                            if (lua_isstring(L, -1)) sel.options.push_back(lua_tostring(L, -1));
-                            lua_pop(L, 1);
-                        }
-                    }
-                    lua_pop(L, 1);
-                    spec.selects.push_back(std::move(sel));
-                }
+            CustomDialogSelect sel;
+            lua_getfield(L, -1, "options");
+            int m = (int)lua_rawlen(L, -1);
+            for (int j = 1; j <= m; j++) {
+                lua_rawgeti(L, -1, j);
+                sel.options.push_back(RepairUtf8(lua_tostring(L, -1)));
                 lua_pop(L, 1);
             }
+            lua_pop(L, 1);
+            lua_getfield(L, -1, "selected");
+            sel.selected = lua_isnil(L, -1) ? 0 : (int)lua_tointeger(L, -1) - 1; // 1-based → 0-based
+            lua_pop(L, 1);
+            spec.select = std::move(sel);
         }
         lua_pop(L, 1);
 
@@ -932,7 +981,8 @@ namespace miata {
         Script::CheckArgType(L, 1, LUA_TSTRING);
         Script::CheckArgType(L, 2, LUA_TTABLE);
 
-        const std::string type_string = lua_tostring(L, 1);
+        // string_view なのは、デストラクタを持つオブジェクトを、luaL_error(longjmp)の前に作らないため
+        const std::string_view type_string = lua_tostring(L, 1);
         if (type_string == "confirm") {
             auto message = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "message", "Are you sure?");
             auto button_text = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "button_text", "OK");
@@ -991,6 +1041,7 @@ namespace miata {
             return 1;
         }
         else if (type_string == "custom") {
+            CheckCustomDialogSelect(L, 2); // 検証してから、spec(std::string を持つ)を作る
             auto spec = ParseCustomDialogSpec(L, 2);
 
             auto dialog = std::make_shared<views::CustomDialog>(
@@ -1078,8 +1129,15 @@ namespace miata {
 
             lua_newtable(L);
 
-            lua_pushinteger(L, result->button_index + 1); // 0-based → 1-based
-            lua_setfield(L, -2, "button");
+            // 閉じた理由は、ボタン(button)か、選択リストの行(select)のどちらか一方だけ。どちらも 0-based → 1-based
+            if (result->button_index) {
+                lua_pushinteger(L, *result->button_index + 1);
+                lua_setfield(L, -2, "button");
+            }
+            if (result->select_index) {
+                lua_pushinteger(L, *result->select_index + 1);
+                lua_setfield(L, -2, "select");
+            }
 
             lua_newtable(L);
             for (int i = 0; i < (int)result->checkboxes.size(); i++) {
@@ -1087,13 +1145,6 @@ namespace miata {
                 lua_rawseti(L, -2, i + 1);
             }
             lua_setfield(L, -2, "checkboxes");
-
-            lua_newtable(L);
-            for (int i = 0; i < (int)result->selects.size(); i++) {
-                lua_pushinteger(L, result->selects[i] + 1); // 0-based → 1-based
-                lua_rawseti(L, -2, i + 1);
-            }
-            lua_setfield(L, -2, "selects");
 
             return 1;
         }
