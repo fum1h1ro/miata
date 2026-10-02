@@ -2,6 +2,7 @@
 #include <format>
 #include "View.h"
 #include "../platform.h"
+#include "../Utf8.h"
 
 namespace {
     // 権限が無い失敗のときに添える、許可のしかたの案内。権限が無い失敗(EPERM / EACCES)のうち、OSの保護(プライバシーと
@@ -60,7 +61,9 @@ namespace miata::views {
 
     void View::ReportFileError(const std::string& what, const FileError& error)
     {
-        auto reason = std::format("{}: {}", what, error.message);
+        // 文面にはパスが入る(whatに埋め込まれる)。UTF-8として不正なバイトがあると(Luaのjump_toに渡したパスなど)、
+        // NSStringにできず、ダイアログのラベル(labelWithString:)が例外で落ちるので、U+FFFDに置き換える
+        auto reason = RepairUtf8(std::format("{}: {}", what, error.message));
         if (!error.permission_denied) {
             RequestDialog(std::make_shared<ConfirmDialog>(
                 [](IDialog&) {},

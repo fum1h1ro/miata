@@ -25,6 +25,9 @@ namespace miata::models {
             std::error_code ec;
             return raw_.exists(ec);
         }
+        // 名前(NFC)。常にUTF-8として正しい: ファイルシステムの名前がUTF-8として不正なとき(ネットワークボリュームなど)は、
+        // 不正なバイトをU+FFFDに置き換えてある。そのため、この名前でパスを作ると、そのファイルを指さない
+        // (元のバイト列のパスは Path())。Basename()・Ext()も同じ
         inline const std::string& Name() const
         {
             return name_;

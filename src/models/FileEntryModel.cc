@@ -5,6 +5,7 @@
 #include <ctime>
 #include "FileEntryModel.h"
 #include "../platform.h"
+#include "../Utf8.h"
 
 namespace miata::models {
     FileEntryModel::FileEntryModel(const std::filesystem::directory_entry& entry)
@@ -13,9 +14,11 @@ namespace miata::models {
         raw_ = entry;
         flags_.clear();
         auto filename = entry.path().filename();
+        // 名前は、UTF-8として不正なバイトがあっても(ネットワークボリュームなど)、U+FFFDに置き換えて、UTF-8として
+        // 正しい形にする(並べ替え・検索・表示でNSStringにするため)。元のバイト列のパスは、Path()に残る
         name_ = pl_normalize_string(filename.string());
-        basename_ = filename.stem().string();
-        ext_ = filename.extension().string();
+        basename_ = RepairUtf8(filename.stem().string());
+        ext_ = RepairUtf8(filename.extension().string());
         std::error_code ec;
         if (raw_.exists(ec) && !ec) {
             auto t = std::filesystem::last_write_time(entry, ec);
