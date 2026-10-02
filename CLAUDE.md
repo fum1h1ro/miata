@@ -34,7 +34,7 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 
 **構成:**
 - `src/models/` — データモデル（`FileListModel`、`FileEntryModel`、`BrowserModel`）と、フォルダの履歴 `PathHistory`（AppKit 非依存。左右で 1 つを共有し、`BrowserModel` が持つ）
-- `src/views/` — UI レイヤー。`View`（ダイアログキュー管理・ブラウザ操作の起点）、`BrowserView`（左右ペインの `NSSplitView` と、その上に被せるプレビューの覆い、各ペインの下の検索バーを持つコンテナ）、`FileListView`（ファイル一覧本体。`NSScrollView` + 自前 `NSView.drawRect` で描画）、`QuickLookView`（Quick Look のプレビューを載せる覆い）、`SearchBar`（下端の検索バー）と `SearchState`（検索の状態。AppKit 非依存）、`Dialog`（`IDialog`/`DialogPanel` によるダイアログ基盤）
+- `src/views/` — UI レイヤー。`View`（ダイアログキュー管理・ブラウザ操作の起点）、`BrowserView`（左右ペインの `NSSplitView` と、その上に被せるプレビューの覆い、各ペインの下の検索バーを持つコンテナ）、`FileListView`（ファイル一覧本体。`NSScrollView` + 自前 `NSView.drawRect` で描画）、`QuickLookView`（Quick Look のプレビューを載せる覆い）、`SearchBar`（各ペインの下の検索バー）と `SearchState`（検索の状態。AppKit 非依存）、`Dialog`（`IDialog`/`DialogPanel` によるダイアログ基盤）
 - `src/widgets/` は存在しない（過去のドキュメントの残骸。汎用ウィジェットは今のところ `views/` 直下に個別実装されている）
 - `platforms/` — OS 固有実装（`.mm`）。現状 macOS 用の `osx.mm` と `main.mm` のみ
 
@@ -156,7 +156,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 
 - **3つに分けた**：`SearchState`（AppKit 非依存。1ペイン分の状態遷移 Idle → Typing → Committed と、ヒットからの計算 `FirstHitFrom`/`Step`/`Ordinal`/`RangesFor` だけ。マッチ自体は持たない）、`FileListView`（実際のマッチ `RebuildSearchHits`、カーソルの移動 `JumpCursorTo`、ハイライトの描画 `Draw`。検索状態は `search_`）、`SearchBar`（pimpl。背景のビュー + `NSTextField` 3つ（「/」・入力欄・件数）+ delegate）。バーは**ペインごとに1つ**、`BrowserView` が持ち、入力の始まりと終わり、ペインの状態との整合を担う
 - **マッチ**：`NSString` の `rangeOfString:options:range:`（名前は `@(Name().c_str())`）。返る `NSRange` は名前の UTF-16 の添字で、そのまま `NSAttributedString` の属性範囲に使える（UTF-8 との変換が要らない）。スマートケース：語に Unicode の大文字（`uppercaseLetterCharacterSet`）が1文字でもあれば `0`（区別する）、無ければ `NSCaseInsensitiveSearch`。**`NSLiteralSearch` は付けない**（付けると、合成済みの文字と分解された文字（NFC の `が` と `か` + 濁点）が一致しなくなる。`Name()` は NFC だが、検索語は NFD で来ることもある）。範囲の長さは**名前の側**の長さ（検索語の長さと同じとは限らない）。全角/半角・ひらがな/カタカナ・アクセントは畳み込まない（実測）。`FzfFilter` は使えない（外部プロセスを起動し、一致位置を返さず、結果がスコア順）
-- **ヒットは `Fetch()` の末尾で作り直す**：`list_` を作り直すのは `Fetch()` だけで（ディレクトリ移動・手動/自動リロード・ソートはすべてここを通る）、ヒットは `list_` の添字なので、そのたびに無効になる。`Draw()` の中では計算しない。検索状態に持てるのは、検索語・位置のパス（`SearchPosition`。パスが見つからないときの代わりに添字も）・ヒットの添字だけ。**`FileEntryView*`/`FileEntryModel*` は持たない**（再スキャンで旧エントリが通知より前に破棄される）。起点（`Anchor`）と戻り先（`Restore`）は、`CursorMemo` と同じく**パス**で持ち、`ResolveRow()` で今の添字にする
+- **ヒットは `Fetch()` の末尾で作り直す**：`list_` を作り直すのは `Fetch()` だけで（ディレクトリ移動・手動/自動リロード・ソートはすべてここを通る）、ヒットは `list_` の添字なので、そのたびに無効になる。`Draw()` の中では計算しない。検索状態に持てるのは、検索語・位置のパス（`SearchPosition`。パスが見つからないときの代わりに添字も）・ヒットの添字だけ。**`FileEntryView*`/`FileEntryModel*` は持たない**（再スキャンで旧エントリが通知より前に破棄される）。起点（`Anchor`）と戻り先（`Origin`）は、`CursorMemo` と同じく**パス**で持ち、`ResolveRow()` で今の添字にする
 - **「ディレクトリ移動」の判定は `reload_memo_` の有無**：購読（`ObservePath`）の中で、`FileListView::Reload()` の間だけ立つ `reload_memo_` が無い通知は移動とみなし、`search_.Clear()` する（カーソルを 0 に戻すのと同じ判定）。`FileListModel::Reload()` を `FileListView::Reload()` を介さずに呼ぶ処理を足すと、再スキャンなのに検索が消える。`TryJumpTo` は、同じパスへでも消す（ルートでの `navigate_left` など。無害）
 - **メンバーの宣言順**：`search_` は `subscriptions_` より前に宣言する（購読の通知は `Fetch()` を呼び、`Fetch()` は `search_` を使う。破棄は宣言の逆順なので、購読が先に止まる）
 - **遷移**（`SearchState`）：`Begin`（Idle/Committed → Typing。確定済みの語は Esc で戻れるよう取っておく。新しい語は空で、前のヒットは隠す）、`Commit`（Typing → Committed。**語が空なら `Cancel` と同じ**=検索を始める前の状態に戻る）、`Cancel`（Typing → 始める前の状態。カーソルを `Origin`（検索を始めた位置）へ戻すのは `FileListView::CancelSearch`。`Origin` は `Cancel` では消えず、`Clear` で消える）、`Clear`。**語が変わる遷移（`Begin`/`Cancel`/`Clear`、語が空の `Commit`）はヒットを空にする**ので、今の語のヒットが要るなら `RebuildSearchHits()` で作り直す（語がある普通の `Commit` は、語もヒットも変わらない）
