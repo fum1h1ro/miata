@@ -130,22 +130,24 @@ struct CustomDialogCheckbox {
     std::string label;
     bool checked;
 };
+// 縦に並んだ選択肢の行。行でEnter(またはクリック)すると、その場でダイアログが閉じて選択が確定する。
+// options は1件以上、selected は範囲内(Application.cc が Lua からの入力を検証してから作る)。
 struct CustomDialogSelect {
-    std::string label;
     std::vector<std::string> options;
-    int selected; // 0-based
+    int selected = 0; // 0-based。最初にカーソルがある行
 };
 struct CustomDialogSpec {
     std::string title;
     std::string message; // informative text (optional)
     std::vector<std::string> buttons;
     std::vector<CustomDialogCheckbox> checkboxes;
-    std::vector<CustomDialogSelect> selects;
+    std::optional<CustomDialogSelect> select; // 1ダイアログに1つ
 };
+// ダイアログが閉じた理由は、ボタン(button_index)か、選択リストの行(select_index)のどちらか一方だけ。
 struct CustomDialogResult {
-    int button_index; // 0-based
+    std::optional<int> button_index; // 0-based。ボタンで閉じたとき
+    std::optional<int> select_index; // 0-based。行で閉じたとき
     std::vector<bool> checkboxes;
-    std::vector<int> selects; // 0-based selected index
 };
 
 // ファイルをゴミ箱へ移す。失敗(権限が無い・消えた等)はエラーで返す。権限が無い失敗は

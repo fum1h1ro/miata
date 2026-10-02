@@ -15,6 +15,7 @@
 // retain し続ける DialogPanel::Impl::targets_ 配列のみ。
 // fire: の実行中に呼び出し元(ボタン押下)経由でダイアログ自体が閉じられ、
 // この target 自身が回収されることがあるため、実際の呼び出しは次のランループへ逃がす。
+// ボタンと、選択リストの行(_MiataSelectRow)が共有する。同期的に閉じると、NavigateOk が持っている focusables への参照も壊れる。
 @interface _MiataControlTarget : NSObject
 @property (nonatomic, copy) void (^action)(id sender);
 - (void)fire:(id)sender;
@@ -30,6 +31,63 @@
 }
 @end
 
+// 選択リストの行の、文字の左右の余白。ObjC のクラスは C++ の名前空間の外に置くので、定数もここに置く
+static const CGFloat kSelectRowTextInset = 8;
+
+// 選択リストの行(DialogPanel::AddSelectList)。background の直接の子として、他のコントロールと同じ focusable に登録する。
+// NavigateOk からは performClick: だけで作用し、通知は _MiataControlTarget::fire: が次のランループへ逃がす(ボタンと同じ)。
+// first responder にならない(キー入力は MiataRootView に届き続ける必要がある。_MiataFileListNSView と同じ)。
+// クリックは、行の上で押して行の上で離したときだけ確定する。セルを持たない NSControl なので、target/action は使わず、
+// activator を持つ。
+@interface _MiataSelectRow : NSControl
+@property (nonatomic, copy) NSString* rowTitle;
+@property (nonatomic, strong) _MiataControlTarget* activator;
+@end
+@implementation _MiataSelectRow
+- (BOOL)acceptsFirstResponder { return NO; }
+- (void)drawRect:(NSRect)dirtyRect
+{
+    // 背景(カーソル行の塗り)は layer が持つ(DialogPanel::Impl::UpdateFocusHighlight)。ここでは文字だけを描く
+    if (self.rowTitle.length == 0) return;
+    // 段落スタイルを付けないと、長い文字列は折り返されて1行目だけが見える(FilterListDialog と同じ)。
+    // 選択肢は先頭が大事なので、末尾を省く
+    NSMutableParagraphStyle* style = [[NSMutableParagraphStyle alloc] init];
+    style.lineBreakMode = NSLineBreakByTruncatingTail;
+    NSDictionary* attrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:13],
+        NSForegroundColorAttributeName: [NSColor labelColor],
+        NSParagraphStyleAttributeName: style,
+    };
+    NSSize size = [self.rowTitle sizeWithAttributes:attrs];
+    NSRect bounds = self.bounds;
+    NSRect text_rect = NSMakeRect(kSelectRowTextInset, floor((bounds.size.height - size.height) / 2),
+                                  bounds.size.width - kSelectRowTextInset * 2, size.height);
+    [self.rowTitle drawInRect:text_rect withAttributes:attrs];
+}
+- (void)mouseDown:(NSEvent*)event
+{
+    // 押しただけでは確定しない。何もしない実装で上書きして、mouseUp: をこのビューに届ける
+}
+- (void)mouseUp:(NSEvent*)event
+{
+    NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+    if (NSPointInRect(p, self.bounds)) [self performClick:nil];
+}
+- (void)performClick:(id)sender
+{
+    [self.activator fire:self];
+}
+// 標準の NSPopUpButton が持っていたアクセシビリティの代わり(ボタンとして読まれ、押せる)
+- (BOOL)isAccessibilityElement { return YES; }
+- (NSAccessibilityRole)accessibilityRole { return NSAccessibilityButtonRole; }
+- (NSString*)accessibilityLabel { return self.rowTitle; }
+- (BOOL)accessibilityPerformPress
+{
+    [self performClick:nil];
+    return YES;
+}
+@end
+
 namespace miata::views {
 
 namespace {
@@ -39,6 +97,9 @@ namespace {
     constexpr CGFloat kRowSpacing = 8;
     constexpr CGFloat kButtonHeight = 28;
     constexpr CGFloat kButtonSpacing = 8;
+    constexpr CGFloat kSelectRowHeight = 22;    // 選択リストの行の高さ。行どうしは隙間なく接する(行の間のクリックが、後ろの箱に当たらないように)
+    constexpr CGFloat kSelectBoxInset = 4;      // リストの箱と、行の間
+    constexpr CGFloat kCursorFillAlpha = 0.25;  // カーソル行の塗り(selectedContentBackgroundColor に掛ける。文字色は反転しない)
 
     struct Rect { CGFloat x, y, w, h; };
     Rect FrameOf(NSView* v)
@@ -49,6 +110,17 @@ namespace {
     bool Overlaps(const Rect& a, const Rect& b)
     {
         return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    }
+
+    // ボタンや選択リストの行が確定されたときの通知先。DialogPanel::on_button_ を id つきで呼ぶ(呼ぶのは次のランループ)。
+    // panel は生ポインタで、呼ぶ時点で生きている前提(既存のボタンと同じ)。引数名を id にすると、ブロックの (id sender) の型を隠す
+    _MiataControlTarget* MakeTarget(DialogPanel* panel, int control_id)
+    {
+        _MiataControlTarget* target = [[_MiataControlTarget alloc] init];
+        target.action = ^(id sender) {
+            if (panel->on_button_) panel->on_button_(control_id);
+        };
+        return target;
     }
 }
 
@@ -65,6 +137,7 @@ struct DialogPanel::Impl {
     std::vector<Focusable> focusables;
     int next_id = 1;
     int focus_index = -1;
+    int initial_focus_id = -1; // Layout() で最初にカーソルを置く項目。-1 なら先頭
     CGFloat cursor_y = 0;
     CGFloat panel_width = kPanelWidth;
 
@@ -105,6 +178,15 @@ struct DialogPanel::Impl {
         focusables.push_back({view, id});
     }
 
+    // idの項目の添字。見つからなければ0(先頭)
+    int FocusIndexOf(int id) const
+    {
+        for (size_t i = 0; i < focusables.size(); ++i) {
+            if (focusables[i].id == id) return (int)i;
+        }
+        return 0;
+    }
+
     void UpdateFocusHighlight()
     {
         for (size_t i = 0; i < focusables.size(); ++i) {
@@ -113,8 +195,13 @@ struct DialogPanel::Impl {
                 f.view.layer.borderWidth = 2.0;
                 f.view.layer.cornerRadius = 4.0;
                 f.view.layer.borderColor = [NSColor keyboardFocusIndicatorColor].CGColor;
+                // 選択リストの行は、枠に加えて薄く塗る(リストの他の行と区別がつくように。文字は反転しないので、濃くしない)
+                if ([f.view isKindOfClass:[_MiataSelectRow class]]) {
+                    f.view.layer.backgroundColor = [[NSColor selectedContentBackgroundColor] colorWithAlphaComponent:kCursorFillAlpha].CGColor;
+                }
             } else {
                 f.view.layer.borderWidth = 0.0;
+                if ([f.view isKindOfClass:[_MiataSelectRow class]]) f.view.layer.backgroundColor = nil;
             }
         }
     }
@@ -212,6 +299,7 @@ void DialogPanel::Hide()
     impl_->targets = nil;
     impl_->text_field = nil;
     impl_->focus_index = -1;
+    impl_->initial_focus_id = -1;
     impl_->cursor_y = 0;
 }
 
@@ -223,11 +311,7 @@ int DialogPanel::AddButton(const std::string& label, bool is_default)
     if (is_default) btn.keyEquivalent = @"\r";
 
     int btn_id = impl_->next_id++;
-    _MiataControlTarget* target = [[_MiataControlTarget alloc] init];
-    DialogPanel* self_ptr = this;
-    target.action = ^(id sender) {
-        if (self_ptr->on_button_) self_ptr->on_button_(btn_id);
-    };
+    _MiataControlTarget* target = MakeTarget(this, btn_id);
     btn.target = target;
     btn.action = @selector(fire:);
     [impl_->targets addObject:target];
@@ -253,32 +337,42 @@ int DialogPanel::AddCheckbox(const std::string& label, bool initial)
     return id;
 }
 
-int DialogPanel::AddPopup(const std::string& label, const std::vector<std::string>& options, int initial)
+std::vector<int> DialogPanel::AddSelectList(const std::vector<std::string>& options)
 {
     impl_->EnsureBackground();
-    CGFloat avail = impl_->panel_width - kPadding * 2;
-    CGFloat label_width = label.empty() ? 0 : avail * 0.4f;
+    const CGFloat avail = impl_->panel_width - kPadding * 2;
+    const CGFloat box_height = kSelectRowHeight * (CGFloat)options.size() + kSelectBoxInset * 2;
 
-    if (!label.empty()) {
-        NSTextField* lbl = [NSTextField labelWithString:@(label.c_str())];
-        lbl.alignment = NSTextAlignmentRight;
-        lbl.frame = NSMakeRect(kPadding, impl_->cursor_y + 3, label_width - 8, kRowHeight - 4);
-        [impl_->background addSubview:lbl];
-    }
+    // リスト全体を囲む細い箱(飾り)。これが無いと、チェックボックスの下の選択肢が地の文に見えて、選べる行だと分からない。
+    // focusables には入れない。行はこの箱の子にせず、background の直接の子にする(NavigateDir が、全 focusable の frame を
+    // background の座標系のまま比べるため)
+    NSView* box = [[NSView alloc] initWithFrame:NSMakeRect(kPadding, impl_->cursor_y, avail, box_height)];
+    box.wantsLayer = YES;
+    box.layer.borderWidth = 1.0;
+    box.layer.cornerRadius = 6.0;
+    box.layer.borderColor = [NSColor separatorColor].CGColor;
+    [impl_->background addSubview:box];
 
-    NSPopUpButton* popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(kPadding + label_width, impl_->cursor_y, avail - label_width, kRowHeight) pullsDown:NO];
-    for (auto& opt : options) {
-        [popup addItemWithTitle:@(opt.c_str())];
+    std::vector<int> ids;
+    ids.reserve(options.size());
+    for (size_t i = 0; i < options.size(); ++i) {
+        const int row_id = impl_->next_id++;
+        _MiataSelectRow* row = [[_MiataSelectRow alloc] initWithFrame:NSMakeRect(
+            kPadding + kSelectBoxInset, impl_->cursor_y + kSelectBoxInset + kSelectRowHeight * (CGFloat)i,
+            avail - kSelectBoxInset * 2, kSelectRowHeight)];
+        row.rowTitle = @(options[i].c_str()); // UTF-8 として正しい前提(Lua からの文字列は Application.cc が修復する)
+        row.activator = MakeTarget(this, row_id);
+        [impl_->background addSubview:row];
+        impl_->RegisterFocusable(row, row_id);
+        ids.push_back(row_id);
     }
-    if (initial >= 0 && initial < (int)options.size()) {
-        [popup selectItemAtIndex:initial];
-    }
-    [impl_->background addSubview:popup];
-    impl_->cursor_y += kRowHeight + kRowSpacing;
+    impl_->cursor_y += box_height + kRowSpacing;
+    return ids;
+}
 
-    int id = impl_->next_id++;
-    impl_->RegisterFocusable(popup, id);
-    return id;
+void DialogPanel::SetInitialFocus(int id)
+{
+    impl_->initial_focus_id = id;
 }
 
 void DialogPanel::AddTextField(const std::string& initial)
@@ -319,17 +413,6 @@ bool DialogPanel::GetCheckbox(int id) const
     return false;
 }
 
-int DialogPanel::GetPopupSelection(int id) const
-{
-    for (auto& f : impl_->focusables) {
-        if (f.id == id) {
-            NSPopUpButton* p = (NSPopUpButton*)f.view;
-            return (int)p.indexOfSelectedItem;
-        }
-    }
-    return -1;
-}
-
 std::string DialogPanel::GetTextFieldValue() const
 {
     if (!impl_->text_field) return "";
@@ -342,6 +425,9 @@ void DialogPanel::NavigateDown() { impl_->NavigateDir(1); }
 void DialogPanel::NavigateLeft() { impl_->NavigateDir(2); }
 void DialogPanel::NavigateRight() { impl_->NavigateDir(3); }
 
+// フォーカス中の NSControl には performClick: で作用する(ボタン=押下、チェックボックス=トグル、選択リストの行=確定)。
+// ここで同期的に閉じてはいけない(Hide() が focusables を clear するので、下の参照 f が壊れる)。
+// 通知は _MiataControlTarget::fire: が次のランループへ逃がす
 void DialogPanel::NavigateOk()
 {
     if (impl_->focus_index < 0 || impl_->focus_index >= (int)impl_->focusables.size()) return;
@@ -371,7 +457,8 @@ void DialogPanel::Layout()
     if (impl_->text_field) {
         [content.window makeFirstResponder:impl_->text_field];
     } else if (!impl_->focusables.empty()) {
-        impl_->focus_index = 0;
+        // 指定が無ければ(initial_focus_id が -1)先頭
+        impl_->focus_index = impl_->FocusIndexOf(impl_->initial_focus_id);
         impl_->UpdateFocusHighlight();
     }
 }
@@ -381,6 +468,9 @@ void DialogPanel::Layout()
 IDialog::IDialog(const char* id, std::function<void(IDialog&)> on_close) : id_(id), on_close_(std::move(on_close))
 {
     panel_.on_button_ = [this](int button_id) {
+        // 閉じた後に届いた通知は捨てる。fire: の dispatch_async のブロックは Hide() で取り消されないので、Enter の連打などで
+        // 2発目が届くと、Hide() で消えた入力欄・チェックボックスの値(空・false)で、OnButton が結果を上書きしてしまう
+        if (!is_opened_) return;
         OnButton(button_id);
     };
 }
@@ -491,24 +581,34 @@ void CustomDialog::OnOpen()
     for (auto& cb : spec_.checkboxes) {
         checkbox_ids_.push_back(panel_.AddCheckbox(cb.label, cb.checked));
     }
-    for (auto& sel : spec_.selects) {
-        select_ids_.push_back(panel_.AddPopup(sel.label, sel.options, sel.selected));
+    const bool has_list = spec_.select.has_value();
+    if (has_list) {
+        select_ids_ = panel_.AddSelectList(spec_.select->options);
+        // options は1件以上、selected は範囲内(Application.cc が Lua からの入力を検証してから渡す)
+        panel_.SetInitialFocus(select_ids_[(size_t)spec_.select->selected]);
     }
-    auto buttons = spec_.buttons.empty() ? std::vector<std::string>{"OK"} : spec_.buttons;
+    // buttons を省略したとき: 選択リストがあれば、閉じるのは行のEnterかEscだけ。リストが無ければ、OKを1つ置く
+    auto buttons = spec_.buttons;
+    if (buttons.empty() && !has_list) buttons = {"OK"};
     for (size_t i = 0; i < buttons.size(); ++i) {
-        button_ids_.push_back(panel_.AddButton(buttons[i], i == 0)); // 先頭ボタン(通常OK)をEnterのデフォルトにする
+        // 先頭ボタン(通常OK)の「既定」の強調は、リストが無いときだけ。Enterはカーソルの項目に作用するので(既定のボタンの
+        // keyEquivalent は効かない)、リストがあるときの強調されたOKは「EnterでOK」と誤解させる
+        button_ids_.push_back(panel_.AddButton(buttons[i], !has_list && i == 0));
     }
 }
 void CustomDialog::OnButton(int button_id)
 {
-    auto it = std::find(button_ids_.begin(), button_ids_.end(), button_id);
-    if (it == button_ids_.end()) return;
-    int index = (int)std::distance(button_ids_.begin(), it);
-
     CustomDialogResult r;
-    r.button_index = index;
-    for (auto id : checkbox_ids_) r.checkboxes.push_back(panel_.GetCheckbox(id));
-    for (auto id : select_ids_) r.selects.push_back(panel_.GetPopupSelection(id));
+    if (auto row = std::find(select_ids_.begin(), select_ids_.end(), button_id); row != select_ids_.end()) {
+        r.select_index = (int)std::distance(select_ids_.begin(), row);
+    }
+    else if (auto it = std::find(button_ids_.begin(), button_ids_.end(), button_id); it != button_ids_.end()) {
+        r.button_index = (int)std::distance(button_ids_.begin(), it);
+    }
+    else {
+        return;
+    }
+    for (auto id : checkbox_ids_) r.checkboxes.push_back(panel_.GetCheckbox(id)); // CloseDialog() の前に読む(Hide() の後は false しか返らない)
     result_ = r;
     CloseDialog();
 }

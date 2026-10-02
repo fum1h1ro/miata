@@ -34,18 +34,22 @@ end)
 Miata.command.bind("n", "<C-u>", function()
     Miata.command.navigate_up(10)
 end)
-Miata.command.bind("n", "<down>", function()
-    Miata.command.navigate_down()
-end)
-Miata.command.bind("N", "<up>", function()
-    Miata.command.navigate_up()
-end)
-Miata.command.bind("n", "<left>", function()
-    Miata.command.navigate_left()
-end)
-Miata.command.bind("n", "<right>", function()
-    Miata.command.navigate_right()
-end)
+-- 矢印キーは、ダイアログ(Dialog モード)でも効く(j/k/h/l と同じ)。"nd" で1回 bind せず、モードごとに別々の関数で bind する:
+-- "nd" だと Lua の参照が両モードで共有され、unbind("n", "<down>") が Dialog 側の参照まで解放してしまう(bind / unbind の既存の問題)
+for _, mode in ipairs({"n", "d"}) do
+    Miata.command.bind(mode, "<down>", function()
+        Miata.command.navigate_down()
+    end)
+    Miata.command.bind(mode, "<up>", function()
+        Miata.command.navigate_up()
+    end)
+    Miata.command.bind(mode, "<left>", function()
+        Miata.command.navigate_left()
+    end)
+    Miata.command.bind(mode, "<right>", function()
+        Miata.command.navigate_right()
+    end)
+end
 Miata.command.bind("nd", "<enter>", function()
     Miata.command.navigate_ok()
 end)
@@ -68,15 +72,14 @@ Miata.command.bind("n", "<tab>", function()
             { label = "オプションA", checked = true },
             { label = "オプションB", checked = false },
         },
-        selects = {
-            { label = "方法", options = {"高速", "標準", "低速"}, selected = 1 },
-        },
+        -- 選択リスト(縦の行)。j/k で動かして、行で Enter するとその場で閉じる
+        select = { options = {"高速", "標準", "低速"}, selected = 1 },
     })
 
     if result then
-        print(result.button)          -- 1=OK, 2=キャンセル
+        print(result.button)          -- ボタンで閉じたときの番号(1=OK, 2=キャンセル)。行で閉じたときは nil
+        print(result.select)          -- 行で閉じたときの 1-based の行番号。ボタンで閉じたときは nil
         print(result.checkboxes[1])   -- true/false
-        print(result.selects[1])      -- 1-based 選択インデックス
     end
 
     local text = Miata.command.dialog_input("入力してください", "")
@@ -127,15 +130,16 @@ Miata.command.bind("n", "<S-n>", function()
     Miata.command.search_prev()
 end)
 Miata.command.bind("n", "s", function()
+    -- 基準の行で Enter すると、その場で並べ替える(Esc で取り消し)。降順にするには、k でチェックボックスへ上がって
+    -- Enter で切り替えてから、行へ戻る
     local result = Miata.command.dialog_custom({
         title = "ソート",
-        buttons = {"OK", "キャンセル"},
         checkboxes = { { label = "降順", checked = false } },
-        selects = { { label = "基準", options = {"名前", "サイズ", "更新日時", "拡張子"}, selected = 1 } },
+        select = { options = {"名前", "サイズ", "更新日時", "拡張子"}, selected = 1 },
     })
-    if result and result.button == 1 then
+    if result and result.select then
         local keys = { "name", "size", "mtime", "ext" }
-        Miata.command.sort(keys[result.selects[1]], result.checkboxes[1])
+        Miata.command.sort(keys[result.select], result.checkboxes[1])
     end
 end)
 
