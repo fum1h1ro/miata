@@ -64,9 +64,16 @@ namespace miata::views {
         {
             return *list_[(size_t)index];
         }
+        // カーソル下のエントリ。一覧が空だと使えない(範囲外を読む。空になり得る場所ではCurrentOrNull()を使う)
         inline FileEntryView& GetCurrent() const
         {
             return GetEntry(cursorIndex_);
+        }
+        // カーソル下のエントリ。一覧が空(カーソルが一覧の外)ならnullptr
+        inline FileEntryView* CurrentOrNull() const
+        {
+            if (cursorIndex_ < 0 || (size_t)cursorIndex_ >= list_.size()) return nullptr;
+            return list_[(size_t)cursorIndex_];
         }
         // カーソル下のファイルのパス。一覧が空ならnullopt(GetCurrent()は一覧が空だと使えない)
         std::optional<std::filesystem::path> CurrentPath() const;
