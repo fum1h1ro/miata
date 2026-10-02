@@ -73,6 +73,7 @@ namespace pl_modifier {
     constexpr uint16_t Super = 1 << 3;
 }
 
+// NFCに正規化する。UTF-8として不正なバイトは、U+FFFDに置き換える(結果は常にUTF-8として正しい)。
 std::string pl_normalize_string(const std::string& input);
 void pl_play_beep();
 

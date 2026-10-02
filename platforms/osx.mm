@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreServices/CoreServices.h>
 #include "../src/platform.h"
+#include "../src/Utf8.h"
 #include <unistd.h>
 #include <fstream>
 #include <format>
@@ -62,10 +63,15 @@ static NSView* ns_content_view()
 std::string pl_normalize_string(const std::string& input)
 {
     @autoreleasepool {
-        NSString* nsInput = [[NSString alloc] initWithBytes:input.data() length:input.size() encoding:NSUTF8StringEncoding];
-        NSString* normalized;
-        normalized = [nsInput precomposedStringWithCanonicalMapping]; // NFC
-        return std::string([normalized UTF8String]);
+        // UTF-8として不正なバイトは、先にU+FFFDに置き換える。不正なままだと initWithBytes: がnilを返し、nilの
+        // UTF8String(NULL)からstd::stringを作って落ちていた。ファイル名は、ファイルシステムによっては(ネットワーク
+        // ボリューム、FUSEなど)任意のバイト列になり得る
+        std::string valid = miata::RepairUtf8(input);
+        NSString* nsInput = [[NSString alloc] initWithBytes:valid.data() length:valid.size() encoding:NSUTF8StringEncoding];
+        NSString* normalized = [nsInput precomposedStringWithCanonicalMapping]; // NFC
+        // 修復した後なのでnilにはならないはずだが、nilなら(NULLからstd::stringを作って落ちないよう)修復した名前を返す
+        const char* utf8 = normalized.UTF8String;
+        return utf8 ? std::string(utf8) : valid;
     }
 }
 
@@ -423,7 +429,12 @@ static miata::FileError ToFileError(NSError* error)
 std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path& path)
 {
     @autoreleasepool {
-        NSURL* url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
+        // UTF-8として不正な名前(ネットワークボリュームなど)は、NSStringにできない(nilを渡すと例外になる)ので、
+        // バイト列のまま渡せる fileSystemRepresentation 版を使う。正しい名前は、これまでどおり
+        NSString* ns_path = [NSString stringWithUTF8String:path.c_str()];
+        NSURL* url = ns_path
+            ? [NSURL fileURLWithPath:ns_path]
+            : [NSURL fileURLWithFileSystemRepresentation:path.c_str() isDirectory:NO relativeToURL:nil];
         NSError* error = nil;
         BOOL ok = [[NSFileManager defaultManager] trashItemAtURL:url resultingItemURL:nil error:&error];
         if (!ok) {
