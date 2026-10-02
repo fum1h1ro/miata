@@ -9,7 +9,7 @@ Miata.config.color.directory = "#00ffaaff"
 Miata.config.color.search_match = "#7a5c00ff"
 Miata.config.color.search_current = "#c06000ff"
 -- Miata.config.set_font("フォント名") / Miata.config.set_font_size(size) でファイル一覧のフォントを指定できる(未指定ならデフォルト)
--- Miata.config.set_history_limit(n) でフォルダの履歴の件数(ペインごと)を指定できる(0〜10000。未指定なら 100。0 なら記録しない)
+-- Miata.config.set_history_limit(n) でフォルダの履歴の件数(左右のペイン合わせて)を指定できる(0〜10000。未指定なら 100。0 なら記録しない)
 
 local command <const> = Miata.command
 
@@ -139,7 +139,7 @@ Miata.command.bind("n", "s", function()
     end
 end)
 
--- フォルダの履歴(ペインごと。新しい順)。fzf で絞り込んで選ぶと、そのペインがそのフォルダへ移る
+-- フォルダの履歴(左右のペインで共有する。新しい順)。fzf で絞り込んで選ぶと、カーソルのあるペインがそのフォルダへ移る
 Miata.command.bind("n", "<S-h>", function()
     Miata.command.history()
 end)

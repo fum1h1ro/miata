@@ -9,7 +9,8 @@
 
 namespace miata::models {
     // ペインが移動したフォルダの履歴。新しい順で、同じフォルダは1回だけ(また行ったら先頭へ移す)、件数に上限がある。
-    // AppKit・Lua・Configのどれも知らない純粋なロジックで、FileListModelがペインごとに1つ持つ(SearchStateと同じ作り)。
+    // AppKit・Lua・Configのどれも知らない純粋なロジックで、左右のペインで1つを共有する(BrowserModelが持つ。SearchStateと
+    // 同じ作り)。
     // 記録はFileListModel::TryJumpToの成功経路でだけ行う。保存(永続化)はここではせず、保存していない変更があるか
     // (Dirty)だけを持つ。
     class PathHistory {

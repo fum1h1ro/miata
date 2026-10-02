@@ -1,5 +1,6 @@
 #include "../platform.h"
 #include "FileListModel.h"
+#include "PathHistory.h"
 #include <memory>
 #include <unordered_set>
 
@@ -28,7 +29,7 @@ namespace miata::models {
         return scanned;
     }
 
-    FileListModel::FileListModel()
+    FileListModel::FileListModel(PathHistory* history) : history_(history)
     {
         entries_.reserve(1024);
         auto home = pl_get_home_dir();
@@ -58,7 +59,7 @@ namespace miata::models {
 
         scanned_mtime_ = mtime;
         entries_ = std::move(*scanned);
-        history_.Record(path); // 通知より前に記録する(購読側が履歴を読んでも、この移動が入っている)
+        if (history_) history_->Record(path); // 通知より前に記録する(購読側が履歴を読んでも、この移動が入っている)
         path_.Value(path);
         return {};
     }

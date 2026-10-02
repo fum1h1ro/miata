@@ -882,16 +882,16 @@ namespace miata {
     }
 
     // Miata.command.history_list([pane]) -> string[]
-    // paneのペイン(省略またはnilなら現在のペイン。"left" / "right")が移動したフォルダの履歴を、新しい順の
-    // フルパスの配列で返す。今いるフォルダは含まない。履歴が無ければ空の配列。
+    // フォルダの履歴(左右のペインで共有する)を、新しい順のフルパスの配列で返す。paneのペイン(省略またはnilなら
+    // 現在のペイン。"left" / "right")の今いるフォルダは含まない(そのペインの移動先に選ぶ前提なので)。反対側の
+    // ペインの今いるフォルダは含む。履歴が無ければ空の配列。
     // 履歴を選んで移るのは、Miata.command.history()(これと dialog_filter_list と jump_to を組み合わせたもの)。
     int Application::lua_command_history_list(lua_State* L)
     {
         auto& app = Application::Instance();
         auto pane = OptionalPaneArg(L, 1, app.view_->CurrentPane());
 
-        auto& list = app.view_->GetList(pane);
-        auto items = list.History().List(list.Path());
+        auto items = models::BrowserModel::Instance().History().List(app.view_->GetList(pane).Path());
         lua_createtable(L, (int)items.size(), 0);
         for (size_t i = 0; i < items.size(); ++i) {
             lua_pushlstring(L, items[i].data(), items[i].size());
@@ -904,7 +904,7 @@ namespace miata {
     // paneのペイン(省略またはnilなら現在のペイン)を、pathのフォルダへ移す(Enterでフォルダに入るのと同じ移動。
     // カーソルは先頭、マークと検索は消える。フォーカスは動かさない)。pathは絶対パスのみ("~" は展開しない。
     // 空の要素・"."・".." を含むパスはエラー)。移れたらtrue。移れなければ、ダイアログで知らせてfalse(権限が無い失敗には、
-    // 許可の案内が付く)。そのフォルダがもう無ければ(消えた・フォルダでなくなった)、そのペインの履歴からも外す。
+    // 許可の案内が付く)。そのフォルダがもう無ければ(消えた・フォルダでなくなった)、履歴からも外す。
     int Application::lua_command_jump_to(lua_State* L)
     {
         auto& app = Application::Instance();
