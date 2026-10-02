@@ -57,6 +57,26 @@ Miata = {
             end
             return Miata._private.dialog_result(handle, "filterlist")
         end,
+        -- フォルダの履歴(ペインごと。新しい順)から、fzfで絞り込んで1つ選び、そのペインをそのフォルダへ移す。
+        -- paneは "left" / "right"(省略したら、いまカーソルのあるペイン)。履歴が空なら、案内を出すだけ。
+        -- 履歴の中身は Miata.command.history_list(pane)、移動は Miata.command.jump_to(path, pane)。
+        -- ペインは最初に決めて、両方に渡す(ダイアログを開いている間も、同じペインを対象にする)。
+        history = function(pane)
+            pane = pane or Miata.command.current_pane()
+            local items = Miata.command.history_list(pane)
+            if #items == 0 then
+                Miata.command.dialog_confirm("履歴がありません")
+                return
+            end
+            local picked = Miata.command.dialog_filter_list({
+                items = items,
+                title = pane == "left" and "履歴（左のペイン）" or "履歴（右のペイン）",
+                message = "移動先のフォルダを選択してください",
+            })
+            if picked then
+                Miata.command.jump_to(picked, pane)
+            end
+        end,
         make_folder = function()
             local name = Miata.command.dialog_input("新しいフォルダ名を入力してください", "")
             if name and name ~= "" then

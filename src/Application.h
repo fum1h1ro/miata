@@ -69,6 +69,8 @@ namespace miata {
         static int lua_command_search_next(lua_State* L);
         static int lua_command_search_prev(lua_State* L);
         static int lua_command_search_clear(lua_State* L);
+        static int lua_command_history_list(lua_State* L);
+        static int lua_command_jump_to(lua_State* L);
 
         // Viewを操作するコマンドの入口(Script::RegisterFunctionsのwrapper)。upvalue(1)に本来のC関数を持つ。
         // Viewは設定ファイルの読み込みより後に作るので、読み込み中に呼ばれたらLuaのエラーにする

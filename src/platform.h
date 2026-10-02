@@ -156,6 +156,13 @@ std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path&
 // 許可を与えるのはユーザーで、アプリからは変えられない(許可した後、アプリの起動し直しが要る場合がある)。
 bool pl_open_full_disk_access_settings();
 
+// アプリの設定(NSUserDefaults。ウィンドウの位置・サイズの自動保存と同じ保存先)に、keyごとの文字列の配列を
+// 保存する/読む。読み出しは失敗しない: キーが無い・配列でない場合は空、文字列でない要素は読み飛ばす。保存は
+// 呼んだ時点でOSに渡り、ディスクへはOSが書く(終了時の処理は要らない)ので、変わるたびに呼んでよい。
+// 空の配列はキーを消す。UTF-8として不正な要素は保存しない。
+void pl_save_string_list(const std::string& key, const std::vector<std::string>& values);
+std::vector<std::string> pl_load_string_list(const std::string& key);
+
 std::filesystem::path pl_find_font_filename(const std::string& font_name);
 std::filesystem::path pl_get_home_dir();
 std::filesystem::path pl_get_config_dir();

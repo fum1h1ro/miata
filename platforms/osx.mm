@@ -364,6 +364,41 @@ std::filesystem::path pl_get_config_dir()
     }
 }
 
+void pl_save_string_list(const std::string& key, const std::vector<std::string>& values)
+{
+    @autoreleasepool {
+        NSString* ns_key = [NSString stringWithUTF8String:key.c_str()];
+        NSMutableArray<NSString*>* array = [NSMutableArray arrayWithCapacity:values.size()];
+        for (auto& value : values) {
+            // UTF-8として不正な文字列はnilになる。配列にnilは入れられない(例外になる)ので捨てる
+            NSString* s = [NSString stringWithUTF8String:value.c_str()];
+            if (s) [array addObject:s];
+        }
+        NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+        if (array.count == 0) {
+            [defaults removeObjectForKey:ns_key];
+        }
+        else {
+            [defaults setObject:array forKey:ns_key];
+        }
+    }
+}
+
+std::vector<std::string> pl_load_string_list(const std::string& key)
+{
+    @autoreleasepool {
+        std::vector<std::string> result;
+        // 配列でないもの(手で書き換えられた、など)はnilで返る
+        NSArray* array = [[NSUserDefaults standardUserDefaults] arrayForKey:[NSString stringWithUTF8String:key.c_str()]];
+        for (id item in array) {
+            if (![item isKindOfClass:[NSString class]]) continue;
+            const char* utf8 = [(NSString*)item UTF8String]; // 孤立したサロゲートを含む文字列などはNULL
+            if (utf8) result.emplace_back(utf8);
+        }
+        return result;
+    }
+}
+
 // NSErrorから、FileErrorを作る。権限が無い失敗(trashItemAtURL:では、書き込めない・OSの保護で止められた場合に
 // NSCocoaErrorDomainの513が返る。実測)を、権限の失敗として区別する。Cocoaのコードに加えて、元になったエラー
 // (NSUnderlyingErrorKey)のPOSIXのEPERM/EACCES、OSStatusのafpAccessDenied(-5000)も見る。

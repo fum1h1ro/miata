@@ -53,6 +53,14 @@ namespace miata::views {
         // listを表示しているペインのマークをすべて解除して、再描画する(FileListView::ClearMarks参照)。
         void ClearListMarks(const models::FileListModel& list);
 
+        // paneのペインをpathのフォルダへ移す(Enterでフォルダに入るのと同じ移動。履歴にも記録される)。移れなければ、
+        // 移さずにダイアログで知らせる(ReportFileError。権限の失敗には許可の案内が付く)。移れず、かつそのフォルダが
+        // もう無い(消えた・フォルダでなくなった)と確かめられたときは、そのペインの履歴からも外す(権限が無い、
+        // 一時的なI/Oエラーなどで有無が分からないときは外さない)。移れたらtrue。
+        // ダイアログの表示中でも動く: 履歴を選ぶダイアログを閉じた直後のティックでは、閉じたはずのダイアログが
+        // まだ「開いている」扱い(IsAnyDialogOpened()がtrue)なので、それで弾いてはいけない。
+        bool JumpToPath(constants::Pane pane, const std::filesystem::path& path);
+
         // Quick Lookのプレビューを、areaの範囲の一覧に被せて表示する/閉じる(BrowserView::ToggleQuickLook
         // 参照)。呼んだ後に表示中ならtrue。Navigate::Cancel(Escなど)でも閉じる。
         bool ToggleQuickLook(constants::QuickLookArea area);
@@ -73,7 +81,8 @@ namespace miata::views {
         // 親ディレクトリ/pathへ移動する。読めない場合(権限が無い等)は、移動せずに、ダイアログで知らせる
         // (例外で落とさない)。
         void MoveToParentOrReport(models::FileListModel& list);
-        void JumpToOrReport(models::FileListModel& list, const std::filesystem::path& path);
+        // 移れたらtrue。移れなければ、ダイアログで知らせてfalse
+        bool JumpToOrReport(models::FileListModel& list, const std::filesystem::path& path);
         // listを表示しているペイン(どちらでもなければnullptr)
         FileListView* FindFileListView(const models::FileListModel& list);
 

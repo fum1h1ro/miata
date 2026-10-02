@@ -177,9 +177,14 @@ void FilterListDialog::DrawList(float visible_min_y, float visible_max_y)
 
     NSColor* text_color = ToNSColor(pl_get_color(pl_color_type::text_color));
     NSColor* highlight_color = ToNSColor(pl_get_color(pl_color_type::selected_content_background_color));
+    // 行の幅に収まらないときは、先頭を「…」で省く。段落スタイルを付けないと、単語の境目で折り返されて1行目だけが
+    // 見える(実測)。パス(フォルダの履歴など)は、大事なのが末尾(フォルダ名)なので、末尾が見えるようにする
+    NSMutableParagraphStyle* style = [[NSMutableParagraphStyle alloc] init];
+    style.lineBreakMode = NSLineBreakByTruncatingHead;
     NSDictionary* attrs = @{
         NSFontAttributeName: [NSFont systemFontOfSize:13],
         NSForegroundColorAttributeName: text_color,
+        NSParagraphStyleAttributeName: style,
     };
     CGFloat width = impl_->list_view.bounds.size.width;
 

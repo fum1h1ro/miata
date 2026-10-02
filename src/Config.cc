@@ -105,6 +105,7 @@ namespace miata {
         static luaL_Reg config_funcs[] = {
             { "set_font", lua_set_font },
             { "set_font_size", lua_set_font_size },
+            { "set_history_limit", lua_set_history_limit },
         };
         script.RegisterFunctions("Miata.config", std::vector<luaL_Reg>(std::begin(config_funcs), std::end(config_funcs)));
     }
@@ -113,6 +114,20 @@ namespace miata {
     {
         Script::CheckArgType(L, 1, LUA_TNUMBER);
         Instance().font_size_ = (float)lua_tonumber(L, 1);
+        return 0;
+    }
+
+    // Miata.config.set_history_limit(n): 0〜kHistoryLimitMaxの整数。外れた値は、設定を変えずにエラーにする
+    // (設定の読み込みのエラーとして、起動時のダイアログに出る)。3.0は整数として受け付け、3.5・NaN・無限大・
+    // 文字列は受け付けない。luaL_errorはlongjmpなので、C++のオブジェクトを作る前に検証する。
+    int Config::lua_set_history_limit(lua_State* L)
+    {
+        int is_integer = 0;
+        lua_Integer n = lua_type(L, 1) == LUA_TNUMBER ? lua_tointegerx(L, 1, &is_integer) : 0;
+        if (!is_integer || n < 0 || n > kHistoryLimitMax) {
+            return luaL_error(L, "set_history_limit: expected an integer from 0 to %d", kHistoryLimitMax);
+        }
+        Instance().history_limit_ = static_cast<size_t>(n);
         return 0;
     }
 

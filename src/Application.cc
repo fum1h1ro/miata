@@ -1,6 +1,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <filesystem>
 
@@ -124,6 +125,13 @@ namespace miata {
 
         view_ = std::make_unique<views::View>();
 
+        // フォルダの履歴に、設定の上限を渡して、前回までの記録を復元する。設定の読み込みの後で、最初の移動より前
+        // (タイマーが動き出す前)に済ませる。設定の読み込みでエラーが起きたときは、ユーザーが指定した上限が分からない
+        // (エラーの行より後の設定は実行されない)ので、保存してある履歴を削らないよう、最大値で復元する。正しい上限は、
+        // 設定を直して起動し直したときに適用される
+        auto history_limit = config_errors.empty() ? Config::HistoryLimit() : static_cast<size_t>(Config::kHistoryLimitMax);
+        models::BrowserModel::Instance().RestoreHistory(history_limit);
+
         file_operations_.SetCallback([this](FileOperationCompleted& e) {
             OnFileOperationCompleted(e);
         });
@@ -189,6 +197,8 @@ namespace miata {
             { "search_next", lua_command_search_next },
             { "search_prev", lua_command_search_prev },
             { "search_clear", lua_command_search_clear },
+            { "history_list", lua_command_history_list },
+            { "jump_to", lua_command_jump_to },
         };
         script.RegisterFunctions(
             "Miata.command",
@@ -255,6 +265,9 @@ namespace miata {
         view_->UpdateSearchBar();
         // 自動リロードの後に行う(リロードで動いたカーソルに、同じティックで追従を始められるように)
         view_->UpdateQuickLook();
+        // フォルダの履歴の変更を保存する。記録は移動の成功で済んでいて、ここは保存だけ(連続した移動は、ティックごとに
+        // 1回にまとまる)。終了時にまとめて保存する処理は無いので、強制終了で失うのは、最後のティック1回分だけ
+        models::BrowserModel::Instance().SaveHistoryIfChanged();
     }
 
     void Application::KeyDown(uint16_t key_code, uint16_t mods)
@@ -708,6 +721,38 @@ namespace miata {
         return std::nullopt;
     }
 
+    // 省略可のペイン引数(Luaの引数のindex番目)を読む。省略またはnilならfallback。"left" / "right" 以外は、Luaのエラー
+    // (luaL_errorはlongjmpなので、呼ぶ前にC++のオブジェクトを作らないこと)。
+    static views::constants::Pane OptionalPaneArg(lua_State* L, int index, views::constants::Pane fallback)
+    {
+        if (lua_gettop(L) < index || lua_isnil(L, index)) return fallback;
+        Script::CheckArgType(L, index, LUA_TSTRING);
+        auto parsed = ParsePane(lua_tostring(L, index));
+        if (!parsed) {
+            luaL_error(L, "unknown pane: %s (expected \"left\" or \"right\")", lua_tostring(L, index));
+            return fallback; // luaL_errorは戻らない
+        }
+        return *parsed;
+    }
+
+    // jump_toに渡せる形か: 絶対パスで、各要素が空・"."・".." のどれでもない(末尾の/は許す)。".." などを含むと、画面の
+    // 「親へ戻る」(パスの字句上の親)や履歴が、実際に開いた場所と食い違う(例: "/a/b/.." を開いた後のhが、"/a" ではなく
+    // "/a/b" へ移る)。luaL_errorの前に呼ぶので、デストラクタを持つオブジェクトは作らない(string_viewだけで判定する)。
+    static bool IsPlainAbsolutePath(std::string_view path)
+    {
+        if (path.empty() || path[0] != '/') return false;
+        while (path.size() > 1 && path.back() == '/') path.remove_suffix(1);
+        if (path.size() == 1) return true; // "/"
+        path.remove_prefix(1);
+        while (true) {
+            auto slash = path.find('/');
+            auto element = path.substr(0, slash);
+            if (element.empty() || element == "." || element == "..") return false;
+            if (slash == std::string_view::npos) return true;
+            path.remove_prefix(slash + 1);
+        }
+    }
+
     // Quick Lookを被せる範囲。ペイン名に、両ペインを表す "both" を足したもの
     static std::optional<views::constants::QuickLookArea> ParseQuickLookArea(const char* name)
     {
@@ -731,16 +776,7 @@ namespace miata {
     {
         auto& app = Application::Instance();
 
-        auto pane = app.view_->CurrentPane();
-        if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
-            Script::CheckArgType(L, 1, LUA_TSTRING);
-            auto parsed = ParsePane(lua_tostring(L, 1));
-            if (!parsed) {
-                luaL_error(L, "unknown pane: %s (expected \"left\" or \"right\")", lua_tostring(L, 1));
-                return 0;
-            }
-            pane = *parsed;
-        }
+        auto pane = OptionalPaneArg(L, 1, app.view_->CurrentPane());
 
         auto result = app.view_->GetFileListView(pane).Reload();
         if (!result) {
@@ -842,6 +878,48 @@ namespace miata {
     {
         auto& app = Application::Instance();
         lua_pushboolean(L, app.view_->ClearSearch());
+        return 1;
+    }
+
+    // Miata.command.history_list([pane]) -> string[]
+    // paneのペイン(省略またはnilなら現在のペイン。"left" / "right")が移動したフォルダの履歴を、新しい順の
+    // フルパスの配列で返す。今いるフォルダは含まない。履歴が無ければ空の配列。
+    // 履歴を選んで移るのは、Miata.command.history()(これと dialog_filter_list と jump_to を組み合わせたもの)。
+    int Application::lua_command_history_list(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        auto pane = OptionalPaneArg(L, 1, app.view_->CurrentPane());
+
+        auto& list = app.view_->GetList(pane);
+        auto items = list.History().List(list.Path());
+        lua_createtable(L, (int)items.size(), 0);
+        for (size_t i = 0; i < items.size(); ++i) {
+            lua_pushlstring(L, items[i].data(), items[i].size());
+            lua_rawseti(L, -2, (lua_Integer)i + 1);
+        }
+        return 1;
+    }
+
+    // Miata.command.jump_to(path, [pane]) -> boolean
+    // paneのペイン(省略またはnilなら現在のペイン)を、pathのフォルダへ移す(Enterでフォルダに入るのと同じ移動。
+    // カーソルは先頭、マークと検索は消える。フォーカスは動かさない)。pathは絶対パスのみ("~" は展開しない。
+    // 空の要素・"."・".." を含むパスはエラー)。移れたらtrue。移れなければ、ダイアログで知らせてfalse(権限が無い失敗には、
+    // 許可の案内が付く)。そのフォルダがもう無ければ(消えた・フォルダでなくなった)、そのペインの履歴からも外す。
+    int Application::lua_command_jump_to(lua_State* L)
+    {
+        auto& app = Application::Instance();
+
+        Script::CheckArgType(L, 1, LUA_TSTRING);
+        size_t length = 0;
+        const char* raw = lua_tolstring(L, 1, &length);
+        if (std::strlen(raw) != length || !IsPlainAbsolutePath(std::string_view(raw, length))) { // NULを含む場合も弾く
+            luaL_error(L, "jump_to: expected an absolute path such as \"/Users/me/dir\" (no \"~\", and no empty, \".\" or \"..\" elements)");
+            return 0;
+        }
+        auto pane = OptionalPaneArg(L, 2, app.view_->CurrentPane());
+
+        // ここから先はluaL_errorを呼ばない(std::stringなどを作るため)
+        lua_pushboolean(L, app.view_->JumpToPath(pane, std::filesystem::path(std::string(raw, length))));
         return 1;
     }
 
