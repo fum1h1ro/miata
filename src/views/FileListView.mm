@@ -301,6 +301,26 @@ void FileListView::SetSort(SortKey key, bool reverse)
     Redraw();
 }
 
+std::optional<FileListView::SortKey> FileListView::ParseSortKey(std::string_view name)
+{
+    if (name == "name") return SortKey::Name;
+    if (name == "size") return SortKey::Size;
+    if (name == "mtime") return SortKey::ModifiedTime;
+    if (name == "ext") return SortKey::Extension;
+    return std::nullopt;
+}
+
+const char* FileListView::SortKeyName(SortKey key)
+{
+    switch (key) {
+    case SortKey::Size: return "size";
+    case SortKey::ModifiedTime: return "mtime";
+    case SortKey::Extension: return "ext";
+    case SortKey::Name:
+    default: return "name";
+    }
+}
+
 void FileListView::SetFocus(bool focus)
 {
     focus_ = focus;

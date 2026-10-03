@@ -181,6 +181,10 @@ namespace miata {
         auto history_limit = config_errors.empty() ? Config::HistoryLimit() : static_cast<size_t>(Config::kHistoryLimitMax);
         models::BrowserModel::Instance().RestoreHistory(history_limit);
 
+        // 前回の終了時のペインの状態(いるフォルダ・ソート・フォーカス)を戻す。タイマーが動き出す前に済ませる(最初の
+        // ティックの SavePanesIfChanged が、基準の無いまま比べないように)。履歴に記録しない移動なので、履歴の復元との順序は問わない
+        view_->RestorePanes();
+
         file_operations_.SetCallback([this](FileOperationCompleted& e) {
             OnFileOperationCompleted(e);
         });
@@ -317,6 +321,8 @@ namespace miata {
         // フォルダの履歴の変更を保存する。記録は移動の成功で済んでいて、ここは保存だけ(連続した移動は、ティックごとに
         // 1回にまとまる)。終了時にまとめて保存する処理は無いので、強制終了で失うのは、最後のティック1回分だけ
         models::BrowserModel::Instance().SaveHistoryIfChanged();
+        // ペインの状態(いるフォルダ・ソート・フォーカス)の変更を保存する。履歴と同じく、ティックごとにまとめて保存する
+        view_->SavePanesIfChanged();
     }
 
     void Application::KeyDown(uint16_t key_code, uint16_t mods)
@@ -799,24 +805,6 @@ namespace miata {
         return *parsed;
     }
 
-    // jump_toに渡せる形か: 絶対パスで、各要素が空・"."・".." のどれでもない(末尾の/は許す)。".." などを含むと、画面の
-    // 「親へ戻る」(パスの字句上の親)や履歴が、実際に開いた場所と食い違う(例: "/a/b/.." を開いた後のhが、"/a" ではなく
-    // "/a/b" へ移る)。luaL_errorの前に呼ぶので、デストラクタを持つオブジェクトは作らない(string_viewだけで判定する)。
-    static bool IsPlainAbsolutePath(std::string_view path)
-    {
-        if (path.empty() || path[0] != '/') return false;
-        while (path.size() > 1 && path.back() == '/') path.remove_suffix(1);
-        if (path.size() == 1) return true; // "/"
-        path.remove_prefix(1);
-        while (true) {
-            auto slash = path.find('/');
-            auto element = path.substr(0, slash);
-            if (element.empty() || element == "." || element == "..") return false;
-            if (slash == std::string_view::npos) return true;
-            path.remove_prefix(slash + 1);
-        }
-    }
-
     // Quick Lookを被せる範囲。ペイン名に、両ペインを表す "both" を足したもの
     static std::optional<views::constants::QuickLookArea> ParseQuickLookArea(const char* name)
     {
@@ -881,7 +869,6 @@ namespace miata {
     {
         auto& app = Application::Instance();
         Script::CheckArgType(L, 1, LUA_TSTRING);
-        const std::string key_string = lua_tostring(L, 1);
 
         auto reverse = false;
         if (lua_gettop(L) >= 2) {
@@ -889,17 +876,15 @@ namespace miata {
             reverse = lua_toboolean(L, 2);
         }
 
-        views::FileListView::SortKey key;
-        if (key_string == "name") key = views::FileListView::SortKey::Name;
-        else if (key_string == "size") key = views::FileListView::SortKey::Size;
-        else if (key_string == "mtime") key = views::FileListView::SortKey::ModifiedTime;
-        else if (key_string == "ext") key = views::FileListView::SortKey::Extension;
-        else {
+        // luaL_errorはlongjmpなので、デストラクタを持つオブジェクト(std::stringなど)は、luaL_errorの前に作らない
+        // (std::optional<SortKey>はデストラクタを持たないので、使ってよい)
+        const auto key = views::FileListView::ParseSortKey(lua_tostring(L, 1));
+        if (!key) {
             luaL_error(L, "unknown sort key");
             return 0;
         }
 
-        app.view_->CurrentFileListView().SetSort(key, reverse);
+        app.view_->CurrentFileListView().SetSort(*key, reverse);
         return 0;
     }
 
@@ -976,7 +961,8 @@ namespace miata {
         Script::CheckArgType(L, 1, LUA_TSTRING);
         size_t length = 0;
         const char* raw = lua_tolstring(L, 1, &length);
-        if (std::strlen(raw) != length || !IsPlainAbsolutePath(std::string_view(raw, length))) { // NULを含む場合も弾く
+        // luaL_errorの前なので、string_viewだけで判定する(NULも弾く。理由はPaneState::IsPlainAbsolutePath)
+        if (!models::PaneState::IsPlainAbsolutePath(std::string_view(raw, length))) {
             luaL_error(L, "jump_to: expected an absolute path such as \"/Users/me/dir\" (no \"~\", and no empty, \".\" or \"..\" elements)");
             return 0;
         }

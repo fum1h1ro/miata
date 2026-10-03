@@ -1,6 +1,7 @@
 #ifndef PLATFORM_H__
 #define PLATFORM_H__
 
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -165,6 +166,12 @@ bool pl_open_full_disk_access_settings();
 // 空の配列はキーを消す。UTF-8として不正な要素は保存しない。
 void pl_save_string_list(const std::string& key, const std::vector<std::string>& values);
 std::vector<std::string> pl_load_string_list(const std::string& key);
+// 文字列から文字列への辞書(1つのkeyに、名前をつけたいくつかの値)を、同じ保存先に保存する/読む。保存の性質は
+// pl_save_string_listと同じ(変わるたびに呼んでよい)。読み出しは失敗しない: キーが無い・辞書でない場合は空、文字列でない
+// 名前や値は読み飛ばす。空の辞書はキーを消す。UTF-8として不正な名前や値は、その項目だけ保存しない(位置で意味を決める
+// 配列と違い、1つ抜けても、ほかの項目の意味は変わらない)。
+void pl_save_string_map(const std::string& key, const std::map<std::string, std::string>& values);
+std::map<std::string, std::string> pl_load_string_map(const std::string& key);
 
 std::filesystem::path pl_find_font_filename(const std::string& font_name);
 std::filesystem::path pl_get_home_dir();

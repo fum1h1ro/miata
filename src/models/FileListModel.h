@@ -29,6 +29,9 @@ namespace miata::models {
         // 移動先を履歴(コンストラクタで渡されたもの)に記録する。履歴に記録するのはここだけ: JumpTo(起動時のホーム)と
         // Reload(再スキャン)は記録しない。ユーザー操作の移動(Enter・親へ戻る・履歴からのジャンプ)は、すべてここを通る。
         std::expected<void, FileError> TryJumpTo(const std::filesystem::path& path);
+        // 起動時に、前回のペインの場所を戻すための移動。TryJumpToと同じ(読めなければ、一覧もパスも変えずにエラーを返す)
+        // だが、履歴には記録しない: 復元は、ユーザーの移動ではないので、履歴の並びを動かさない。
+        std::expected<void, FileError> TryRestoreTo(const std::filesystem::path& path);
         // 現在のディレクトリを再スキャンする。JumpTo(Path())と違い、マークは同じパスの
         // エントリに引き継ぐ(消えたファイルのマークは落ち、新しいファイルは未マーク)。
         // ディレクトリが消えた/読めない場合は、何も変えずにエラーを返す。
@@ -67,6 +70,8 @@ namespace miata::models {
             return path_.Observe();
         }
     private:
+        // TryJumpTo / TryRestoreToの本体。record_historyがtrueのときだけ、移動先を履歴に記録する
+        std::expected<void, FileError> TryJumpToImpl(const std::filesystem::path& path, bool record_history);
         // dirの直下を走査して、エントリのモデルを作る。例外は投げない(読めない・消えた・権限が無い等は
         // エラーコードで返す)。
         static std::expected<std::vector<std::unique_ptr<FileEntryModel>>, std::error_code> Scan(const std::filesystem::path& dir);

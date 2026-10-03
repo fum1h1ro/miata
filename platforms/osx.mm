@@ -405,6 +405,44 @@ std::vector<std::string> pl_load_string_list(const std::string& key)
     }
 }
 
+void pl_save_string_map(const std::string& key, const std::map<std::string, std::string>& values)
+{
+    @autoreleasepool {
+        NSString* ns_key = [NSString stringWithUTF8String:key.c_str()];
+        NSMutableDictionary<NSString*, NSString*>* dict = [NSMutableDictionary dictionaryWithCapacity:values.size()];
+        for (auto& [name, value] : values) {
+            // UTF-8として不正な文字列はnilになる。辞書にnilは入れられない(例外になる)ので、その項目を捨てる
+            NSString* ns_name = [NSString stringWithUTF8String:name.c_str()];
+            NSString* ns_value = [NSString stringWithUTF8String:value.c_str()];
+            if (ns_name && ns_value) dict[ns_name] = ns_value;
+        }
+        NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+        if (dict.count == 0) {
+            [defaults removeObjectForKey:ns_key];
+        }
+        else {
+            [defaults setObject:dict forKey:ns_key];
+        }
+    }
+}
+
+std::map<std::string, std::string> pl_load_string_map(const std::string& key)
+{
+    @autoreleasepool {
+        std::map<std::string, std::string> result;
+        // 辞書でないもの(手で書き換えられた、など)はnilで返る
+        NSDictionary* dict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:[NSString stringWithUTF8String:key.c_str()]];
+        for (id name in dict) {
+            id value = dict[name];
+            if (![name isKindOfClass:[NSString class]] || ![value isKindOfClass:[NSString class]]) continue;
+            const char* utf8_name = [(NSString*)name UTF8String];   // 孤立したサロゲートを含む文字列などはNULL
+            const char* utf8_value = [(NSString*)value UTF8String];
+            if (utf8_name && utf8_value) result.emplace(utf8_name, utf8_value);
+        }
+        return result;
+    }
+}
+
 // NSErrorから、FileErrorを作る。権限が無い失敗(trashItemAtURL:では、書き込めない・OSの保護で止められた場合に
 // NSCocoaErrorDomainの513が返る。実測)を、権限の失敗として区別する。Cocoaのコードに加えて、元になったエラー
 // (NSUnderlyingErrorKey)のPOSIXのEPERM/EACCES、OSStatusのafpAccessDenied(-5000)も見る。
