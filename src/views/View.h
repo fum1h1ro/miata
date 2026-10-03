@@ -1,6 +1,7 @@
 #ifndef VIEW_H__
 #define VIEW_H__
 
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -9,6 +10,7 @@
 #include "BrowserView.h"
 #include "../FileError.h"
 #include "../models/Model.h"
+#include "../models/PaneState.h"
 
 namespace miata::views {
     class View {
@@ -66,6 +68,17 @@ namespace miata::views {
         // まだ「開いている」扱い(IsAnyDialogOpened()がtrue)なので、それで弾いてはいけない。
         bool JumpToPath(constants::Pane pane, const std::filesystem::path& path);
 
+        // 前回の終了時のペインの状態(それぞれのいるフォルダとソート、フォーカスしているペイン)を戻す。起動時に一度だけ、
+        // Viewを作った後(最初のティックより前)に呼ぶ。保存してあったフォルダに入れなければ(無い・フォルダでなくなった・
+        // 権限が無い等)、何も言わずに、ホームのままにする(保存してあった値は、そのペインのフォルダかソートが変わるまで残る)。
+        // 戻すのは履歴に記録しない移動(FileListModel::TryRestoreTo)なので、履歴の並びは動かない。
+        void RestorePanes();
+        // タイマーから定期的に呼ぶ。ペインの状態が、保存した(復元した)ものから変わっていれば、保存する(NSUserDefaults)。
+        // 毎ティック呼んでよい(変わっていなければ何もしない)。終了時にまとめて保存する処理は無い(強制終了でも残るように)ので、
+        // 変わるたびに、ティックごとにまとめて保存する。変わったかは、値の比較で見る(ReactiveProperty::Value()は
+        // 同じ値でも毎回通知するので、パスの変更の購読では判断できない)。
+        void SavePanesIfChanged();
+
         // Quick Lookのプレビューを、areaの範囲の一覧に被せて表示する/閉じる(BrowserView::ToggleQuickLook
         // 参照)。呼んだ後に表示中ならtrue。Navigate::Cancel(Escなど)でも閉じる。
         bool ToggleQuickLook(constants::QuickLookArea area);
@@ -90,10 +103,16 @@ namespace miata::views {
         bool JumpToOrReport(models::FileListModel& list, const std::filesystem::path& path);
         // listを表示しているペイン(どちらでもなければnullptr)
         FileListView* FindFileListView(const models::FileListModel& list);
+        // paneの、いまのフォルダとソート(保存・復元する状態)
+        models::PaneState GetPaneState(constants::Pane pane);
 
         std::unique_ptr<BrowserView> browser_;
         std::shared_ptr<IDialog> current_dialog_;
         std::queue<std::shared_ptr<IDialog>> dialog_requests_;
+        // 保存した(または復元した)ペインの状態(添字はconstants::Pane)と、フォーカスしているペイン。これと違えば保存する。
+        // 復元の後の「いまの値」で始まるので、入れなかったフォルダは、そのペインが変わるまで、保存してある値が残る
+        std::array<models::PaneState, 2> saved_panes_;
+        constants::Pane saved_focus_ = constants::Pane::Left;
     };
 }
 

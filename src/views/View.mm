@@ -26,6 +26,20 @@ namespace {
         auto type = std::filesystem::status(path, ec).type();
         return type != std::filesystem::file_type::none && type != std::filesystem::file_type::directory;
     }
+
+    // ペインの状態の保存先のキー(NSUserDefaults)。ペインごとに別のキーにするのは、片方のペインが動いたときに、
+    // もう一方の保存してある値(入れなくて、ホームのままだった場所)を上書きしないため。履歴("MiataHistory")や
+    // ウィンドウ位置("NSWindow Frame MiataMainWindow")とは別のキー
+    constexpr const char* kPaneKeyLeft = "MiataPaneLeft";
+    constexpr const char* kPaneKeyRight = "MiataPaneRight";
+    // フォーカスしているペイン("focus" = "left" / "right")。ペインごとのキーに入れない(ペインを切り替えるたびに、
+    // 両方のペインのキーを書き直すことになり、保存してある値を上書きするため)
+    constexpr const char* kSessionKey = "MiataSession";
+
+    const char* PaneKey(miata::views::constants::Pane pane)
+    {
+        return pane == miata::views::constants::Pane::Left ? kPaneKeyLeft : kPaneKeyRight;
+    }
 }
 
 namespace miata::views {
@@ -119,6 +133,55 @@ namespace miata::views {
         // 移動で検索は消えるので、次のティックを待たずに検索バーを整える(NavigateForBrowserの末尾と同じ)
         browser_->UpdateSearchBar();
         return jumped;
+    }
+
+    models::PaneState View::GetPaneState(constants::Pane pane)
+    {
+        auto& view = GetFileListView(pane);
+        return models::PaneState{
+            .path = GetList(pane).Path().string(),
+            .sort_key = FileListView::SortKeyName(view.GetSortKey()),
+            .sort_reverse = view.GetSortReverse(),
+        };
+    }
+
+    void View::RestorePanes()
+    {
+        for (auto pane : {constants::Pane::Left, constants::Pane::Right}) {
+            auto saved = models::PaneState::FromMap(pl_load_string_map(PaneKey(pane)));
+            // ソート: 基準の名前が分からなければ(壊れた値)、"name" にする
+            auto sort_key = FileListView::ParseSortKey(saved.sort_key).value_or(FileListView::SortKey::Name);
+            GetFileListView(pane).SetSort(sort_key, saved.sort_reverse);
+            // フォルダ: 入れなければ(エラーは捨てる)、一覧もパスも変わらず、ホームのまま。いまのフォルダなら、走査し直さない
+            auto& list = GetList(pane);
+            if (!saved.path.empty() && std::filesystem::path(saved.path) != list.Path()) {
+                (void)list.TryRestoreTo(saved.path);
+            }
+            saved_panes_[static_cast<size_t>(pane)] = GetPaneState(pane);
+        }
+
+        auto session = pl_load_string_map(kSessionKey);
+        if (auto focus = session.find("focus"); focus != session.end() && focus->second == "right") {
+            browser_->FocusRight(); // 起動時のフォーカスは左(BrowserViewのコンストラクタ)
+        }
+        saved_focus_ = CurrentPane();
+    }
+
+    void View::SavePanesIfChanged()
+    {
+        for (auto pane : {constants::Pane::Left, constants::Pane::Right}) {
+            auto now = GetPaneState(pane);
+            auto& saved = saved_panes_[static_cast<size_t>(pane)];
+            if (now == saved) continue;
+            pl_save_string_map(PaneKey(pane), now.ToMap());
+            saved = std::move(now);
+        }
+
+        auto focus = CurrentPane();
+        if (focus != saved_focus_) {
+            pl_save_string_map(kSessionKey, {{"focus", focus == constants::Pane::Left ? "left" : "right"}});
+            saved_focus_ = focus;
+        }
     }
 
     void View::OpenNextDialogIfNeeded()

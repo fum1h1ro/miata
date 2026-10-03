@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 #include "../models/Model.h"
 #include "../misc.h"
@@ -54,6 +55,12 @@ namespace miata::views {
         void Draw(double min_y, double max_y);
 
         void SetSort(SortKey key, bool reverse);
+        SortKey GetSortKey() const { return sort_key_; }
+        bool GetSortReverse() const { return sort_reverse_; }
+        // ソートの基準の名前("name" / "size" / "mtime" / "ext")との変換。Luaのsortと、ペインの状態の保存(PaneState)で
+        // 同じ名前を使う。名前が違えばParseSortKeyはnullopt。
+        static std::optional<SortKey> ParseSortKey(std::string_view name);
+        static const char* SortKeyName(SortKey key);
 
         bool GetFocus() const { return focus_; }
         void SetFocus(bool focus);

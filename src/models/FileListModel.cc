@@ -52,6 +52,16 @@ namespace miata::models {
 
     std::expected<void, FileError> FileListModel::TryJumpTo(const std::filesystem::path& path)
     {
+        return TryJumpToImpl(path, true);
+    }
+
+    std::expected<void, FileError> FileListModel::TryRestoreTo(const std::filesystem::path& path)
+    {
+        return TryJumpToImpl(path, false);
+    }
+
+    std::expected<void, FileError> FileListModel::TryJumpToImpl(const std::filesystem::path& path, bool record_history)
+    {
         // 先に新しい一覧を作り、失敗した場合は現在の状態(一覧もパスも)に一切触れない
         auto mtime = DirectoryMtime(path); // 走査より前に取る
         auto scanned = Scan(path);
@@ -59,7 +69,7 @@ namespace miata::models {
 
         scanned_mtime_ = mtime;
         entries_ = std::move(*scanned);
-        if (history_) history_->Record(path); // 通知より前に記録する(購読側が履歴を読んでも、この移動が入っている)
+        if (history_ && record_history) history_->Record(path); // 通知より前に記録する(購読側が履歴を読んでも、この移動が入っている)
         path_.Value(path);
         return {};
     }
