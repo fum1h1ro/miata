@@ -322,7 +322,8 @@ namespace miata {
     void Application::KeyDown(uint16_t key_code, uint16_t mods)
     {
         auto& script = Script::Instance();
-        auto& kb = (view_->IsAnyDialogOpened())? key_binding_map_[(int)KeyBindingMap::Dialog] : key_binding_map_[(int)KeyBindingMap::Normal];
+        const bool in_dialog = view_->IsAnyDialogOpened();
+        auto& kb = in_dialog ? key_binding_map_[(int)KeyBindingMap::Dialog] : key_binding_map_[(int)KeyBindingMap::Normal];
 
         auto r = key_stroke_.Add(KeyBinding::Key::MakeKey(mods, key_code));
         if (!r) {
@@ -340,8 +341,15 @@ namespace miata {
             }
         }
         else if (key_setting.error() != KeyBinding::ErrorReason::MaybeTooShort) {
-            pl_play_beep();
+            // 割り当てが無い。ダイアログの表示中なら、項目のショートカット(ラベルの `&x`)を試す。ここに来るのは、キーバインドに
+            // 完全一致も途中一致も無いキーだけなので、キーバインドが優先される。試すのは、修飾キー無しの単独のキーだけ
+            // (キー列の2打目以降は試さない。Normal の `dd` の1打目が残ったまま、ダイアログが開くことがある)
+            bool handled = false;
+            if (in_dialog && key_stroke_.Size() == 1 && mods == 0) {
+                if (const auto ch = KeyBinding::KeyCodeToAscii(key_code)) handled = view_->ActivateDialogMnemonic(*ch);
+            }
             key_stroke_.Clear();
+            if (!handled) pl_play_beep();
         }
     }
 

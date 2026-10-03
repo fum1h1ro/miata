@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include "Dialog.h"
+#include "Mnemonic.h"
 #include "../platform.h"
 
 // NSView の座標系はデフォルトで下原点なので、上から積むレイアウトのために flipped にする
@@ -41,6 +42,8 @@ static const CGFloat kSelectRowTextInset = 8;
 // activator を持つ。
 @interface _MiataSelectRow : NSControl
 @property (nonatomic, copy) NSString* rowTitle;
+// rowTitle の中の、ショートカットの文字(ラベルの `&x`)。ここに下線を引く。長さ0(既定)なら、ショートカットは無い
+@property (nonatomic, assign) NSRange underlineRange;
 @property (nonatomic, strong) _MiataControlTarget* activator;
 @end
 @implementation _MiataSelectRow
@@ -62,7 +65,11 @@ static const CGFloat kSelectRowTextInset = 8;
     NSRect bounds = self.bounds;
     NSRect text_rect = NSMakeRect(kSelectRowTextInset, floor((bounds.size.height - size.height) / 2),
                                   bounds.size.width - kSelectRowTextInset * 2, size.height);
-    [self.rowTitle drawInRect:text_rect withAttributes:attrs];
+    NSMutableAttributedString* text = [[NSMutableAttributedString alloc] initWithString:self.rowTitle attributes:attrs];
+    if (self.underlineRange.length > 0 && NSMaxRange(self.underlineRange) <= text.length) {
+        [text addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:self.underlineRange];
+    }
+    [text drawInRect:text_rect];
 }
 - (void)mouseDown:(NSEvent*)event
 {
@@ -122,6 +129,31 @@ namespace {
         };
         return target;
     }
+
+    // label.text の中の、ショートカットの文字の位置を、NSString の添字(UTF-16)にする。文字の前に、絵文字などのサロゲートペアが
+    // あっても合う(バイト位置のまま使うと、ずれる)。label.text が UTF-8 として不正なら、prefix が nil になり、0 を返す
+    NSUInteger UnderlineIndex(const MnemonicLabel& label)
+    {
+        NSString* prefix = [[NSString alloc] initWithBytes:label.text.data() length:label.pos encoding:NSUTF8StringEncoding];
+        return prefix.length;
+    }
+
+    // ボタンとチェックボックスのタイトルの、ショートカットの文字に下線を引く。attributedTitle は、作った直後でも、フォントと
+    // 段落スタイルを持つので、それを複製して、下線の属性だけを足す(新しい NSAttributedString を作ると、これらが失われる)。
+    // title は、プレーンな文字列のまま(アクセシビリティもこちら)。
+    // 文字色の属性(NSForegroundColorAttributeName)は外して、描画側(セル)に任せる。複製元の色は、状態(既定のボタンか、
+    // ウィンドウに載っているか)で変わる値を、読んだ時点で持ってくるだけなので、残すと、その時点の状態に固定してしまう
+    // (実測: 窓に載る前の既定のボタンは alternateSelectedControlTextColor、載った後は controlTextColor)。色の属性が無い
+    // 文字列は、セルが状態に応じた色で描く(実測: Light/Dark とも、元のボタンと同じ色。赤などの具体的な色を明示すると、そのまま描かれる)
+    void UnderlineMnemonic(NSButton* button, const MnemonicLabel& label)
+    {
+        NSMutableAttributedString* text = [button.attributedTitle mutableCopy];
+        const NSUInteger index = UnderlineIndex(label);
+        if (index >= text.length) return;
+        [text removeAttribute:NSForegroundColorAttributeName range:NSMakeRange(0, text.length)];
+        [text addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:NSMakeRange(index, 1)];
+        button.attributedTitle = text;
+    }
 }
 
 struct DialogPanel::Impl {
@@ -133,6 +165,7 @@ struct DialogPanel::Impl {
     struct Focusable {
         NSView* view;
         int id;
+        char mnemonic = 0; // ショートカットの文字(ラベルの `&x`。小文字のASCII英数字)。無ければ0
     };
     std::vector<Focusable> focusables;
     int next_id = 1;
@@ -172,10 +205,30 @@ struct DialogPanel::Impl {
         return label;
     }
 
-    void RegisterFocusable(NSView* view, int id)
+    void RegisterFocusable(NSView* view, int id, char mnemonic)
     {
         view.wantsLayer = YES;
-        focusables.push_back({view, id});
+        focusables.push_back({view, id, mnemonic});
+    }
+
+    // ショートカットの文字 key を持つ項目の添字。無ければ -1。key が 0(「ショートカット無し」の印)のときも -1:
+    // 弾かないと、ショートカットを持たない項目に当たる
+    int IndexOfMnemonic(char key) const
+    {
+        if (key == 0) return -1;
+        for (size_t i = 0; i < focusables.size(); ++i) {
+            if (focusables[i].mnemonic == key) return (int)i;
+        }
+        return -1;
+    }
+
+    // ラベルの `&x` を解析する。同じ文字のショートカットを、先に登録した項目が持っていれば、この項目は持たない
+    // (key を 0 にする。下線も付けない。効かない下線を出さない)。`&` の印は、どちらの場合も取り除く
+    MnemonicLabel ParseLabel(const std::string& raw) const
+    {
+        MnemonicLabel label = ParseMnemonicLabel(raw);
+        if (IndexOfMnemonic(label.key) >= 0) label.key = 0;
+        return label;
     }
 
     // idの項目の添字。見つからなければ0(先頭)
@@ -306,9 +359,11 @@ void DialogPanel::Hide()
 int DialogPanel::AddButton(const std::string& label, bool is_default)
 {
     impl_->EnsureBackground();
-    NSButton* btn = [NSButton buttonWithTitle:@(label.c_str()) target:nil action:nil];
+    const MnemonicLabel parsed = impl_->ParseLabel(label);
+    NSButton* btn = [NSButton buttonWithTitle:@(parsed.text.c_str()) target:nil action:nil];
     btn.bezelStyle = NSBezelStyleRounded;
     if (is_default) btn.keyEquivalent = @"\r";
+    if (parsed.key != 0) UnderlineMnemonic(btn, parsed);
 
     int btn_id = impl_->next_id++;
     _MiataControlTarget* target = MakeTarget(this, btn_id);
@@ -318,22 +373,24 @@ int DialogPanel::AddButton(const std::string& label, bool is_default)
 
     [impl_->background addSubview:btn];
     [impl_->buttons addObject:btn];
-    impl_->RegisterFocusable(btn, btn_id);
+    impl_->RegisterFocusable(btn, btn_id, parsed.key);
     return btn_id;
 }
 
 int DialogPanel::AddCheckbox(const std::string& label, bool initial)
 {
     impl_->EnsureBackground();
-    NSButton* cb = [NSButton checkboxWithTitle:@(label.c_str()) target:nil action:nil];
+    const MnemonicLabel parsed = impl_->ParseLabel(label);
+    NSButton* cb = [NSButton checkboxWithTitle:@(parsed.text.c_str()) target:nil action:nil];
     cb.state = initial ? NSControlStateValueOn : NSControlStateValueOff;
+    if (parsed.key != 0) UnderlineMnemonic(cb, parsed);
     CGFloat avail = impl_->panel_width - kPadding * 2;
     cb.frame = NSMakeRect(kPadding, impl_->cursor_y, avail, kRowHeight);
     [impl_->background addSubview:cb];
     impl_->cursor_y += kRowHeight + kRowSpacing;
 
     int id = impl_->next_id++;
-    impl_->RegisterFocusable(cb, id);
+    impl_->RegisterFocusable(cb, id, parsed.key);
     return id;
 }
 
@@ -360,10 +417,12 @@ std::vector<int> DialogPanel::AddSelectList(const std::vector<std::string>& opti
         _MiataSelectRow* row = [[_MiataSelectRow alloc] initWithFrame:NSMakeRect(
             kPadding + kSelectBoxInset, impl_->cursor_y + kSelectBoxInset + kSelectRowHeight * (CGFloat)i,
             avail - kSelectBoxInset * 2, kSelectRowHeight)];
-        row.rowTitle = @(options[i].c_str()); // UTF-8 として正しい前提(Lua からの文字列は Application.cc が修復する)
+        const MnemonicLabel parsed = impl_->ParseLabel(options[i]);
+        row.rowTitle = @(parsed.text.c_str()); // UTF-8 として正しい前提(Lua からの文字列は Application.cc が修復する)
+        if (parsed.key != 0) row.underlineRange = NSMakeRange(UnderlineIndex(parsed), 1);
         row.activator = MakeTarget(this, row_id);
         [impl_->background addSubview:row];
-        impl_->RegisterFocusable(row, row_id);
+        impl_->RegisterFocusable(row, row_id, parsed.key);
         ids.push_back(row_id);
     }
     impl_->cursor_y += box_height + kRowSpacing;
@@ -435,6 +494,18 @@ void DialogPanel::NavigateOk()
     if ([f.view isKindOfClass:[NSControl class]]) {
         [(NSControl*)f.view performClick:nil];
     }
+}
+
+// カーソルを移してから NavigateOk するので、Enter を押したのと同じ(同期的に閉じず、通知は次のランループ)。
+// 閉じた後は、Hide() が focusables を空にしているので、当たらない
+bool DialogPanel::ActivateMnemonic(char key)
+{
+    const int index = impl_->IndexOfMnemonic(key);
+    if (index < 0) return false;
+    impl_->focus_index = index;
+    impl_->UpdateFocusHighlight();
+    NavigateOk();
+    return true;
 }
 
 void DialogPanel::Layout()
