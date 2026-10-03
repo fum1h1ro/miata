@@ -53,6 +53,11 @@ namespace miata::views {
         NavigateForBrowser(dir);
     }
 
+    bool View::ActivateDialogMnemonic(char key)
+    {
+        return IsAnyDialogOpened() && current_dialog_->ActivateMnemonic(key);
+    }
+
     void View::RequestDialog(std::shared_ptr<IDialog> dialog)
     {
         dialog_requests_.push(dialog);

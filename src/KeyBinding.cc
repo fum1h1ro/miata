@@ -172,6 +172,14 @@ namespace miata {
 
 
 
+    std::optional<char> KeyBinding::KeyCodeToAscii(uint16_t keycode)
+    {
+        for (const char c : std::string_view("abcdefghijklmnopqrstuvwxyz0123456789")) {
+            if (ascii_to_keycode_[(uint8_t)c] == keycode) return c;
+        }
+        return std::nullopt;
+    }
+
     KeyBinding::KeyBinding()
     {
         //printf("Keysize: %lu\n", sizeof(Key));

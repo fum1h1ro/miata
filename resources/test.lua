@@ -64,13 +64,15 @@ Miata.command.bind("n", "<tab>", function()
     local result = Miata.command.dialog_custom({
         title = "設定",
         message = "詳細を選択してください", -- optional
-        buttons = {"OK", "キャンセル"},
+        -- ラベルの `&x` は、ショートカット: x キーを押すと、その項目を選んだことになる(Enter と同じ。x に下線が付く)。
+        -- `&&` は文字としての `&`。j k h l や矢印、Enter、Esc のように、Dialog モードで bind したキーは、そちらが優先される
+        buttons = {"&OK", "キャンセル(&C)"},
         checkboxes = {
-            { label = "オプションA", checked = true },
-            { label = "オプションB", checked = false },
+            { label = "オプション&A", checked = true },
+            { label = "オプション&B", checked = false },
         },
         -- 選択リスト(縦の行)。j/k で動かして、行で Enter するとその場で閉じる
-        select = { options = {"高速", "標準", "低速"}, selected = 1 },
+        select = { options = {"高速(&F)", "標準(&N)", "低速(&S)"}, selected = 1 },
     })
 
     if result then
@@ -128,11 +130,12 @@ Miata.command.bind("n", "<S-n>", function()
 end)
 Miata.command.bind("n", "s", function()
     -- 基準の行で Enter すると、その場で並べ替える(Esc で取り消し)。降順にするには、k でチェックボックスへ上がって
-    -- Enter で切り替えてから、行へ戻る
+    -- Enter で切り替えてから、行へ戻る。ラベルの `&x` はショートカットで、x キーを押すと、その項目を選んだことになる:
+    -- 行なら、その基準で並べ替えて閉じる(s のあとに s で、サイズ順)。チェックボックスなら、d で降順を切り替える
     local result = Miata.command.dialog_custom({
         title = "ソート",
-        checkboxes = { { label = "降順", checked = false } },
-        select = { options = {"名前", "サイズ", "更新日時", "拡張子"}, selected = 1 },
+        checkboxes = { { label = "降順(&D)", checked = false } },
+        select = { options = {"名前(&N)", "サイズ(&S)", "更新日時(&M)", "拡張子(&E)"}, selected = 1 },
     })
     if result and result.select then
         local keys = { "name", "size", "mtime", "ext" }

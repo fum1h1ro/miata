@@ -17,6 +17,10 @@ namespace miata::views {
         ~View();
 
         void Navigate(constants::Navigate dir);
+        // ダイアログの表示中に、項目のショートカット(ラベルの `&x`。DialogPanel::AddButton参照)のキーが押されたとき。
+        // keyをショートカットにした項目があれば、選んでtrue(Enterを押したのと同じ)。無ければ、何もせずfalse。
+        // キーバインドの無かったキーだけを渡すこと(Application::KeyDown。キーバインドが優先される)。
+        bool ActivateDialogMnemonic(char key);
 
         void RequestDialog(std::shared_ptr<IDialog> dialog);
         // ファイル操作の失敗を、ダイアログで知らせる。whatは何に失敗したか("リネームできませんでした"など)で、

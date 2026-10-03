@@ -6,6 +6,7 @@
 #include <format>
 #include <map>
 #include <expected>
+#include <optional>
 #include <Carbon/Carbon.h>
 #include "misc.h"
 #include "platform.h"
@@ -174,6 +175,11 @@ namespace miata {
                 code == kVK_Option || code == kVK_RightOption ||
                 code == kVK_Command || code == kVK_RightCommand;
         }
+
+        // ascii_to_keycode_ の逆引き。ダイアログの項目のショートカット(ラベルの `&x`)が、押されたキーの文字を知るために使う。
+        // 返すのは英数字(小文字と数字)だけ。それ以外のキー(記号・特殊キー・テンキー)はnullopt。
+        // 表の値0は「割り当て無し」と「aのキー(kVK_ANSI_A)」の両方なので、0を無効の印にはせず、英数字の位置だけを調べる。
+        static std::optional<char> KeyCodeToAscii(uint16_t keycode);
     private:
         std::expected<KeyStroke, ErrorReason> ParseKey(const std::string_view& key_stroke);
         KeyBinding::Key ParseTag(const std::string_view& tag);

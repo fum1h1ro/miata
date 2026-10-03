@@ -29,7 +29,9 @@ namespace miata::views {
         // 無ければ先頭)の決定を行う。コントロールを一通り追加し終えた後、IDialog::Open()の最後に一度だけ呼ぶ。
         void Layout();
 
-        // 戻り値はコールバックで識別するためのID
+        // 戻り値はコールバックで識別するためのID。
+        // ボタン・チェックボックス・選択リストの行のlabelは、`&x` の記法でショートカットを指定できる(ParseMnemonicLabel参照。
+        // 画面では `&` が取り除かれ、xに下線が付く)。同じ文字を、先に追加した項目が持っていれば、後の項目は持たない(下線も付かない)。
         int AddButton(const std::string& label, bool is_default);
         int AddCheckbox(const std::string& label, bool initial);
         // 縦に並んだ選択肢の行(optionsの順。行間なし)を、細い箱で囲んで追加する。戻り値は行ごとのID(AddButtonと同じ番号空間)。
@@ -56,6 +58,9 @@ namespace miata::views {
         void NavigateLeft();
         void NavigateRight();
         void NavigateOk(); // フォーカス中コントロールのアクションを実行(ボタン押下/チェックボックストグル/選択リストの行の確定)
+        // ラベルの `&x` でkey(小文字のASCII英数字)をショートカットにした項目へ、カーソルを移して、NavigateOkと同じ作用をさせる。
+        // そのような項目が無ければ(keyが0のときも)何もせずfalse。キーバインドとの優先順位は、呼ぶ側が決める。
+        bool ActivateMnemonic(char key);
 
         // ボタン、または選択リストの行が確定されたときに呼ばれる(idはAddButton/AddSelectListの戻り値)。
         // 呼び出し元(NavigateOkやクリック)のコールスタックを抜けた、次のランループで呼ばれる。
@@ -72,6 +77,8 @@ namespace miata::views {
         virtual ~IDialog();
         void Open();
         virtual void Navigate(constants::Navigate dir);
+        // ラベルの `&x` で指定された項目を、keyのキーで選ぶ(DialogPanel::ActivateMnemonic)。閉じた後は、項目が無いのでfalse
+        bool ActivateMnemonic(char key) { return panel_.ActivateMnemonic(key); }
         virtual Size2D GetIdealSize() const { return Size2D{400, 0}; }
         inline const std::string& Id() { return id_; }
         inline bool IsOpened() const { return is_opened_; }
