@@ -469,7 +469,7 @@ std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path&
 {
     @autoreleasepool {
         // UTF-8として不正な名前(ネットワークボリュームなど)は、NSStringにできない(nilを渡すと例外になる)ので、
-        // バイト列のまま渡せる fileSystemRepresentation 版を使う。正しい名前は、これまでどおり
+        // バイト列のまま渡せる fileSystemRepresentation 版を使う。正しい名前は fileURLWithPath:
         NSString* ns_path = [NSString stringWithUTF8String:path.c_str()];
         NSURL* url = ns_path
             ? [NSURL fileURLWithPath:ns_path]
