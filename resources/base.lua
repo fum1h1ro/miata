@@ -1,3 +1,11 @@
+-- 多数のファイルを一度に開くとき(全マークなどで、誤って何百ものウィンドウを開かないように)の確認。続けてよいならtrue。
+-- OPEN_CONFIRM_LIMIT 件までは、確認しない。ダイアログを待つので、キーに割り当てた関数の中(コルーチン)から呼ぶこと
+local OPEN_CONFIRM_LIMIT = 10
+local function confirm_open(count)
+    if count <= OPEN_CONFIRM_LIMIT then return true end
+    return Miata.command.dialog_yes_no(count .. " 件を開きますか？", false)
+end
+
 Miata = {
     command = {
         dialog_confirm = function(message, button_text)
@@ -102,6 +110,43 @@ Miata = {
                 message = "リネーム（同名のファイル/フォルダが既に存在します）"
             end
             Miata._private.rename_execute(new_name)
+        end,
+        -- ファイルを開く・Finderで表示する・パスをクリップボードへ。targetは、対象のパスの文字列、エントリ({ path = ... }。
+        -- cursor_entry の戻り値など)、またはそれらの配列(marked_entries の戻り値など)。対象は、いつも明示する
+        -- (マーク済み、無ければカーソル下、にしたいときは、呼ぶ側で marked_entries と cursor_entry を組み合わせる)。
+        -- 対象が空なら、何もせずfalse。ほかは、要求を出せたらtrue(開けたかは、あとでダイアログで知らされる)。
+        -- 既定のアプリで開く(Finderのダブルクリックと同じ。フォルダはFinder、.appは起動)。
+        -- 10件を超えるときは、確認する(ダイアログ)。
+        open = function(target)
+            local paths = Miata._private.paths_of(target)
+            if #paths == 0 then return false end
+            if not confirm_open(#paths) then return false end
+            return Miata._private.open_paths(paths)
+        end,
+        -- appで開く。appは、アプリの名前("Visual Studio Code"。大文字小文字は区別しない)、Bundle ID("com.apple.TextEdit")、
+        -- 絶対パス("/Applications/Foo.app")のどれか。名前は、標準の場所(~/Applications、/Applications、
+        -- /Applications/Utilities、/System/Applications、/System/Applications/Utilities、/System/Library/CoreServices)から探す。
+        -- 見つからなければ、ダイアログで知らせてfalse。10件を超えるときは、確認する。
+        open_with = function(app, target)
+            if type(app) ~= "string" or app == "" then
+                error("open_with: expected an application (name, bundle identifier or absolute path)", 2)
+            end
+            local paths = Miata._private.paths_of(target)
+            if #paths == 0 then return false end
+            if not confirm_open(#paths) then return false end
+            return Miata._private.open_paths(paths, app)
+        end,
+        -- Finderで、対象を選択した状態で表示する
+        reveal = function(target)
+            local paths = Miata._private.paths_of(target)
+            if #paths == 0 then return false end
+            return Miata._private.reveal_paths(paths)
+        end,
+        -- 対象のパスをクリップボードへ(複数は改行区切り)。名前だけ・フォルダのパスだけ、などは set_clipboard で自分で組む
+        copy_path = function(target)
+            local paths = Miata._private.paths_of(target)
+            if #paths == 0 then return false end
+            return Miata.command.set_clipboard(table.concat(paths, "\n"))
         end,
     },
     _private = {},

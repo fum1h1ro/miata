@@ -7,6 +7,7 @@
 #include <fstream>
 #include <format>
 #include <functional>
+#include <mutex>
 
 static uint16_t ConvertModifierFlags(NSEventModifierFlags flags)
 {
@@ -493,6 +494,158 @@ bool pl_open_full_disk_access_settings()
         // (案内の文面に、「プライバシーとセキュリティ」→「フルディスクアクセス」とたどる手順がある)
         NSURL* settings = [workspace URLForApplicationWithBundleIdentifier:@"com.apple.systempreferences"];
         return settings && [workspace openURL:settings];
+    }
+}
+
+// パスから、ファイルのURLを作る。UTF-8として不正な名前(ネットワークボリュームなど)でも例外にならないよう、
+// バイト列のまま(fileSystemRepresentation)渡す。パスが空だとnil
+static NSURL* FileURLFromPath(const std::filesystem::path& path)
+{
+    return [NSURL fileURLWithFileSystemRepresentation:path.c_str() isDirectory:NO relativeToURL:nil];
+}
+
+std::optional<std::filesystem::path> pl_find_application(const std::string& spec)
+{
+    @autoreleasepool {
+        if (spec.empty()) return std::nullopt;
+        NSFileManager* file_manager = [NSFileManager defaultManager];
+
+        // 絶対パス: .appバンドルはフォルダなので、フォルダとして存在すればよい
+        if (spec[0] == '/') {
+            NSString* ns_path = [NSString stringWithUTF8String:spec.c_str()];
+            BOOL is_directory = NO;
+            if (ns_path && [file_manager fileExistsAtPath:ns_path isDirectory:&is_directory] && is_directory) return std::filesystem::path(spec);
+            return std::nullopt;
+        }
+
+        NSString* name = [NSString stringWithUTF8String:spec.c_str()]; // 不正なUTF-8だとnil
+        if (!name) return std::nullopt;
+
+        // Bundle ID(ドットを含む)。見つからなければ、名前として探す("Foo.app" などもドットを含むため)
+        if ([name containsString:@"."]) {
+            NSURL* url = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier:name];
+            if (url) return std::filesystem::path(url.fileSystemRepresentation);
+        }
+
+        // 名前: 標準の場所を、この順に探す(大文字小文字は区別しない。".app" は付けても省いてもよい)
+        NSString* wanted = name.lowercaseString;
+        if (![wanted hasSuffix:@".app"]) wanted = [wanted stringByAppendingString:@".app"];
+        NSArray<NSString*>* directories = @[
+            [NSHomeDirectory() stringByAppendingPathComponent:@"Applications"],
+            @"/Applications",
+            @"/Applications/Utilities",
+            @"/System/Applications",
+            @"/System/Applications/Utilities",
+            @"/System/Library/CoreServices",
+        ];
+        for (NSString* directory in directories) {
+            NSArray<NSString*>* entries = [file_manager contentsOfDirectoryAtPath:directory error:nil];
+            for (NSString* entry in entries) {
+                if ([entry.lowercaseString isEqualToString:wanted]) {
+                    return std::filesystem::path(directory.UTF8String) / entry.UTF8String;
+                }
+            }
+        }
+        return std::nullopt;
+    }
+}
+
+namespace {
+    // 既定のアプリで1件ずつ開くときの、結果の集計(完了ハンドラは別のキューで呼ばれるので、ロックで守る)
+    struct OpenTally {
+        std::mutex mutex;
+        int failed = 0;
+        std::string first_message;
+    };
+
+    std::string ErrorDescription(NSError* error)
+    {
+        return error.localizedDescription.length > 0 ? error.localizedDescription.UTF8String : "unknown error";
+    }
+}
+
+std::expected<void, std::string> pl_open_paths(
+    const std::vector<std::filesystem::path>& paths,
+    const std::string& app,
+    std::function<void(int failed, int total, const std::string& message)> on_failure)
+{
+    @autoreleasepool {
+        NSWorkspace* workspace = [NSWorkspace sharedWorkspace];
+        NSWorkspaceOpenConfiguration* configuration = [NSWorkspaceOpenConfiguration configuration];
+        const int total = (int)paths.size();
+
+        if (!app.empty()) {
+            // アプリを指定: 全部をまとめて、そのアプリに渡す
+            auto app_path = pl_find_application(app);
+            if (!app_path) return std::unexpected(std::format("アプリが見つかりません ({})", app));
+            NSMutableArray<NSURL*>* urls = [NSMutableArray arrayWithCapacity:paths.size()];
+            for (const auto& path : paths) {
+                if (NSURL* url = FileURLFromPath(path)) [urls addObject:url];
+            }
+            if (urls.count == 0) return std::unexpected("invalid path");
+            [workspace openURLs:urls
+                withApplicationAtURL:FileURLFromPath(*app_path)
+                configuration:configuration
+                completionHandler:^(NSRunningApplication*, NSError* error) {
+                    if (!error) return;
+                    std::string message = ErrorDescription(error);
+                    // 完了ハンドラは別のキューで呼ばれるので、画面に出す側(メインスレッド)へ戻す
+                    // (まとめて1回の要求なので、失敗したときは、全部が開けなかったことになる)
+                    dispatch_async(dispatch_get_main_queue(), ^{ if (on_failure) on_failure(total, total, message); });
+                }];
+            return {};
+        }
+
+        // 既定のアプリ: ファイルごとに、そのファイルの既定のアプリで開く。結果は全部そろってから、1回でまとめて知らせる
+        auto tally = std::make_shared<OpenTally>();
+        dispatch_group_t group = dispatch_group_create();
+        for (const auto& path : paths) {
+            NSURL* url = FileURLFromPath(path);
+            if (!url) {
+                std::lock_guard<std::mutex> lock(tally->mutex);
+                if (tally->failed++ == 0) tally->first_message = "invalid path";
+                continue;
+            }
+            dispatch_group_enter(group);
+            [workspace openURL:url
+                configuration:configuration
+                completionHandler:^(NSRunningApplication*, NSError* error) {
+                    if (error) {
+                        std::lock_guard<std::mutex> lock(tally->mutex);
+                        if (tally->failed++ == 0) tally->first_message = ErrorDescription(error);
+                    }
+                    dispatch_group_leave(group);
+                }];
+        }
+        dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+            std::lock_guard<std::mutex> lock(tally->mutex);
+            if (tally->failed > 0 && on_failure) on_failure(tally->failed, total, tally->first_message);
+        });
+        return {};
+    }
+}
+
+void pl_reveal_paths(const std::vector<std::filesystem::path>& paths)
+{
+    @autoreleasepool {
+        NSMutableArray<NSURL*>* urls = [NSMutableArray arrayWithCapacity:paths.size()];
+        for (const auto& path : paths) {
+            if (NSURL* url = FileURLFromPath(path)) [urls addObject:url];
+        }
+        if (urls.count > 0) [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:urls];
+    }
+}
+
+bool pl_set_clipboard_text(const std::string& text)
+{
+    @autoreleasepool {
+        // UTF-8として不正なバイトはU+FFFDにする(NSStringにできないため)。NULを含んでもよいので、c_str()ではなく長さを渡す
+        const std::string valid = miata::RepairUtf8(text);
+        NSString* string = [[NSString alloc] initWithBytes:valid.data() length:valid.size() encoding:NSUTF8StringEncoding];
+        if (!string) return false;
+        NSPasteboard* pasteboard = [NSPasteboard generalPasteboard];
+        [pasteboard clearContents];
+        return [pasteboard setString:string forType:NSPasteboardTypeString];
     }
 }
 

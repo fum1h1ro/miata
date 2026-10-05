@@ -296,6 +296,8 @@ Miata.command.current_pane()     -- カーソルのあるペイン: "left" ま�
 
 `navigate_left`（親ディレクトリへ）と `navigate_ok`（ディレクトリへ入る）で、移動先が読めない（権限が無い・消えた等）ときは、移動せずに、エラーのダイアログを出す。権限が無い場合は、[許可のしかた](#権限のエラーmacos-の保護)も案内する。
 
+`navigate_ok` は、ディレクトリへ入るだけで、ファイルでは何もしない。`resources/test.lua` では、一覧の Enter は、フォルダなら `navigate_ok`、ファイルなら [`open`](#ファイルを開く)にしている（ダイアログの Enter は `navigate_ok` のまま）。
+
 ### 状況の取得
 
 ```lua
@@ -317,18 +319,51 @@ Miata.command.current_sort([pane])    -- ソートの状態: 基準, 降順か�
 
 - `pane_path`: 末尾に `/` は付かない（ルートだけ `"/"`）。`jump_to` にそのまま渡せる
 - `cursor_entry`: ファイルもフォルダも 1 つも無いフォルダでは `nil`
-- `marked_entries`: **マークが無ければ、カーソル下の 1 件にはならず、空の配列**（`copy_marked` `move_marked` は、マークが無ければカーソル下の 1 件を対象にするが、それとは違う。`delete_marked` は、マークが無ければ何もしない）。同じ対象にしたいときは、`cursor_entry` と組み合わせる（下の例）。並びは、ソートに従った画面の並び順で、マークした順ではない
+- `marked_entries`: **マークが無ければ、カーソル下の 1 件にはならず、空の配列**（`copy_marked` `move_marked` は、マークが無ければカーソル下の 1 件を対象にするが、それとは違う。`delete_marked` は、マークが無ければ何もしない）。同じ対象にしたいときは、`cursor_entry` と組み合わせる（[ファイルを開く](#ファイルを開く)の例の `targets()`）。並びは、ソートに従った画面の並び順で、マークした順ではない
 - `current_sort`: `key, reverse` の 2 つの値を返す（`key` は `"name"` / `"size"` / `"mtime"` / `"ext"`、`reverse` は降順なら `true`）。`sort(key, reverse)` にそのまま渡せる（`Miata.command.sort(Miata.command.current_sort())` は何も変えない）。ただし `sort` は、カーソルのあるペインだけに効く
 
+これらを使った例は、[ファイルを開く](#ファイルを開く)を参照。
+
+### ファイルを開く
+
 ```lua
--- ~/.config/miata/init.lua の例: o で、対象のファイルを既定のアプリで開く
+Miata.command.open(target)             -- 既定のアプリで開く
+Miata.command.open_with(app, target)   -- アプリを指定して開く
+Miata.command.reveal(target)           -- Finder で表示する
+Miata.command.copy_path(target)        -- パスをクリップボードへ（複数は改行区切り）
+Miata.command.set_clipboard(text)      -- 文字列をクリップボードへ
+```
 
--- 文字列をシェルに渡すためのクォート（空白・引用符・$()・改行を含む名前でも、そのまま渡る）
-local function shell_quote(s)
-    return "'" .. (s:gsub("'", "'\\''")) .. "'"
-end
+ファイルを開く・Finder で表示する・パスをコピーする。**対象（`target`）は、いつも明示する**。次のどれか:
 
--- 「マーク済み。無ければカーソル下の 1 件」（copy_marked / move_marked と同じ対象）
+- パスの文字列（絶対パス。`~` は展開しない）
+- エントリ（`{ path = ... }`。[`cursor_entry`](#状況の取得)の戻り値など）
+- それらの配列（`marked_entries` の戻り値など）。空の配列は、何もしない
+
+「マーク済み。無ければカーソル下の 1 件」（`copy_marked` / `move_marked` と同じ対象）にしたいときは、呼ぶ側で `marked_entries` と `cursor_entry` を組み合わせる（下の例の `targets()`）。
+
+- **`open`**: Finder のダブルクリックと同じ。ファイルごとの既定のアプリで開く（フォルダは Finder、`.app` は起動）。複数は、ファイルごとに開く。**10 件を超えると、確認する**（「N 件を開きますか？」。既定は「いいえ」。全マークなどで、誤って何百ものウィンドウを開かないため）
+- **`open_with(app, target)`**: `app` で、全部をまとめて開く。`app` は、アプリの名前（`"Visual Studio Code"`。`.app` は付けても省いてもよく、大文字小文字は区別しない）、Bundle ID（`"com.apple.TextEdit"`）、絶対パス（`"/Applications/Foo.app"`）のどれか。名前は、`~/Applications`、`/Applications`、`/Applications/Utilities`、`/System/Applications`、`/System/Applications/Utilities`、`/System/Library/CoreServices` の順に探す（ほかの場所のアプリは、Bundle ID か絶対パスで指定する）。10 件を超えると、確認する。エディタなら `open_with("Visual Studio Code", …)`、ターミナルなら `open_with("Terminal", Miata.command.pane_path())`
+- **`reveal`**: Finder で、対象を選択した状態で表示する（複数は 1 つのウィンドウにまとめる）
+- **`copy_path`**: 対象のパスを、改行区切りでクリップボードに置く。名前だけ・フォルダのパスだけ、などは `set_clipboard` で組む（`set_clipboard(Miata.command.cursor_entry().name)`）。UTF-8 として不正なバイトは、`�` に置き換えて置く
+- **戻り値**: 要求を出せたら `true`。対象が空・確認で「いいえ」・アプリが見つからないときは `false`。**開けたかどうかは、あとで分かる**: 要求のあとで分かる失敗（開くアプリが無い、ファイルが無いなど）は、ダイアログで知らせる（複数の失敗は 1 回にまとめる）。アプリが見つからないときも、ダイアログで知らせる
+- 対象が正しくない（`nil`、相対パス、NUL を含む文字列、`path` が文字列でないエントリ、入れ子の配列など）と、Lua のエラー。設定ファイルの読み込み中に呼んでも、エラー
+- **シェルを通らない**（`NSWorkspace` を直接呼ぶ）ので、クォートは要らない。`$()` や空白、改行を含む名前でも、そのまま渡る。UTF-8 として不正な名前も、元のバイト列のまま渡す
+- `open` / `open_with` は、確認のダイアログを待つので、キーに割り当てた関数の中から呼ぶ
+
+`resources/test.lua` の既定のキー:
+
+| キー | 動作 |
+|---|---|
+| Enter | フォルダなら入る（`navigate_ok`）。ファイルなら、既定のアプリで開く。`.app` などのパッケージはフォルダとして入る（起動するには `o`）。ダイアログでは、これまでどおり、カーソルの項目を実行する |
+| `o` | 対象（マーク済み。無ければカーソル下）を、既定のアプリで開く。フォルダも `.app` も開ける |
+| `<S-o>` | 対象を Finder で表示する |
+| `yy` | 対象のパスをクリップボードへ |
+
+```lua
+-- ~/.config/miata/init.lua の例
+
+-- 対象: マーク済み。無ければカーソル下の 1 件（copy_marked と同じ）。一覧が空なら、空の配列
 local function targets()
     local list = Miata.command.marked_entries()
     if #list == 0 then
@@ -338,15 +373,32 @@ local function targets()
     return list
 end
 
-Miata.command.bind("n", "o", function()
-    for _, e in ipairs(targets()) do
-        os.execute("open " .. shell_quote(e.path) .. " &")   -- 末尾の & は、open の終了を待たないため
+-- e: 対象をエディタで開く / t: このフォルダをターミナルで開く
+Miata.command.bind("n", "e", function()
+    Miata.command.open_with("Visual Studio Code", targets())
+end)
+Miata.command.bind("n", "t", function()
+    Miata.command.open_with("Terminal", Miata.command.pane_path())
+end)
+
+-- Enter: 拡張子ごとに、開くアプリを変える（フォルダは、これまでどおり入る）
+Miata.command.bind("n", "<enter>", function()
+    local e = Miata.command.cursor_entry()
+    if not e then return end
+    if e.is_dir then
+        Miata.command.navigate_ok()
+        return
+    end
+    local ext = (e.name:match("%.([^.]+)$") or ""):lower()
+    if ext == "md" or ext == "lua" or ext == "txt" then
+        Miata.command.open_with("Visual Studio Code", e)
+    else
+        Miata.command.open(e)
     end
 end)
 ```
 
-- 外部のコマンドは `os.execute` で実行する。**終わるまで Miata が止まる**ので、時間のかかるものは、末尾に `&` を付けて待たない。`io.popen` は使えない（このビルドの Lua は、POSIX の機能を有効にしていない）ので、出力が要るときは、ファイルにリダイレクトして `io.open` で読む
-- パスは、必ず上の `shell_quote` のようにクォートしてからシェルに渡す（クォートしないと、空白で分かれたり、`$(…)` が実行されたりする）
+- 外部のコマンドを実行したいときは、`os.execute` を使う。**終わるまで Miata が止まる**ので、時間のかかるものは、末尾に `&` を付けて待たない。`io.popen` は使えない（このビルドの Lua は、POSIX の機能を有効にしていない）ので、出力が要るときは、ファイルにリダイレクトして `io.open` で読む。パスは、シェルに渡す前に、必ずクォートする（`'` で囲み、中の `'` は `'\''` にする）
 
 ### ダイアログ
 

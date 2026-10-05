@@ -13,6 +13,16 @@ Miata.config.color.search_current = "#c06000ff"
 
 local command <const> = Miata.command
 
+-- 操作の対象: マーク済みのエントリ。無ければカーソル下の1件(copy_marked / move_marked と同じ)。一覧が空なら、空の配列
+local function targets()
+    local list = Miata.command.marked_entries()
+    if #list == 0 then
+        local e = Miata.command.cursor_entry()
+        if e then list = { e } end
+    end
+    return list
+end
+
 Miata.util.pp("HOGE")
 Miata.util.pp(Miata)
 
@@ -47,8 +57,18 @@ end)
 Miata.command.bind("nd", "<right>", function()
     Miata.command.navigate_right()
 end)
-Miata.command.bind("nd", "<enter>", function()
+-- Enter: ダイアログでは、カーソルの項目を実行する。一覧では、フォルダなら入り、ファイルなら既定のアプリで開く
+-- (.app などのパッケージは、フォルダとして入る。起動するには o)
+Miata.command.bind("d", "<enter>", function()
     Miata.command.navigate_ok()
+end)
+Miata.command.bind("n", "<enter>", function()
+    local e = Miata.command.cursor_entry()
+    if e and not e.is_dir then
+        Miata.command.open(e)
+    else
+        Miata.command.navigate_ok()
+    end
 end)
 Miata.command.bind("nd", "<esc>", function()
     Miata.command.navigate_cancel()
@@ -117,6 +137,20 @@ Miata.command.bind("n", "<S-p>", function()
     local other = Miata.command.current_pane() == "left" and "right" or "left"
     Miata.command.quick_look(other)
 end)
+-- 開く(o)・Finder で表示(O)・パスをクリップボードへ(yy)。対象は、マーク済み。無ければカーソル下の1件。
+-- o は、フォルダも .app も開く(.app は起動、フォルダは Finder)。10 件を超えると、確認する
+Miata.command.bind("n", "o", function()
+    Miata.command.open(targets())
+end)
+Miata.command.bind("n", "<S-o>", function()
+    Miata.command.reveal(targets())
+end)
+Miata.command.bind("n", "yy", function()
+    Miata.command.copy_path(targets())
+end)
+-- アプリを指定して開く例(アプリの名前は、自分の環境に合わせる。名前・Bundle ID・絶対パスのどれでもよい):
+-- Miata.command.bind("n", "e", function() Miata.command.open_with("Visual Studio Code", targets()) end)
+-- Miata.command.bind("n", "t", function() Miata.command.open_with("Terminal", Miata.command.pane_path()) end)
 -- ファイル名の検索(vim の / n N)。/ でそのペインの下に入力欄が出て、打つたびにカーソルがマッチへ飛ぶ。
 -- Enter で確定(n / N で次・前のマッチへ)、入力中の Esc で取り消し、通常時の Esc で検索を消す
 Miata.command.bind("n", "/", function()

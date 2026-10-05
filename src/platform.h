@@ -160,6 +160,31 @@ std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path&
 // 許可を与えるのはユーザーで、アプリからは変えられない(許可した後、アプリの起動し直しが要る場合がある)。
 bool pl_open_full_disk_access_settings();
 
+// アプリの指定から、アプリ(.app)のパスを探す。見つからなければnullopt。指定は次のどれか:
+//  - 絶対パス("/" で始まる): そのパスがフォルダ(.appバンドル)として存在すれば、そのまま
+//  - Bundle ID(例: "com.apple.TextEdit"): LaunchServicesに登録されたアプリ
+//  - 名前(例: "Visual Studio Code"。".app" は付けても省いてもよく、大文字小文字は区別しない): 標準の場所
+//    (~/Applications、/Applications、/Applications/Utilities、/System/Applications、/System/Applications/Utilities、
+//    /System/Library/CoreServices)を、この順に探す
+std::optional<std::filesystem::path> pl_find_application(const std::string& spec);
+
+// pathsを開く(NSWorkspace。Finderのダブルクリックと同じ)。appが空なら、ファイルごとの既定のアプリで開く(フォルダはFinder、
+// .appバンドルは起動)。空でなければ、そのアプリ(pl_find_application)で全部をまとめて開く。pathsは空でないこと。
+// 要求を出す前に分かる失敗(アプリが見つからない)は、unexpectedで説明を返す。要求のあとで分かる失敗(開くアプリが無い、
+// ファイルが無いなど)は、全部の結果が出た後に、メインスレッドでon_failureを1回だけ呼ぶ(failed件が、total件中。
+// messageは、OSの説明の1件)。成功したときは何も呼ばない。
+std::expected<void, std::string> pl_open_paths(
+    const std::vector<std::filesystem::path>& paths,
+    const std::string& app,
+    std::function<void(int failed, int total, const std::string& message)> on_failure
+);
+
+// Finderで、pathsを選択した状態で表示する(複数は、1つのウィンドウにまとめる)。
+void pl_reveal_paths(const std::vector<std::filesystem::path>& paths);
+
+// テキストをクリップボード(一般のペーストボード)に置く。UTF-8として不正なバイトは、U+FFFDにして置く。置けたらtrue。
+bool pl_set_clipboard_text(const std::string& text);
+
 // アプリの設定(NSUserDefaults。ウィンドウの位置・サイズの自動保存と同じ保存先)に、keyごとの文字列の配列を
 // 保存する/読む。読み出しは失敗しない: キーが無い・配列でない場合は空、文字列でない要素は読み飛ばす。保存は
 // 呼んだ時点でOSに渡り、ディスクへはOSが書く(終了時の処理は要らない)ので、変わるたびに呼んでよい。
