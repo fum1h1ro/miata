@@ -34,6 +34,10 @@ namespace miata {
         models::FileListModel* dest_model;
         std::filesystem::path src_dir;
         std::filesystem::path dest_dir;
+        // 操作の対象にしたパス(開始時の、見えているマーク済みのファイル。無ければカーソル下の1件)。完了後に
+        // 解除するマークを、そのペインの全マークではなく、これだけにするため(絞り込みで隠れているマークや、
+        // 操作の最中に付けたマークは、解除しない)
+        std::vector<std::filesystem::path> sources;
     };
 
     // ファイルのコピー・移動をバックグラウンドスレッドで実行する。

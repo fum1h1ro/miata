@@ -91,7 +91,7 @@ Miata = {
                 Miata.command.make_directory(name)
             end
         end,
-        -- マークがあれば何もしない(単一ファイルのリネームのみ対応)。
+        -- 見えているマーク(絞り込みで隠れた行のマークは数えない)があれば何もしない(単一ファイルのリネームのみ対応)。
         -- 同名のファイル/フォルダが既に存在する場合は、上書きせず同じ入力ダイアログを開き直す。
         rename = function()
             local current = Miata._private.rename_target()

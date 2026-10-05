@@ -80,6 +80,9 @@ namespace miata {
         static int lua_command_search_next(lua_State* L);
         static int lua_command_search_prev(lua_State* L);
         static int lua_command_search_clear(lua_State* L);
+        static int lua_command_filter(lua_State* L);
+        static int lua_command_filter_set(lua_State* L);
+        static int lua_command_filter_clear(lua_State* L);
         static int lua_command_history_list(lua_State* L);
         static int lua_command_jump_to(lua_State* L);
         static int lua_command_set_clipboard(lua_State* L);

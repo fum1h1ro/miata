@@ -1,18 +1,19 @@
 #include "SearchState.h"
 
 #include <algorithm>
+#include <format>
 #include <iterator>
 #include <utility>
 
 namespace miata::views {
 
-void SearchState::Begin(SearchPosition origin)
+void SearchState::Begin(ListPosition origin)
 {
-    if (mode_ == SearchMode::Typing) return;
+    if (mode_ == QueryMode::Typing) return;
 
     // 確定済みの検索があれば、Escで戻れるよう語を取っておく
-    saved_query_ = mode_ == SearchMode::Committed ? std::optional<std::string>(query_) : std::nullopt;
-    mode_ = SearchMode::Typing;
+    saved_query_ = mode_ == QueryMode::Committed ? std::optional<std::string>(query_) : std::nullopt;
+    mode_ = QueryMode::Typing;
     query_.clear();
     hits_.clear();
     origin_ = origin;
@@ -21,42 +22,42 @@ void SearchState::Begin(SearchPosition origin)
 
 void SearchState::SetQuery(std::string query)
 {
-    if (mode_ != SearchMode::Typing) return;
+    if (mode_ != QueryMode::Typing) return;
     query_ = std::move(query);
 }
 
 void SearchState::Commit()
 {
-    if (mode_ != SearchMode::Typing) return;
+    if (mode_ != QueryMode::Typing) return;
 
     if (query_.empty()) {
         // 何も入力しなかった(または消した)。検索を始める前の状態に戻る
         Cancel();
         return;
     }
-    mode_ = SearchMode::Committed;
+    mode_ = QueryMode::Committed;
     saved_query_.reset();
 }
 
 void SearchState::Cancel()
 {
-    if (mode_ != SearchMode::Typing) return;
+    if (mode_ != QueryMode::Typing) return;
 
     hits_.clear();
     if (saved_query_) {
         query_ = std::move(*saved_query_);
-        mode_ = SearchMode::Committed;
+        mode_ = QueryMode::Committed;
     }
     else {
         query_.clear();
-        mode_ = SearchMode::Idle;
+        mode_ = QueryMode::Idle;
     }
     saved_query_.reset();
 }
 
 void SearchState::Clear()
 {
-    mode_ = SearchMode::Idle;
+    mode_ = QueryMode::Idle;
     query_.clear();
     saved_query_.reset();
     anchor_ = {};
@@ -71,7 +72,7 @@ std::vector<SearchHit>::const_iterator SearchState::LowerBound(int row) const
     });
 }
 
-const std::vector<SearchRange>* SearchState::RangesFor(int row) const
+const std::vector<MatchRange>* SearchState::RangesFor(int row) const
 {
     auto it = LowerBound(row);
     if (it == hits_.end() || it->row != row) return nullptr;
@@ -102,6 +103,13 @@ int SearchState::Ordinal(int row) const
     auto it = LowerBound(row);
     if (it == hits_.end() || it->row != row) return 0;
     return static_cast<int>(std::distance(hits_.begin(), it)) + 1;
+}
+
+std::string SearchCountText(const SearchStatus& status)
+{
+    if (status.mode == QueryMode::Idle || status.query.empty()) return "";
+    if (status.hit_count == 0) return "見つかりません";
+    return std::format("{}/{}", status.ordinal > 0 ? std::to_string(status.ordinal) : "-", status.hit_count);
 }
 
 } // namespace miata::views

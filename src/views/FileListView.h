@@ -13,6 +13,7 @@
 #include "../models/Model.h"
 #include "../misc.h"
 #include "../platform.h"
+#include "FilterState.h"
 #include "SearchState.h"
 
 namespace miata::views {
@@ -67,40 +68,33 @@ namespace miata::views {
         int GetCursor() const { return cursorIndex_; }
         void SetCursor(int index);
         void MoveCursor(int offset);
-        inline FileEntryView& GetEntry(int index) const
-        {
-            return *list_[(size_t)index];
-        }
-        // カーソル下のエントリ。一覧が空だと使えない(範囲外を読む。空になり得る場所ではCurrentOrNull()を使う)
-        inline FileEntryView& GetCurrent() const
-        {
-            return GetEntry(cursorIndex_);
-        }
         // カーソル下のエントリ。一覧が空(カーソルが一覧の外)ならnullptr
         inline FileEntryView* CurrentOrNull() const
         {
             if (cursorIndex_ < 0 || (size_t)cursorIndex_ >= list_.size()) return nullptr;
             return list_[(size_t)cursorIndex_];
         }
-        // カーソル下のファイルのパス。一覧が空ならnullopt(GetCurrent()は一覧が空だと使えない)
+        // カーソル下のファイルのパス。一覧が空ならnullopt
         std::optional<std::filesystem::path> CurrentPath() const;
-        // このペインのマーク済みエントリを、画面表示順(list_の順。モデルの走査順ではない)で返す。マークが無ければ空。
-        // ポインタは再スキャン(Fetch)で無効になるので、返った直後に使い、保持しない。ドラッグ(BeginDrag)と、
+        // このペインの、見えているマーク済みエントリ(絞り込みで隠れている行のマークは含まない)を、画面表示順
+        // (list_の順。モデルの走査順ではない)で返す。マークが無ければ空。ポインタは再スキャン(Fetch)で無効になるので、
+        // 返った直後に使い、保持しない。ファイル操作(コピー・移動・ゴミ箱・リネーム)の対象と、ドラッグ(BeginDrag)、
         // Luaのmarked_entriesが使う
         std::vector<models::FileEntryModel*> MarkedEntries() const;
 
         // カーソル移動やフォーカス変更を伴わない外部要因(マーク変更等)の後に呼ぶ再描画要求
         void Redraw();
 
-        // マークをすべて解除して、再描画を要求する。モデルのClearMarks()はフラグを書き換えるだけで
-        // ビューには通知されないので、画面に反映したいときはこちらを使う。
-        void ClearMarks();
+        // pathsのファイルのマークを外して、再描画を要求する(画面に出ていない=絞り込みで隠れているファイルも含めて、
+        // モデルのマークを外す)。モデルのMark()はフラグを書き換えるだけでビューには通知されないので、画面に反映したいときは
+        // こちらを使う。ファイル操作の完了後やドロップ後に、操作したファイルのマークだけを外すために使う
+        // (そのペインの全マークを外すと、操作の最中に付けたマークや、絞り込みで隠れているマークまで消える)。
+        void UnmarkPaths(const std::vector<std::filesystem::path>& paths);
 
         // --- マークの一括操作(Luaのmark_all / unmark_all / invert_marks / mark_range / mark_search_hits / next_mark / prev_mark) ---
-        // 対象は、画面に出ている行(list_)。いまは全エントリが出ているので全エントリだが、絞り込み(フィルタ)を足したら、
-        // 絞り込んだ後の行だけが対象になる(絞り込んだ上で全マーク、ができる)。マークを変える操作は、マークの状態が変わった
-        // ときだけ、再描画を要求する(1回)。ここではダイアログの表示中かどうかを見ない(閉じた直後のティックにも呼ばれる。
-        // jump_toと同じ)。
+        // 対象は、画面に出ている行(list_)。絞り込み中は、絞り込んだ後の行だけが対象になる(絞り込んだ上で全マーク、ができる。
+        // 隠れた行のマークは、変えない)。マークを変える操作は、マークの状態が変わったときだけ、再描画を要求する(1回)。
+        // ここではダイアログの表示中かどうかを見ない(閉じた直後のティックにも呼ばれる。jump_toと同じ)。
         enum class MarkMode {
             Mark,   // マークする
             Unmark, // マークを外す
@@ -156,13 +150,14 @@ namespace miata::views {
             std::filesystem::path path;
             bool is_directory;
         };
-        // ドラッグ開始時に呼ぶ。このペインのマーク済みエントリを画面表示順で返す。
+        // ドラッグ開始時に呼ぶ。このペインの、見えているマーク済みエントリ(絞り込みで隠れている行のマークは含まない)を
+        // 画面表示順で返す。
         // どの行を押してドラッグしたかは問わない。マークが無い、またはDragGuardが
         // 拒否した場合は空を返す(=ドラッグしない)。
         const std::vector<DragEntry>& BeginDrag();
         // ドラッグ終了時に呼ぶ。acceptedは宛先がドロップを受理したか(キャンセル/拒否ならfalse)。
         // 受理された場合、ファイルが移動されていればReload()で一覧を最新にし(カーソルは維持、
-        // 移されなかったファイルのマークは残る)、そうでなければマークだけ解除する。
+        // 移されなかったファイルのマークは残る)、そうでなければ、運んだファイルのマークだけ解除する。
         void EndDrag(bool accepted);
 
         // --- ディレクトリ監視による自動リロード ---
@@ -200,13 +195,50 @@ namespace miata::views {
         void CancelSearch();
         // 検索を終える(ハイライトを消す)。カーソルは動かさない。検索していたらtrue。
         bool ClearSearch();
-        SearchMode GetSearchMode() const { return search_.Mode(); }
+        QueryMode GetSearchMode() const { return search_.Mode(); }
         // 検索バーに出す内容(語、ヒット数、カーソルのある行の順番)
         SearchStatus GetSearchStatus() const;
 
+        // --- 絞り込み(語を部分文字列として含む名前の行だけを、一覧に出す) ---
+        // 絞り込みはペインごと。状態の遷移はFilterState、ここは実際の一致(NameMatcher)と、一覧(list_)の作り直し、
+        // カーソルの追従、ハイライトの描画を受け持つ。語に大文字が無ければ大文字小文字を区別しない(スマートケース。検索と同じ)。
+        // 一致した部分(すべての出現)は、検索とは別の色(filter_match)で強調する。list_は、絞り込んだ後の行だけになる。
+        // 絞り込む前の全エントリのソート済みの並びはsorted_に持ち、語が変わるたびに、再ソートせずに、そこから選び直す。
+        // 検索(/ n N)、マークの一括操作、ドラッグ、Quick Look、Luaのcursor_entry / marked_entriesは、list_を見るので、
+        // 見えている行だけが対象になる。再スキャン(リロード・ソート)では絞り込みを保ち、ディレクトリを移動したら解除する。
+        // ペインの下の入力バーは、BrowserViewが持つ。
+
+        // 語の入力を始める(Idle / Committed → Typing)。語はまだ空なので、全行が出る(前の絞り込みは外れる。Escで戻る)。
+        // カーソルは、同じファイルに留まる。すでにTypingなら何もしない。
+        void BeginFilter();
+        // 入力中の語を更新する(Typingのときだけ)。一覧を絞り込み直し、カーソルを、基準のファイルへ寄せる(そのファイルが
+        // 隠れたら、一覧の並びで次に見えるファイル、無ければその前)。0件になっても基準は失わない(語を戻せば、元に戻る)。
+        void SetFilterQuery(const std::string& query);
+        // 一覧のカーソルを、1行下(dir > 0)・上(dir < 0)へ動かす(端で止まる。折り返さない)。動いた先を、以降の入力の
+        // 基準にする。入力中でない、または動けなければfalse。
+        bool StepFilter(int dir);
+        // 入力を確定する(Typing → Committed)。語が空なら、確定ではなく解除する。
+        void CommitFilter();
+        // 入力を取り消す(Typing → 始める前の状態)。始める前に確定していた絞り込みがあれば、それに戻る。
+        // カーソルは、入力を始めたときのファイルへ戻す。
+        void CancelFilter();
+        // 絞り込みを解除する(どの状態からでも)。カーソルは、今のファイルに留まる(0件だったときは、基準のファイル)。
+        // 絞り込んでいたらtrue。
+        bool ClearFilter();
+        // 入力欄を使わずに、語を確定済みにする(Luaのfilter_set)。語が空なら解除する。入力中でないときに呼ぶこと。
+        // 戻り値は、結果の状態(見えている行数と全行数)。
+        FilterStatus SetFilter(const std::string& query);
+        QueryMode GetFilterMode() const { return filter_.Mode(); }
+        // 入力中の語、または確定した語(絞り込んでいなければ空)
+        const std::string& FilterQuery() const { return filter_.Query(); }
+        // 絞り込みバーに出す内容(語、見えている行数と全行数、隠れているマークの数)
+        FilterStatus GetFilterStatus() const;
+        // 絞り込みで隠れている行の、マーク済みの数(絞り込んでいなければ0)
+        int HiddenMarkCount() const;
+
         // 一覧の下端に空ける高さ(pt)。一覧(スクロール部分)がこの分だけ縮む。空いた帯には、親(BrowserView)が
-        // このペインの検索バーを重ねる(反対側のペインは縮まない)。0で空けない。縮んでカーソルが見えなくなるときは、
-        // 見える位置までスクロールする。
+        // このペインの入力バー(検索・絞り込み)を重ねる(反対側のペインは縮まない)。0で空けない。縮んでカーソルが
+        // 見えなくなるときは、見える位置までスクロールする。
         void SetBottomInset(double height);
 
     private:
@@ -216,12 +248,27 @@ namespace miata::views {
         // マークの状態が変わったときだけ、描き直す(1回)
         MarkResult MarkRows(MarkMode mode, MarkKind kind, const std::function<bool(int)>& in_scope);
 
-        // 検索語に一致する行(ヒット)を、今のlist_から作り直してsearch_に渡す。list_を作り直したとき(Fetch)と、
+        // 検索語に一致する行(ヒット)を、今のlist_から作り直してsearch_に渡す。list_を作り直したとき(ApplyFilter)と、
         // 検索語・検索の状態が変わったときに呼ぶ。
         void RebuildSearchHits();
         // 位置(パス)を、今のlist_の添字にする。パスが見つからなければ、位置の添字(範囲に収める)。一覧が空なら-1
-        int ResolveRow(const SearchPosition& position) const;
-        SearchPosition PositionAt(int row) const;
+        int ResolveRow(const ListPosition& position) const;
+        ListPosition PositionAt(int row) const;
+
+        // 絞り込む前の全体の並び(sorted_)から、今の語に一致する行を選んで、list_とrow_of_sorted_と、絞り込みの
+        // 一致箇所を作り直し、検索のヒットも作り直す。list_を書くのは、これだけ(Fetch()と、語が変わったとき(RefilterAround)に呼ぶ)。語が空なら全行。
+        void ApplyFilter();
+        // pivotのファイル(全体の並びでの位置)を基準に、絞り込み直して、カーソルをそのファイル(隠れたら近くの見える行)へ寄せる
+        void RefilterAround(const ListPosition& pivot);
+        // 位置を、sorted_(絞り込む前の全体の並び)の添字にする。パスが見つからなければ、位置の添字(範囲に収める)。全体が空なら-1
+        int ResolveSortedIndex(const ListPosition& position) const;
+        // 位置のファイルの近くの、見えている行(list_の添字)。そのファイルが見えていればその行。隠れていれば、全体の並びで
+        // それ以降で最初に見える行 → 無ければ手前で最後に見える行。何も見えなければ0。ApplyFilter()の後に呼ぶ
+        int ShownRowNear(const ListPosition& position) const;
+        // list_のrow行目の、全体の並びでの位置
+        ListPosition FullPositionAt(int row) const;
+        // カーソルのファイルの、全体の並びでの位置。一覧が空(0件に絞り込んだ等)なら、絞り込みの基準を引き継ぐ
+        ListPosition CursorOrAnchor() const;
         // 検索や、マーク済みの行へ動く(StepMark)ために、rowの行へカーソルを動かして、描き直す。今見えている範囲の外へ
         // 飛ぶときは、行を画面の中央に出す(Redraw()のスクロールは、行が見える最小限だけなので、遠くへ飛ぶと端に張り付く)。
         void JumpCursorTo(int row);
@@ -248,10 +295,16 @@ namespace miata::views {
         SortKey sort_key_ = SortKey::Name;
         bool sort_reverse_ = false;
         models::FileListModel& model_;
+        // 画面に出す行(絞り込んだ後。画面の並び)。画面の行番号(cursorIndex_・検索のヒット・描画)は、すべてこの添字
         std::vector<FileEntryView*> list_;
         std::vector<FileEntryView> entries_;
-        // 検索の状態。ヒットは表示順(list_)の添字なので、list_を作り直すFetch()のたびに作り直す。
+        // 絞り込む前の全エントリ(ソート済み)。entries_の要素を指す。Fetch()で作り、語が変わるたびに、ここから選び直す
+        std::vector<FileEntryView*> sorted_;
+        // sorted_[i]がlist_の何行目か(絞り込みで隠れていれば-1)。sorted_と同じ長さ
+        std::vector<int> row_of_sorted_;
+        // 絞り込みと検索の状態。一致箇所とヒットは、list_(の添字)を使うので、list_を作り直すApplyFilter()のたびに作り直す。
         // 購読(subscriptions_)の通知はFetch()を呼ぶので、購読より先に宣言する(破棄は逆順)
+        FilterState filter_;
         SearchState search_;
         std::vector<misc::SubscriptionGuard> subscriptions_;
         std::function<bool()> drag_guard_;

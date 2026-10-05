@@ -116,6 +116,7 @@ namespace miata {
             .dest_model = dest_model,
             .src_dir = src_dir,
             .dest_dir = dest_dir,
+            .sources = std::move(sources),
         };
 
         std::lock_guard<std::mutex> lock(job->mutex_);
