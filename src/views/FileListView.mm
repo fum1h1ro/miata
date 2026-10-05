@@ -208,6 +208,32 @@ namespace {
         }
         return found;
     }
+
+    // マークの一括操作の補助。entryにmodeを適用する(マークの状態が変わったらtrue)
+    bool ApplyMarkMode(models::FileEntryModel& entry, FileListView::MarkMode mode)
+    {
+        bool current = entry.IsMarked();
+        bool next = false;
+        switch (mode) {
+        case FileListView::MarkMode::Mark: next = true; break;
+        case FileListView::MarkMode::Unmark: next = false; break;
+        case FileListView::MarkMode::Toggle: next = !current; break;
+        }
+        if (next == current) return false;
+        entry.Mark(next);
+        return true;
+    }
+
+    // entryがkindに合うか
+    bool MarkKindMatches(FileListView::MarkKind kind, const models::FileEntryModel& entry)
+    {
+        switch (kind) {
+        case FileListView::MarkKind::All: return true;
+        case FileListView::MarkKind::Files: return !entry.IsDirectory();
+        case FileListView::MarkKind::Dirs: return entry.IsDirectory();
+        }
+        return false;
+    }
 }
 
 struct FileListView::Impl {
@@ -401,6 +427,66 @@ void FileListView::ClearMarks()
 {
     model_.ClearMarks();
     Redraw();
+}
+
+FileListView::MarkResult FileListView::MarkRows(MarkMode mode, MarkKind kind, const std::function<bool(int)>& in_scope)
+{
+    MarkResult result;
+    for (size_t row = 0; row < list_.size(); ++row) {
+        auto& entry_model = list_[row]->Model();
+        if (!in_scope((int)row) || !MarkKindMatches(kind, entry_model)) continue;
+        ++result.matched;
+        if (ApplyMarkMode(entry_model, mode)) ++result.changed;
+    }
+    if (result.changed > 0) Redraw();
+    return result;
+}
+
+FileListView::MarkResult FileListView::MarkAll(MarkMode mode, MarkKind kind)
+{
+    return MarkRows(mode, kind, [](int) { return true; });
+}
+
+FileListView::MarkResult FileListView::MarkRange(MarkRangeFrom from)
+{
+    // 起点: カーソルの行そのものは含まず、fromの向きでいちばん近いマーク済みの行。cursorIndex_は、書くたびにRedraw()が
+    // 丸めるので、一覧が空でなければ範囲内。空なら、下のループは回らない(起点が無く、何もしない)
+    const int size = (int)list_.size();
+    const int step = from == MarkRangeFrom::Above ? -1 : 1;
+    int anchor = -1;
+    for (int row = cursorIndex_ + step; row >= 0 && row < size; row += step) {
+        if (list_[(size_t)row]->Model().IsMarked()) {
+            anchor = row;
+            break;
+        }
+    }
+    if (anchor < 0) return {};
+
+    const int first = std::min(anchor, cursorIndex_);
+    const int last = std::max(anchor, cursorIndex_);
+    return MarkRows(MarkMode::Mark, MarkKind::All, [first, last](int row) { return first <= row && row <= last; });
+}
+
+FileListView::MarkResult FileListView::MarkSearchHits(MarkMode mode, MarkKind kind)
+{
+    // 検索していないとき(Idle)のヒットは空(SearchState::Clear)なので、RangesForはいつもnullptrで、何もしない
+    return MarkRows(mode, kind, [this](int row) { return search_.RangesFor(row) != nullptr; });
+}
+
+bool FileListView::StepMark(int dir)
+{
+    const int size = (int)list_.size();
+    const int step = dir > 0 ? 1 : -1;
+    // カーソルの行そのものは含まない(size - 1 行を見れば、他の全ての行を一周する)。cursorIndex_は0以上なので
+    // (一覧が空なら、ループは回らない)、size を足せば、剰余は負にならない
+    for (int k = 1; k < size; ++k) {
+        const int row = (cursorIndex_ + step * k + size) % size;
+        if (list_[(size_t)row]->Model().IsMarked()) {
+            JumpCursorTo(row);
+            return true;
+        }
+    }
+    return false;
 }
 
 std::expected<void, FileError> FileListView::Reload(std::optional<std::filesystem::path> cursor_to)
