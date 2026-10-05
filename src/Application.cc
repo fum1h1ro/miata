@@ -22,17 +22,10 @@ namespace miata {
     // だから、C++ のオブジェクトを作る前に呼ぶこと。この関数自身も、Lua の C API と整数だけを使い、メッセージの書式は固定で、
     // 埋め込むのは整数だけにする。
     // 添字は戻り値の select と1対1なので、要素を黙って捨てたり、範囲外の selected を丸めたりしない(ずれた行が確定してしまう)。
-    // buttons / checkboxes は、従来どおり寛容なパース(型違いを黙って捨てる)のまま。
+    // buttons / checkboxes は、寛容なパース(型違いを黙って捨てる)のまま。
     static void CheckCustomDialogSelect(lua_State* L, int tidx)
     {
         tidx = lua_absindex(L, tidx);
-
-        // 旧 API。黙って無視すると、リストの無いダイアログが開いて、戻り値の result.selects[1] の nil 参照という遠いエラーになる
-        lua_getfield(L, tidx, "selects");
-        if (!lua_isnil(L, -1)) {
-            luaL_error(L, "dialog_custom: 'selects' was replaced by 'select' (one list per dialog): select = { options = {...}, selected = 1 }");
-        }
-        lua_pop(L, 1);
 
         lua_getfield(L, tidx, "select");
         if (lua_isnil(L, -1)) {
@@ -837,7 +830,7 @@ namespace miata {
         return 1;
     }
 
-    // エントリを { name, path, is_dir } のテーブルにして積む(Luaに公開する形。項目を足すのは互換を壊さない)。
+    // エントリを { name, path, is_dir } のテーブルにして積む(Luaに公開する形)。
     // name: 画面に出る名前(NFC。UTF-8として不正なバイトはU+FFFDに置き換え済みなので、この名前でパスを作ると
     // そのファイルを指さないことがある)。path: そのファイルを指す絶対パス(元のバイト列のまま)。
     // is_dir: フォルダか(シンボリックリンクはたどる。Enterでフォルダに入れるか、と同じ)。
