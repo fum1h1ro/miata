@@ -75,6 +75,7 @@ namespace miata {
         static int lua_command_search_clear(lua_State* L);
         static int lua_command_history_list(lua_State* L);
         static int lua_command_jump_to(lua_State* L);
+        static int lua_command_set_clipboard(lua_State* L);
 
         // Viewを操作するコマンドの入口(Script::RegisterFunctionsのwrapper)。upvalue(1)に本来のC関数を持つ。
         // Viewは設定ファイルの読み込みより後に作るので、読み込み中に呼ばれたらLuaのエラーにする
@@ -86,6 +87,9 @@ namespace miata {
         static int lua_private_rename_target(lua_State* L);
         static int lua_private_rename_conflict(lua_State* L);
         static int lua_private_rename_execute(lua_State* L);
+        static int lua_private_paths_of(lua_State* L);
+        static int lua_private_open_paths(lua_State* L);
+        static int lua_private_reveal_paths(lua_State* L);
 
         static int lua_color_index(lua_State* L);
         static int lua_color_newindex(lua_State* L);

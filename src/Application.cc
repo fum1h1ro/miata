@@ -256,6 +256,7 @@ namespace miata {
             { "search_clear", lua_command_search_clear },
             { "history_list", lua_command_history_list },
             { "jump_to", lua_command_jump_to },
+            { "set_clipboard", lua_command_set_clipboard },
         };
         script.RegisterFunctions(
             "Miata.command",
@@ -270,6 +271,9 @@ namespace miata {
             { "rename_target", lua_private_rename_target },
             { "rename_conflict", lua_private_rename_conflict },
             { "rename_execute", lua_private_rename_execute },
+            { "paths_of", lua_private_paths_of },
+            { "open_paths", lua_private_open_paths },
+            { "reveal_paths", lua_private_reveal_paths },
         };
         script.RegisterFunctions(
             "Miata._private",
@@ -1054,6 +1058,194 @@ namespace miata {
 
         // ここから先はluaL_errorを呼ばない(std::stringなどを作るため)
         lua_pushboolean(L, app.view_->JumpToPath(pane, std::filesystem::path(std::string(raw, length))));
+        return 1;
+    }
+
+    // Miata.command.set_clipboard(text) -> boolean
+    // textをクリップボードに置く。UTF-8として不正なバイトは、U+FFFDにして置く。置けたらtrue。
+    int Application::lua_command_set_clipboard(lua_State* L)
+    {
+        Script::CheckArgType(L, 1, LUA_TSTRING);
+        size_t length = 0;
+        const char* text = lua_tolstring(L, 1, &length);
+        lua_pushboolean(L, pl_set_clipboard_text(std::string(text, length)));
+        return 1;
+    }
+
+    // 開く・Finderで表示するコマンドの対象のパスとして使えるか(Luaの文字列のバイト列で判定する): 空でなく、"/" で始まる
+    // 絶対パスで、NULを含まない。相対パスは起動した場所で意味が変わるので受け付けない("~" も展開しない)。
+    // ".." や "//" は、開くだけなので、そのまま通す(jump_to と違い、ペインの場所にはしない)
+    static bool IsOpenablePath(const char* s, size_t length)
+    {
+        return length > 0 && s[0] == '/' && std::memchr(s, '\0', length) == nullptr;
+    }
+
+    // スタックのidxの値が、1件の対象(パスの文字列、またはパスを持つエントリ { path = 文字列 })なら、そのパスの文字列を
+    // スタックに積んでtrue。そうでなければ、何も積まずにfalse。Luaの C API だけを使う(luaL_errorの前に呼んでよい)
+    static bool PushTargetPath(lua_State* L, int idx)
+    {
+        idx = lua_absindex(L, idx);
+        if (lua_type(L, idx) == LUA_TSTRING) {
+            lua_pushvalue(L, idx);
+            return true;
+        }
+        if (lua_type(L, idx) == LUA_TTABLE) {
+            lua_getfield(L, idx, "path");
+            if (lua_type(L, -1) == LUA_TSTRING) return true;
+            lua_pop(L, 1);
+        }
+        return false;
+    }
+
+    // Miata._private.paths_of(target) -> string[]
+    // open などのコマンドの対象を、絶対パスの文字列の配列にする。targetは、パスの文字列、エントリ({ path = 文字列 }。
+    // cursor_entry の戻り値など)、またはそれらの配列(marked_entries の戻り値など)。空の配列は、空の配列になる。
+    // それ以外(nil・数値・入れ子の配列・path が文字列でないエントリ・絶対パスでない文字列・NULを含む文字列)はエラー。
+    // Luaの C API だけを使うので、デストラクタを持つオブジェクトは無い(エラーは longjmp)。
+    int Application::lua_private_paths_of(lua_State* L)
+    {
+        if (lua_gettop(L) < 1 || lua_isnil(L, 1)) {
+            luaL_error(L, "expected a path (string), an entry ({ path = ... }) or an array of them, got nil");
+            return 0;
+        }
+        lua_settop(L, 1); // 余分な引数は無視する
+
+        // pathを持つ表はエントリ(1件)、持たない表は配列
+        bool single = false;
+        if (lua_type(L, 1) == LUA_TSTRING) {
+            single = true;
+        }
+        else if (lua_type(L, 1) == LUA_TTABLE) {
+            lua_getfield(L, 1, "path");
+            single = !lua_isnil(L, -1);
+            lua_pop(L, 1);
+        }
+        else {
+            luaL_error(L, "expected a path (string), an entry ({ path = ... }) or an array of them, got %s", luaL_typename(L, 1));
+            return 0;
+        }
+
+        lua_newtable(L); // 結果(index 2)
+        if (single) {
+            if (!PushTargetPath(L, 1)) {
+                luaL_error(L, "entry.path must be a string");
+                return 0;
+            }
+            size_t length = 0;
+            const char* s = lua_tolstring(L, -1, &length);
+            if (!IsOpenablePath(s, length)) {
+                luaL_error(L, "the path must be an absolute path (starting with \"/\") and must not contain NUL");
+                return 0;
+            }
+            lua_rawseti(L, 2, 1);
+        }
+        else {
+            const lua_Integer count = (lua_Integer)lua_rawlen(L, 1);
+            for (lua_Integer i = 1; i <= count; ++i) {
+                lua_rawgeti(L, 1, i);
+                if (!PushTargetPath(L, -1)) {
+                    luaL_error(L, "element %d: expected a path (string) or an entry ({ path = string })", (int)i);
+                    return 0;
+                }
+                size_t length = 0;
+                const char* s = lua_tolstring(L, -1, &length);
+                if (!IsOpenablePath(s, length)) {
+                    luaL_error(L, "element %d: the path must be an absolute path (starting with \"/\") and must not contain NUL", (int)i);
+                    return 0;
+                }
+                lua_rawseti(L, 2, i); // パスの文字列を積み込む(積んだ分は減る)
+                lua_pop(L, 1);        // 取り出した要素
+            }
+        }
+        return 1; // 結果の表が、スタックの一番上
+    }
+
+    // Luaの値(idx)が、絶対パスの文字列の配列(paths_of の結果)かを調べる。違えばLuaのエラー(luaL_errorの前に、
+    // デストラクタを持つオブジェクトを作らない)。空でもよい
+    static void CheckPathArray(lua_State* L, int idx, const char* function)
+    {
+        Script::CheckArgType(L, idx, LUA_TTABLE);
+        const lua_Integer count = (lua_Integer)lua_rawlen(L, idx);
+        for (lua_Integer i = 1; i <= count; ++i) {
+            lua_rawgeti(L, idx, i);
+            size_t length = 0;
+            const char* s = lua_type(L, -1) == LUA_TSTRING ? lua_tolstring(L, -1, &length) : nullptr;
+            if (!s || !IsOpenablePath(s, length)) {
+                luaL_error(L, "%s: element %d is not an absolute path string", function, (int)i);
+                return;
+            }
+            lua_pop(L, 1);
+        }
+    }
+
+    // CheckPathArray を通った配列から、パスを取り出す(エラーを起こさない)
+    static std::vector<std::filesystem::path> ReadPathArray(lua_State* L, int idx)
+    {
+        std::vector<std::filesystem::path> paths;
+        const lua_Integer count = (lua_Integer)lua_rawlen(L, idx);
+        paths.reserve((size_t)count);
+        for (lua_Integer i = 1; i <= count; ++i) {
+            lua_rawgeti(L, idx, i);
+            size_t length = 0;
+            const char* s = lua_tolstring(L, -1, &length);
+            paths.emplace_back(std::string(s, length));
+            lua_pop(L, 1);
+        }
+        return paths;
+    }
+
+    // Miata._private.open_paths(paths, [app]) -> boolean
+    // pathsは、絶対パスの文字列の配列(paths_of の結果。空でないこと)。appは、アプリの指定(名前・Bundle ID・絶対パス)で、
+    // 省略・nil なら、ファイルごとの既定のアプリで開く。開く要求を出せたらtrue(開けたかは、あとで分かる)。
+    // アプリが見つからないときは、ダイアログで知らせてfalse。要求のあとで分かる失敗(開くアプリが無い・ファイルが無い等)は、
+    // あとで(メインスレッドで)ダイアログで知らせる。
+    int Application::lua_private_open_paths(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        CheckPathArray(L, 1, "open_paths");
+        if (lua_rawlen(L, 1) == 0) {
+            luaL_error(L, "open_paths: paths is empty");
+            return 0;
+        }
+        if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) Script::CheckArgType(L, 2, LUA_TSTRING);
+
+        // ここから先はluaL_errorを呼ばない(std::stringなどを作るため)
+        const auto paths = ReadPathArray(L, 1);
+        std::string app_spec;
+        if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
+            size_t length = 0;
+            const char* s = lua_tolstring(L, 2, &length);
+            app_spec.assign(s, length);
+        }
+
+        auto result = pl_open_paths(paths, app_spec, [](int failed, int total, const std::string& message) {
+            // メインスレッドで呼ばれる。要求のあとで分かった失敗
+            const auto what = (failed == 1 && total == 1) ? std::string("開けませんでした") : std::format("{}件が開けませんでした ({}件中)", failed, total);
+            Application::Instance().view_->ReportFileError(what, FileError{.message = message});
+        });
+        if (!result) {
+            app.view_->ReportFileError("開けませんでした", FileError{.message = result.error()});
+            lua_pushboolean(L, false);
+            return 1;
+        }
+        lua_pushboolean(L, true);
+        return 1;
+    }
+
+    // Miata._private.reveal_paths(paths) -> boolean
+    // Finderで、pathsを選択した状態で表示する。pathsは、絶対パスの文字列の配列(paths_of の結果。空でないこと:
+    // 空のときに何もしないのは、呼ぶ側の Lua の reveal)。
+    int Application::lua_private_reveal_paths(lua_State* L)
+    {
+        CheckPathArray(L, 1, "reveal_paths");
+        if (lua_rawlen(L, 1) == 0) {
+            luaL_error(L, "reveal_paths: paths is empty");
+            return 0;
+        }
+
+        // ここから先はluaL_errorを呼ばない(vectorを作るため)
+        pl_reveal_paths(ReadPathArray(L, 1));
+        lua_pushboolean(L, true);
         return 1;
     }
 
