@@ -296,6 +296,58 @@ Miata.command.current_pane()     -- カーソルのあるペイン: "left" ま�
 
 `navigate_left`（親ディレクトリへ）と `navigate_ok`（ディレクトリへ入る）で、移動先が読めない（権限が無い・消えた等）ときは、移動せずに、エラーのダイアログを出す。権限が無い場合は、[許可のしかた](#権限のエラーmacos-の保護)も案内する。
 
+### 状況の取得
+
+```lua
+Miata.command.pane_path([pane])       -- ペインのいるフォルダの絶対パス（文字列）
+Miata.command.cursor_entry([pane])    -- カーソル下のエントリ（テーブル）。一覧が空なら nil
+Miata.command.marked_entries([pane])  -- マーク済みのエントリの配列（画面の並び順）。無ければ空の配列
+Miata.command.current_sort([pane])    -- ソートの状態: 基準, 降順か（2つの値）
+```
+
+スクリプトから、今の状況（どのフォルダにいて、カーソルがどのファイルにあって、何をマークしているか）を読む。**読むだけで、状態は変えない**。返ったテーブルは、呼んだ時点の値の写しで、書き換えても一覧には何も起きない。`pane` は `"left"` / `"right"`（省略または `nil` なら、カーソルのあるペイン。それ以外の値はエラー）。ダイアログの表示中でも使える。
+
+エントリは、次の 3 項目のテーブル:
+
+| 項目 | 型 | 内容 |
+|---|---|---|
+| `name` | 文字列 | 画面に出る名前。NFC に正規化してある。UTF-8 として不正なバイトは `�`（U+FFFD）に置き換えてある（[名前が UTF-8 として不正なファイル](#名前が-utf-8-として不正なファイル)） |
+| `path` | 文字列 | そのファイルを指す絶対パス。**ファイルシステムの名前のまま**（正規化も置き換えもしない）なので、そのままファイルの操作に渡せる。`name` と綴りが違うことがある（NFD の名前、UTF-8 として不正な名前） |
+| `is_dir` | 真偽値 | フォルダか。フォルダへのシンボリックリンクは `true`（Enter で入れるか、と同じ）。壊れたリンクは `false` |
+
+- `pane_path`: 末尾に `/` は付かない（ルートだけ `"/"`）。`jump_to` にそのまま渡せる
+- `cursor_entry`: ファイルもフォルダも 1 つも無いフォルダでは `nil`
+- `marked_entries`: **マークが無ければ、カーソル下の 1 件にはならず、空の配列**（`copy_marked` `move_marked` は、マークが無ければカーソル下の 1 件を対象にするが、それとは違う。`delete_marked` は、マークが無ければ何もしない）。同じ対象にしたいときは、`cursor_entry` と組み合わせる（下の例）。並びは、ソートに従った画面の並び順で、マークした順ではない
+- `current_sort`: `key, reverse` の 2 つの値を返す（`key` は `"name"` / `"size"` / `"mtime"` / `"ext"`、`reverse` は降順なら `true`）。`sort(key, reverse)` にそのまま渡せる（`Miata.command.sort(Miata.command.current_sort())` は何も変えない）。ただし `sort` は、カーソルのあるペインだけに効く
+
+```lua
+-- ~/.config/miata/init.lua の例: o で、対象のファイルを既定のアプリで開く
+
+-- 文字列をシェルに渡すためのクォート（空白・引用符・$()・改行を含む名前でも、そのまま渡る）
+local function shell_quote(s)
+    return "'" .. (s:gsub("'", "'\\''")) .. "'"
+end
+
+-- 「マーク済み。無ければカーソル下の 1 件」（copy_marked / move_marked と同じ対象）
+local function targets()
+    local list = Miata.command.marked_entries()
+    if #list == 0 then
+        local e = Miata.command.cursor_entry()
+        if e then list = { e } end
+    end
+    return list
+end
+
+Miata.command.bind("n", "o", function()
+    for _, e in ipairs(targets()) do
+        os.execute("open " .. shell_quote(e.path) .. " &")   -- 末尾の & は、open の終了を待たないため
+    end
+end)
+```
+
+- 外部のコマンドは `os.execute` で実行する。**終わるまで Miata が止まる**ので、時間のかかるものは、末尾に `&` を付けて待たない。`io.popen` は使えない（このビルドの Lua は、POSIX の機能を有効にしていない）ので、出力が要るときは、ファイルにリダイレクトして `io.open` で読む
+- パスは、必ず上の `shell_quote` のようにクォートしてからシェルに渡す（クォートしないと、空白で分かれたり、`$(…)` が実行されたりする）
+
 ### ダイアログ
 
 ダイアログは `NSAlert` ではなく、非モーダルな `NSView` オーバーレイ（`DialogPanel`）で表示される。テキスト入力欄は本物の `NSTextField` を使うため macOS IME（日本語入力）にそのまま対応する。
@@ -370,6 +422,8 @@ local result = Miata.command.dialog_custom({
 -- result.checkboxes   -- { true/false, ... }。閉じた時点の状態
 ```
 
+（実物の `resources/test.lua` の `s` は、`selected` と `checked` を [`current_sort`](#状況の取得) から決めるので、ダイアログは今のソート（今の基準の行にカーソルがあり、降順ならチェックが入った状態）から始まる。）
+
 `buttons = {"OK", "キャンセル"}` を付けると、ボタンも並ぶ。ボタンで閉じたときは、`result.button`（ボタンの番号。1始まり）が入り、`result.select` は nil（選択は返らない）。行で閉じたときは、逆に `result.button` が nil。つまり、閉じた理由は、**行（`select`）かボタン（`button`）のどちらか一方**。
 
 - **並び順とカーソル**: 上から、`title`、`message`、チェックボックス、選択リスト、ボタンの順に並ぶ。選択リストの行も、チェックボックスも、ボタンも、同じ 1 つのカーソルで動く。選択リストの端（先頭の行で上、末尾の行で下）を超えて動かすと、その先にチェックボックスやボタンがあれば、そちらへ移る（折り返さない）。リストへ戻ってくるときは、入ってきた側に近い行（上から入れば先頭、下から入れば末尾）に着く。
@@ -407,7 +461,7 @@ Miata.command.delete_marked()       -- マーク済みをゴミ箱へ移動(確�
 Miata.command.reload(pane)          -- ペインのディレクトリを再読み込み(カーソルとマークは維持)。pane省略で現在のペイン
 Miata.command.make_directory(name)  -- 現在のペインに新規フォルダを作成
 Miata.command.make_folder()         -- 名前を入力ダイアログで聞いてから make_directory を呼ぶ
-Miata.command.sort(key, reverse)    -- key: "name"/"size"/"mtime"/"ext"。カーソルのあるペインのソート。ペインごとに保存され、次回の起動で戻る
+Miata.command.sort(key, reverse)    -- key: "name"/"size"/"mtime"/"ext"。カーソルのあるペインのソート。ペインごとに保存され、次回の起動で戻る。今の状態は current_sort で取れる（状況の取得）
 ```
 
 ファイルを追加・削除・改名するこれらの操作（`copy_marked` / `move_marked` / `delete_marked` / `make_directory` / `rename`）の後も、一覧はカーソル位置とマークを維持したまま最新になる（`reload` と同じ仕組み）。カーソルのファイルが移動・削除で消えた場合は、次に残っているファイルへ寄る。`rename` のカーソルは新しい名前に付いていく。移動・削除に失敗したファイルはマークが残るので、そのまま再実行できる。`copy_marked` の後は、コピー元のマークだけが解除される。

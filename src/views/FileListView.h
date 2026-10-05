@@ -84,6 +84,10 @@ namespace miata::views {
         }
         // カーソル下のファイルのパス。一覧が空ならnullopt(GetCurrent()は一覧が空だと使えない)
         std::optional<std::filesystem::path> CurrentPath() const;
+        // このペインのマーク済みエントリを、画面表示順(list_の順。モデルの走査順ではない)で返す。マークが無ければ空。
+        // ポインタは再スキャン(Fetch)で無効になるので、返った直後に使い、保持しない。ドラッグ(BeginDrag)と、
+        // Luaのmarked_entriesが使う
+        std::vector<models::FileEntryModel*> MarkedEntries() const;
 
         // カーソル移動やフォーカス変更を伴わない外部要因(マーク変更等)の後に呼ぶ再描画要求
         void Redraw();

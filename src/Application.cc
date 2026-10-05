@@ -243,6 +243,10 @@ namespace miata {
             { "make_directory", lua_command_make_directory },
             { "delete_marked", lua_command_delete_marked },
             { "current_pane", lua_command_current_pane },
+            { "pane_path", lua_command_pane_path },
+            { "cursor_entry", lua_command_cursor_entry },
+            { "marked_entries", lua_command_marked_entries },
+            { "current_sort", lua_command_current_sort },
             { "reload", lua_command_reload },
             { "quick_look", lua_command_quick_look },
             { "sort", lua_command_sort },
@@ -820,6 +824,86 @@ namespace miata {
         auto& app = Application::Instance();
         lua_pushstring(L, PaneName(app.view_->CurrentPane()));
         return 1;
+    }
+
+    // エントリを { name, path, is_dir } のテーブルにして積む(Luaに公開する形。項目を足すのは互換を壊さない)。
+    // name: 画面に出る名前(NFC。UTF-8として不正なバイトはU+FFFDに置き換え済みなので、この名前でパスを作ると
+    // そのファイルを指さないことがある)。path: そのファイルを指す絶対パス(元のバイト列のまま)。
+    // is_dir: フォルダか(シンボリックリンクはたどる。Enterでフォルダに入れるか、と同じ)。
+    static void PushEntryTable(lua_State* L, const models::FileEntryModel& entry)
+    {
+        lua_createtable(L, 0, 3);
+        const std::string& name = entry.Name();
+        lua_pushlstring(L, name.data(), name.size());
+        lua_setfield(L, -2, "name");
+        const std::string path = entry.Path().string();
+        lua_pushlstring(L, path.data(), path.size());
+        lua_setfield(L, -2, "path");
+        lua_pushboolean(L, entry.IsDirectory());
+        lua_setfield(L, -2, "is_dir");
+    }
+
+    // Miata.command.pane_path([pane]) -> string
+    // paneのペイン("left" / "right"。省略またはnilなら現在のペイン)の、いまのフォルダの絶対パス。
+    // 末尾に "/" は付かない(ルートだけ "/")。状態は変えない。
+    int Application::lua_command_pane_path(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        auto pane = OptionalPaneArg(L, 1, app.view_->CurrentPane());
+
+        // ここから先はluaL_errorを呼ばない(std::stringを作るため)
+        const std::string path = app.view_->GetList(pane).Path().string();
+        lua_pushlstring(L, path.data(), path.size());
+        return 1;
+    }
+
+    // Miata.command.cursor_entry([pane]) -> { name, path, is_dir } | nil
+    // paneのペインの、カーソル下のエントリ。一覧が空(ファイルもフォルダも1つも無い)ならnil。状態は変えない。
+    int Application::lua_command_cursor_entry(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        auto pane = OptionalPaneArg(L, 1, app.view_->CurrentPane());
+
+        auto* entry = app.view_->GetFileListView(pane).CurrentOrNull();
+        if (!entry) {
+            lua_pushnil(L);
+            return 1;
+        }
+        PushEntryTable(L, entry->Model());
+        return 1;
+    }
+
+    // Miata.command.marked_entries([pane]) -> { {name, path, is_dir}, ... }
+    // paneのペインの、マーク済みのエントリ(画面の並び順)。マークが無ければ空の配列(カーソル下の1件には
+    // 置き換えない: copy_marked / move_marked の「マークが無ければカーソル下」は、呼ぶ側で cursor_entry と組み合わせる)。
+    // 状態は変えない。
+    int Application::lua_command_marked_entries(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        auto pane = OptionalPaneArg(L, 1, app.view_->CurrentPane());
+
+        // ここから先はluaL_errorを呼ばない(vectorを作るため)
+        const auto marked = app.view_->GetFileListView(pane).MarkedEntries();
+        lua_createtable(L, (int)marked.size(), 0);
+        for (size_t i = 0; i < marked.size(); ++i) {
+            PushEntryTable(L, *marked[i]);
+            lua_rawseti(L, -2, (lua_Integer)i + 1);
+        }
+        return 1;
+    }
+
+    // Miata.command.current_sort([pane]) -> key, reverse
+    // paneのペインのソートの状態。keyは "name" / "size" / "mtime" / "ext"、reverseは降順ならtrue。
+    // sort(key, reverse) に、そのまま渡せる形(ただしsortはカーソルのあるペインだけに効く)。状態は変えない。
+    int Application::lua_command_current_sort(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        auto pane = OptionalPaneArg(L, 1, app.view_->CurrentPane());
+
+        auto& list_view = app.view_->GetFileListView(pane);
+        lua_pushstring(L, views::FileListView::SortKeyName(list_view.GetSortKey()));
+        lua_pushboolean(L, list_view.GetSortReverse());
+        return 2;
     }
 
     // Miata.command.reload([pane]) -> boolean

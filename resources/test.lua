@@ -129,16 +129,22 @@ Miata.command.bind("n", "<S-n>", function()
     Miata.command.search_prev()
 end)
 Miata.command.bind("n", "s", function()
-    -- 基準の行で Enter すると、その場で並べ替える(Esc で取り消し)。降順にするには、k でチェックボックスへ上がって
+    -- 基準の行で Enter すると、その場で並べ替える(Esc で取り消し)。ダイアログは、今のソート(current_sort)から始まる:
+    -- カーソルは今の基準の行にあり、降順ならチェックが入っている。降順を切り替えるには、k でチェックボックスへ上がって
     -- Enter で切り替えてから、行へ戻る。ラベルの `&x` はショートカットで、x キーを押すと、その項目を選んだことになる:
     -- 行なら、その基準で並べ替えて閉じる(s のあとに s で、サイズ順)。チェックボックスなら、d で降順を切り替える
+    local keys = { "name", "size", "mtime", "ext" }
+    local key, reverse = Miata.command.current_sort()
+    local selected = 1
+    for i, k in ipairs(keys) do
+        if k == key then selected = i end
+    end
     local result = Miata.command.dialog_custom({
         title = "ソート",
-        checkboxes = { { label = "降順(&D)", checked = false } },
-        select = { options = {"名前(&N)", "サイズ(&S)", "更新日時(&M)", "拡張子(&E)"}, selected = 1 },
+        checkboxes = { { label = "降順(&D)", checked = reverse } },
+        select = { options = {"名前(&N)", "サイズ(&S)", "更新日時(&M)", "拡張子(&E)"}, selected = selected },
     })
     if result and result.select then
-        local keys = { "name", "size", "mtime", "ext" }
         Miata.command.sort(keys[result.select], result.checkboxes[1])
     end
 end)

@@ -345,6 +345,17 @@ std::optional<std::filesystem::path> FileListView::CurrentPath() const
     return list_[(size_t)cursorIndex_]->Model().Path();
 }
 
+std::vector<models::FileEntryModel*> FileListView::MarkedEntries() const
+{
+    // list_は画面表示順(ソート済み)。貼り付け先でも、スクリプトでも、画面と同じ並びになるようこの順で集める
+    std::vector<models::FileEntryModel*> marked;
+    for (auto* entry : list_) {
+        auto& entry_model = entry->Model();
+        if (entry_model.IsMarked()) marked.push_back(&entry_model);
+    }
+    return marked;
+}
+
 void FileListView::Fetch()
 {
     list_.clear();
@@ -666,12 +677,9 @@ const std::vector<FileListView::DragEntry>& FileListView::BeginDrag()
     drag_entries_.clear();
     if (drag_guard_ && !drag_guard_()) return drag_entries_;
 
-    // list_は画面表示順(ソート済み)。貼り付け先でも画面と同じ並びになるようこの順で集める
-    for (auto* entry : list_) {
-        auto& entry_model = entry->Model();
-        if (entry_model.IsMarked()) {
-            drag_entries_.push_back({entry_model.Path(), entry_model.IsDirectory()});
-        }
+    // 画面表示順(MarkedEntries参照)。貼り付け先でも画面と同じ並びになる
+    for (auto* entry_model : MarkedEntries()) {
+        drag_entries_.push_back({entry_model->Path(), entry_model->IsDirectory()});
     }
     drag_source_dir_ = model_.Path();
     return drag_entries_;
