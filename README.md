@@ -518,6 +518,8 @@ Miata.command.sort(key, reverse)    -- key: "name"/"size"/"mtime"/"ext"。カー
 
 ファイルを追加・削除・改名するこれらの操作（`copy_marked` / `move_marked` / `delete_marked` / `make_directory` / `rename`）の後も、一覧はカーソル位置とマークを維持したまま最新になる（`reload` と同じ仕組み）。カーソルのファイルが移動・削除で消えた場合は、次に残っているファイルへ寄る。`rename` のカーソルは新しい名前に付いていく。移動・削除に失敗したファイルはマークが残るので、そのまま再実行できる。`copy_marked` の後は、コピー元のマークだけが解除される。
 
+複数の行をまとめてマークするコマンド（`mark_all` / `mark_range` ほか）は、[まとめてマークする](#まとめてマークする)を参照。
+
 #### `rename`
 
 カーソル位置の単一エントリの名前を変更する。**マークが1件でもあれば何もしない**（複数選択時のリネームは未対応）。リネーム先の名前が既に存在する場合は上書きせず、衝突している旨のメッセージを添えて同じ入力ダイアログを開き直す。
@@ -544,6 +546,78 @@ Miata.command.reload("left")    -- 左ペイン
 -- 反対側のペインを再読み込みする
 local other = Miata.command.current_pane() == "left" and "right" or "left"
 Miata.command.reload(other)
+```
+
+### まとめてマークする
+
+```lua
+Miata.command.mark_all([opts])           -- 全ての行をマーク（既定はフォルダ以外）
+Miata.command.unmark_all([opts])         -- 全てのマークを外す（既定は全部）
+Miata.command.invert_marks([opts])       -- 全ての行のマークを反転（既定はフォルダ以外）
+Miata.command.mark_range([opts])         -- 直上（または直下）のマークから、カーソルの行までをマーク
+Miata.command.mark_search_hits([opts])   -- 検索のヒットをマーク
+Miata.command.next_mark([opts])          -- 次のマーク済みの行へ、カーソルを動かす
+Miata.command.prev_mark([opts])          -- 前のマーク済みの行へ、カーソルを動かす
+```
+
+`mark` / `unmark` / `toggle_mark` がカーソル下の 1 件だけなのに対して、こちらは、ペインの複数の行をまとめて操作する。対象は、ペインの画面に出ている行（いまは、ペインの全てのエントリ）。**キーバインドは付けていない**（下の[例](#例まとめてマークする)で書き方を示す）。
+
+#### `opts`
+
+最後の引数に、省略できる表 `opts` を取る。使える項目は、コマンドごとに違う。
+
+| 項目 | 値 | 使えるコマンド |
+|---|---|---|
+| `pane` | `"left"` / `"right"`。省略（または `nil`）なら、カーソルのあるペイン | 全部 |
+| `kind` | `"files"`（フォルダ以外）/ `"dirs"`（フォルダだけ）/ `"all"`（全部） | `mark_all` `unmark_all` `invert_marks` `mark_search_hits` |
+| `mode` | `"mark"`（マーク）/ `"unmark"`（外す）/ `"toggle"`（反転） | `mark_search_hits` |
+| `from` | `"above"`（カーソルより上のマークから）/ `"below"`（下のマークから） | `mark_range` |
+
+- **使えない項目、知らない項目、つづりの間違いは、エラー**にする（黙って無視すると、意図しない種類がマークされて、そのまま移動や削除に使われてしまうため）。`opts` が表でないとき、値が決まった文字列でないときも、エラー。エラーのとき、状態は変わらない
+- フォルダかどうかは、[`is_dir`](#状況の取得)と同じ（フォルダへのシンボリックリンクはフォルダ。壊れたリンクはフォルダではない）
+- 戻り値（`next_mark` / `prev_mark` 以外）は、2 つの整数 `matched, changed`: **対象になった行の数**と、そのうち、**マークの状態が実際に変わった数**。例えば `mark_all()` を続けて 2 回呼ぶと、2 回目は `n, 0`（対象は同じ `n` 行で、変わったのは 0 行）。「対象が 0 行」と「もうマークしてあった」を区別できる
+
+#### 各コマンド
+
+- **`mark_all`**: `kind` に合う全ての行をマークする。`kind` の既定は `"files"`（フォルダ以外。壊れたリンクとファイルへのリンクを含む）。もともとマークしてあった行は、そのまま
+- **`unmark_all`**: `kind` に合う全ての行のマークを外す。**`kind` の既定は `"all"`**（全解除が、フォルダのマークを残さないように）。マークが無くても、`matched` は対象の行数になる
+- **`invert_marks`**: `kind` に合う全ての行のマークを反転する。`kind` の既定は `"files"`。`kind` に合わない行（既定ではフォルダ）は、触らない
+- **`mark_range`**: カーソルの行から、`from` の側で、いちばん近いマーク済みの行まで、間の行を全てマークする（端の 2 行を含む。**フォルダも含む**）。カーソルの行がマーク済みでも、それは起点にしない（`"above"` なら、カーソルより上の、いちばん近いマークが起点）。**起点のマークが無ければ、何もしない**（`0, 0`）。カーソルは動かさない。`matched` は範囲の行数
+- **`mark_search_hits`**: ペインの、今の[検索](#ファイル名の検索)（入力中も確定後も）のヒットの行を、マークする。`kind` の既定は `"all"`（強調されている行は、全て）。`mode = "unmark"` でヒットの行のマークを外し、`"toggle"` で反転する。ヒットでない行には触らない。**検索していなければ、何もしない**（`0, 0`）。検索は終わらせない（ハイライトも、`n` / `N` もそのまま）。検索語は、`search()` で入れて Enter で確定する
+- **`next_mark` / `prev_mark`**: カーソルを、次・前のマーク済みの行へ動かす（端でラップ。カーソルの行そのものは含まない）。フォーカスのあるペインでは、画面の外の行へ動くとき、その行を画面の中央に出す（検索の `n` / `N` と同じ）。動けたら `true`。マーク済みの行が（カーソルの行以外に）無くて動けなければ `false`（ビープは鳴らさない）。`opts` は `pane` だけ
+
+どのコマンドも、ダイアログの表示中でも使える。画面を描き直すのは、マークを変えたとき（`next_mark` / `prev_mark` は、カーソルを動かしたとき）だけ。
+
+#### 例：まとめてマークする
+
+```lua
+-- ~/.config/miata/init.lua の例（キーは、自分の好みに合わせる）
+local cmd = Miata.command
+
+cmd.bind("n", "a", function() cmd.invert_marks() end)                        -- 反転（ファイルだけ）
+cmd.bind("n", "<S-a>", function() cmd.invert_marks({ kind = "all" }) end)    -- 反転（フォルダも）
+cmd.bind("n", "v", function() cmd.mark_range() end)                          -- 直上のマークから、ここまで
+cmd.bind("n", "<S-v>", function() cmd.mark_range({ from = "below" }) end)    -- 直下のマークから、ここまで
+cmd.bind("n", "z", function() cmd.next_mark() end)                           -- 次のマークへ
+cmd.bind("n", "<S-z>", function() cmd.prev_mark() end)                       -- 前のマークへ
+
+-- 検索（/ で語を入れて Enter）に合う行を、全部マークする（フォルダも。ファイルだけなら kind = "files"）。合うものが無ければ、知らせる
+cmd.bind("n", "<S-m>", function()
+    local matched = cmd.mark_search_hits()
+    if matched == 0 then cmd.dialog_confirm("検索に合うものがありません") end
+end)
+
+-- マークを、全部のファイルに付け直す（前のマークは捨てる）
+cmd.bind("n", "<S-i>", function()
+    cmd.unmark_all()
+    cmd.mark_all()
+end)
+
+-- 反対側のペインを全解除する
+cmd.bind("n", "<S-d>", function()
+    local other = cmd.current_pane() == "left" and "right" or "left"
+    cmd.unmark_all({ pane = other })
+end)
 ```
 
 ### プレビュー

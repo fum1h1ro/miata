@@ -57,6 +57,13 @@ namespace miata {
         static int lua_command_mark(lua_State* L);
         static int lua_command_unmark(lua_State* L);
         static int lua_command_toggle_mark(lua_State* L);
+        static int lua_command_mark_all(lua_State* L);
+        static int lua_command_unmark_all(lua_State* L);
+        static int lua_command_invert_marks(lua_State* L);
+        static int lua_command_mark_range(lua_State* L);
+        static int lua_command_mark_search_hits(lua_State* L);
+        static int lua_command_next_mark(lua_State* L);
+        static int lua_command_prev_mark(lua_State* L);
         static int lua_command_copy_marked(lua_State* L);
         static int lua_command_move_marked(lua_State* L);
         static int lua_command_make_directory(lua_State* L);

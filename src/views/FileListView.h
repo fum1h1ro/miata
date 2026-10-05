@@ -96,6 +96,45 @@ namespace miata::views {
         // ビューには通知されないので、画面に反映したいときはこちらを使う。
         void ClearMarks();
 
+        // --- マークの一括操作(Luaのmark_all / unmark_all / invert_marks / mark_range / mark_search_hits / next_mark / prev_mark) ---
+        // 対象は、画面に出ている行(list_)。いまは全エントリが出ているので全エントリだが、絞り込み(フィルタ)を足したら、
+        // 絞り込んだ後の行だけが対象になる(絞り込んだ上で全マーク、ができる)。マークを変える操作は、マークの状態が変わった
+        // ときだけ、再描画を要求する(1回)。ここではダイアログの表示中かどうかを見ない(閉じた直後のティックにも呼ばれる。
+        // jump_toと同じ)。
+        enum class MarkMode {
+            Mark,   // マークする
+            Unmark, // マークを外す
+            Toggle, // 反転する
+        };
+        // 対象にするエントリの種類。フォルダかどうかはIsDirectory()(シンボリックリンクはたどる。Luaのis_dirと同じ。
+        // 壊れたリンクはフォルダではない)
+        enum class MarkKind {
+            All,
+            Files,
+            Dirs,
+        };
+        // 範囲マークで、起点にするマークを、カーソルのどちら側に探すか
+        enum class MarkRangeFrom {
+            Above, // カーソルより上(表示順で前)
+            Below, // カーソルより下(表示順で後)
+        };
+        struct MarkResult {
+            int matched = 0; // 対象になった行の数
+            int changed = 0; // そのうち、マークの状態が実際に変わった数
+        };
+        // kindに合う全ての行に、modeを適用する
+        MarkResult MarkAll(MarkMode mode, MarkKind kind);
+        // 起点(カーソルの行を除いて、fromの側でいちばん近いマーク済みの行)から、カーソルの行まで、両端を含む全ての行を
+        // マークする(カーソルの行がマーク済みでも、起点にはしない)。起点が無ければ、何もしない({0, 0})。
+        // カーソルは動かさず、kindは見ずに、フォルダも含める。
+        MarkResult MarkRange(MarkRangeFrom from);
+        // いまの検索(入力中も確定後も)のヒットのうち、kindに合う行に、modeを適用する。検索していなければ({0, 0})。
+        // 検索は終わらせない
+        MarkResult MarkSearchHits(MarkMode mode, MarkKind kind);
+        // カーソルを、次(dir > 0)・前(dir <= 0)のマーク済みの行へ動かす(端でラップ。カーソルの行そのものは含まない)。
+        // マーク済みの行が(カーソルの行以外に)無くて動けなければfalse
+        bool StepMark(int dir);
+
         // このペインのディレクトリを再スキャンする(FileListModel::Reload()参照)。
         // マークもカーソルも、パスで同じファイルを引き継ぐ。カーソルのファイルが消えていた
         // 場合は、再スキャン前の画面上の並びで次に残っているファイル(無ければその前)へ寄せる。
@@ -173,14 +212,18 @@ namespace miata::views {
     private:
         void Fetch();
 
+        // list_の行のうち、in_scope(行の添字)が真で、kindに合う行に、modeを適用する(MarkAll / MarkRange / MarkSearchHitsの共通部)。
+        // マークの状態が変わったときだけ、描き直す(1回)
+        MarkResult MarkRows(MarkMode mode, MarkKind kind, const std::function<bool(int)>& in_scope);
+
         // 検索語に一致する行(ヒット)を、今のlist_から作り直してsearch_に渡す。list_を作り直したとき(Fetch)と、
         // 検索語・検索の状態が変わったときに呼ぶ。
         void RebuildSearchHits();
         // 位置(パス)を、今のlist_の添字にする。パスが見つからなければ、位置の添字(範囲に収める)。一覧が空なら-1
         int ResolveRow(const SearchPosition& position) const;
         SearchPosition PositionAt(int row) const;
-        // 検索でrowの行へカーソルを動かして、描き直す。今見えている範囲の外へ飛ぶときは、行を画面の中央に出す
-        // (Redraw()のスクロールは、行が見える最小限だけなので、遠くへ飛ぶと端に張り付く)。
+        // 検索や、マーク済みの行へ動く(StepMark)ために、rowの行へカーソルを動かして、描き直す。今見えている範囲の外へ
+        // 飛ぶときは、行を画面の中央に出す(Redraw()のスクロールは、行が見える最小限だけなので、遠くへ飛ぶと端に張り付く)。
         void JumpCursorTo(int row);
 
         // ディレクトリ監視。表示するパスが変わったときだけ張り直す。監視はパス基準で、ディレクトリが

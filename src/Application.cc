@@ -238,6 +238,13 @@ namespace miata {
             { "mark", lua_command_mark },
             { "unmark", lua_command_unmark },
             { "toggle_mark", lua_command_toggle_mark },
+            { "mark_all", lua_command_mark_all },
+            { "unmark_all", lua_command_unmark_all },
+            { "invert_marks", lua_command_invert_marks },
+            { "mark_range", lua_command_mark_range },
+            { "mark_search_hits", lua_command_mark_search_hits },
+            { "next_mark", lua_command_next_mark },
+            { "prev_mark", lua_command_prev_mark },
             { "copy_marked", lua_command_copy_marked },
             { "move_marked", lua_command_move_marked },
             { "make_directory", lua_command_make_directory },
@@ -908,6 +915,187 @@ namespace miata {
         lua_pushstring(L, views::FileListView::SortKeyName(list_view.GetSortKey()));
         lua_pushboolean(L, list_view.GetSortReverse());
         return 2;
+    }
+
+    // --- マークの一括操作(mark_all / unmark_all / invert_marks / mark_range / mark_search_hits / next_mark / prev_mark) ---
+    // どれも、最後の引数に省略できる opts(表)を取る。項目は pane / kind / mode / from のうち、コマンドごとに許すものだけ。
+    // 許さない項目や知らない項目は、エラーにする(つづりを間違えた kind が黙って無視されると、意図しない種類がマークされて、
+    // そのまま移動や削除に使われてしまうため)。
+    using MarkMode = views::FileListView::MarkMode;
+    using MarkKind = views::FileListView::MarkKind;
+    using MarkRangeFrom = views::FileListView::MarkRangeFrom;
+
+    static std::optional<MarkKind> ParseMarkKind(const char* name)
+    {
+        if (std::strcmp(name, "all") == 0) return MarkKind::All;
+        if (std::strcmp(name, "files") == 0) return MarkKind::Files;
+        if (std::strcmp(name, "dirs") == 0) return MarkKind::Dirs;
+        return std::nullopt;
+    }
+
+    static std::optional<MarkMode> ParseMarkMode(const char* name)
+    {
+        if (std::strcmp(name, "mark") == 0) return MarkMode::Mark;
+        if (std::strcmp(name, "unmark") == 0) return MarkMode::Unmark;
+        if (std::strcmp(name, "toggle") == 0) return MarkMode::Toggle;
+        return std::nullopt;
+    }
+
+    static std::optional<MarkRangeFrom> ParseMarkRangeFrom(const char* name)
+    {
+        if (std::strcmp(name, "above") == 0) return MarkRangeFrom::Above;
+        if (std::strcmp(name, "below") == 0) return MarkRangeFrom::Below;
+        return std::nullopt;
+    }
+
+    // optsの項目の値(lua_nextで走査している、スタックの一番上)を、parseで読む。文字列でない値や、parseできない値は、
+    // Luaのエラー(luaL_errorはlongjmpなので、デストラクタを持つオブジェクトを作らない。std::optional<列挙型>は
+    // デストラクタを持たないので使ってよい)
+    template <typename T>
+    static T ReadMarkOptValue(lua_State* L, const char* name, std::optional<T> (*parse)(const char*), const char* expected)
+    {
+        if (lua_type(L, -1) != LUA_TSTRING) {
+            luaL_error(L, "option '%s' must be a string (%s)", name, expected);
+            return T{}; // luaL_errorは戻らない
+        }
+        auto parsed = parse(lua_tostring(L, -1));
+        if (!parsed) {
+            luaL_error(L, "unknown value for option '%s': %s (expected %s)", name, lua_tostring(L, -1), expected);
+            return T{};
+        }
+        return *parsed;
+    }
+
+    // optsから読む項目の置き場。置き場の初期値が、省略したときの値。paneは、全てのコマンドが使える。ほかは、nullptrの項目を、
+    // このコマンドが許さない(指定されたらエラー)
+    struct MarkOptSlots {
+        views::constants::Pane& pane;
+        MarkKind* kind = nullptr;
+        MarkMode* mode = nullptr;
+        MarkRangeFrom* from = nullptr;
+    };
+
+    // Luaの引数のindex番目のopts(省略・nilなら、何もしない)を、slotsに読む。走査はraw(メタテーブルのコードは走らない)。
+    // 文字列でない名前は、lua_tostringが数値のキーを文字列に変えて、lua_nextを壊すので、型を先に見る
+    static void ReadMarkOpts(lua_State* L, int index, const MarkOptSlots& slots)
+    {
+        if (lua_gettop(L) < index || lua_isnil(L, index)) return;
+        if (!lua_istable(L, index)) {
+            luaL_error(L, "options must be a table");
+            return;
+        }
+        lua_pushnil(L);
+        while (lua_next(L, index) != 0) {
+            if (lua_type(L, -2) != LUA_TSTRING) {
+                luaL_error(L, "option names must be strings");
+                return;
+            }
+            const char* name = lua_tostring(L, -2);
+            if (std::strcmp(name, "pane") == 0) {
+                slots.pane = ReadMarkOptValue<views::constants::Pane>(L, name, ParsePane, "\"left\" or \"right\"");
+            }
+            else if (slots.kind && std::strcmp(name, "kind") == 0) {
+                *slots.kind = ReadMarkOptValue<MarkKind>(L, name, ParseMarkKind, "\"all\", \"files\" or \"dirs\"");
+            }
+            else if (slots.mode && std::strcmp(name, "mode") == 0) {
+                *slots.mode = ReadMarkOptValue<MarkMode>(L, name, ParseMarkMode, "\"mark\", \"unmark\" or \"toggle\"");
+            }
+            else if (slots.from && std::strcmp(name, "from") == 0) {
+                *slots.from = ReadMarkOptValue<MarkRangeFrom>(L, name, ParseMarkRangeFrom, "\"above\" or \"below\"");
+            }
+            else {
+                luaL_error(L, "unknown option: %s", name);
+                return;
+            }
+            lua_pop(L, 1); // 値だけ捨てる(名前は、次のlua_nextに要る)
+        }
+    }
+
+    // 一括操作の結果(対象になった数、実際に変わった数)を、Luaの戻り値として積む
+    static int PushMarkResult(lua_State* L, const views::FileListView::MarkResult& result)
+    {
+        lua_pushinteger(L, result.matched);
+        lua_pushinteger(L, result.changed);
+        return 2;
+    }
+
+    // mark_all / unmark_all / invert_marks の共通部分。default_kindは、kindを省略したときの対象
+    static int MarkAllCommand(lua_State* L, views::View& view, MarkMode mode, MarkKind default_kind)
+    {
+        auto pane = view.CurrentPane();
+        auto kind = default_kind;
+        ReadMarkOpts(L, 1, { .pane = pane, .kind = &kind });
+        return PushMarkResult(L, view.GetFileListView(pane).MarkAll(mode, kind));
+    }
+
+    // next_mark / prev_mark の共通部分
+    static int StepMarkCommand(lua_State* L, views::View& view, int dir)
+    {
+        auto pane = view.CurrentPane();
+        ReadMarkOpts(L, 1, { .pane = pane });
+        lua_pushboolean(L, view.GetFileListView(pane).StepMark(dir));
+        return 1;
+    }
+
+    // Miata.command.mark_all([opts]) -> matched, changed
+    // ペインの全ての行をマークする。opts: pane("left" / "right"。省略は現在のペイン)、kind("files" / "dirs" / "all"。
+    // 省略は "files"=フォルダ以外)。戻り値は、対象になった行の数と、そのうち、マークの状態が実際に変わった数。
+    int Application::lua_command_mark_all(lua_State* L)
+    {
+        return MarkAllCommand(L, *Application::Instance().view_, MarkMode::Mark, MarkKind::Files);
+    }
+
+    // Miata.command.unmark_all([opts]) -> matched, changed
+    // ペインの全てのマークを外す。opts と戻り値は mark_all と同じ。ただし、kind の省略は "all"(全解除は、フォルダのマークも
+    // 残さない)。
+    int Application::lua_command_unmark_all(lua_State* L)
+    {
+        return MarkAllCommand(L, *Application::Instance().view_, MarkMode::Unmark, MarkKind::All);
+    }
+
+    // Miata.command.invert_marks([opts]) -> matched, changed
+    // ペインの全ての行のマークを反転する。opts と戻り値は mark_all と同じ(kind の省略は "files")。
+    int Application::lua_command_invert_marks(lua_State* L)
+    {
+        return MarkAllCommand(L, *Application::Instance().view_, MarkMode::Toggle, MarkKind::Files);
+    }
+
+    // Miata.command.mark_range([opts]) -> matched, changed
+    // カーソルより上(from = "above"。省略)または下("below")で、いちばん近いマークから、カーソルの行までを、全てマークする。
+    // opts: pane、from。起点のマークが無ければ、何もしない(0, 0)。戻り値は、範囲の行数(端の2行を含む)と、新しくマークした数。
+    int Application::lua_command_mark_range(lua_State* L)
+    {
+        auto& view = *Application::Instance().view_;
+        auto pane = view.CurrentPane();
+        auto from = MarkRangeFrom::Above;
+        ReadMarkOpts(L, 1, { .pane = pane, .from = &from });
+        return PushMarkResult(L, view.GetFileListView(pane).MarkRange(from));
+    }
+
+    // Miata.command.mark_search_hits([opts]) -> matched, changed
+    // ペインの、いまの検索(入力中も確定後も)のヒットを、マークする。opts: pane、kind(省略は "all"=強調されている行を全て)、
+    // mode("mark"(省略) / "unmark" / "toggle")。検索していなければ、何もしない(0, 0)。検索は終わらせない。
+    int Application::lua_command_mark_search_hits(lua_State* L)
+    {
+        auto& view = *Application::Instance().view_;
+        auto pane = view.CurrentPane();
+        auto kind = MarkKind::All;
+        auto mode = MarkMode::Mark;
+        ReadMarkOpts(L, 1, { .pane = pane, .kind = &kind, .mode = &mode });
+        return PushMarkResult(L, view.GetFileListView(pane).MarkSearchHits(mode, kind));
+    }
+
+    // Miata.command.next_mark([opts]) / prev_mark([opts]) -> boolean
+    // ペインのカーソルを、次・前のマーク済みの行へ動かす(端でラップ。カーソルの行そのものは含まない)。opts: pane。
+    // 動けたらtrue。マーク済みの行が(カーソルの行以外に)無くて動けなければfalse(beepは鳴らさない)。
+    int Application::lua_command_next_mark(lua_State* L)
+    {
+        return StepMarkCommand(L, *Application::Instance().view_, 1);
+    }
+
+    int Application::lua_command_prev_mark(lua_State* L)
+    {
+        return StepMarkCommand(L, *Application::Instance().view_, -1);
     }
 
     // Miata.command.reload([pane]) -> boolean
