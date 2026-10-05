@@ -8,6 +8,8 @@ Miata.config.color.directory = "#00ffaaff"
 -- 検索で一致した部分の背景色。search_current は、カーソルのある行(今いるマッチ)の一致部分
 Miata.config.color.search_match = "#7a5c00ff"
 Miata.config.color.search_current = "#c06000ff"
+-- 絞り込みで一致した部分の背景色(検索の色と同時に出るので、別の色)
+Miata.config.color.filter_match = "#5a2d82ff"
 -- Miata.config.set_font("フォント名") / Miata.config.set_font_size(size) でファイル一覧のフォントを指定できる(未指定ならデフォルト)
 -- Miata.config.set_history_limit(n) でフォルダの履歴の件数(左右のペイン合わせて)を指定できる(0〜10000。未指定なら 100。0 なら記録しない)
 
@@ -161,6 +163,13 @@ Miata.command.bind("n", "n", function()
 end)
 Miata.command.bind("n", "<S-n>", function()
     Miata.command.search_prev()
+end)
+-- 絞り込み(名前に語を含む行だけを一覧に出す)。f でそのペインの下(検索バーの上)に入力欄が出て、打つたびに一覧が絞られる。
+-- Enter で確定(別のフォルダへ移動するまで続く。通常時の Esc では解除されない)、入力中の Esc で取り消し(前の絞り込みに戻る)。
+-- 解除は、もう一度 f を押して語を空のまま Enter。絞り込んだ上で mark_all などを使うと、見えている行だけが対象になる。
+-- 入力欄を使わずに絞り込むには Miata.command.filter_set("語", [pane])、解除には Miata.command.filter_clear([pane])
+Miata.command.bind("n", "f", function()
+    Miata.command.filter()
 end)
 Miata.command.bind("n", "s", function()
     -- 基準の行で Enter すると、その場で並べ替える(Esc で取り消し)。ダイアログは、今のソート(current_sort)から始まる:

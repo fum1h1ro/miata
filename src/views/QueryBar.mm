@@ -1,9 +1,8 @@
 #import <AppKit/AppKit.h>
 #include <algorithm>
 #include <cmath>
-#include <format>
 #include <optional>
-#include "SearchBar.h"
+#include "QueryBar.h"
 #include "../Config.h"
 #include "NSColorUtil.h"
 #include "ViewMetrics.h"
@@ -31,17 +30,17 @@ namespace {
 // 入力欄のdelegate。Enter / Esc / ↑↓ / Tabだけを横取りし、通常の文字入力とIMEの変換中の操作は、AppKit標準の
 // 経路(素通し)に任せる。doCommandBySelector:は変換中は呼ばれないので、変換候補の選択中のEnter / 矢印は
 // 自然にIME側に渡る(FilterListDialog.mmと同じ作法)。
-@interface _MiataSearchFieldDelegate : NSObject <NSTextFieldDelegate>
-// SearchBar::Implが持つ。SearchBarが破棄されたらnullptrにする(次のランループに逃がしたブロックが、破棄後に
+@interface _MiataQueryFieldDelegate : NSObject <NSTextFieldDelegate>
+// QueryBar::Implが持つ。QueryBarが破棄されたらnullptrにする(次のランループに逃がしたブロックが、破棄後に
 // 呼ぶのを防ぐ)
-@property (nonatomic, assign) const miata::views::SearchBar::Callbacks* callbacks;
+@property (nonatomic, assign) const miata::views::QueryBar::Callbacks* callbacks;
 @end
-@implementation _MiataSearchFieldDelegate
+@implementation _MiataQueryFieldDelegate
 - (BOOL)control:(NSControl*)control textView:(NSTextView*)textView doCommandBySelector:(SEL)commandSelector
 {
     if (!self.callbacks) return NO;
     // 矢印の上下と、Ctrl-P / Ctrl-N(NSTextViewの標準のキー割り当てで、moveUp: / moveDown: になる)は、
-    // 次・前のマッチへ。同期で処理する(カーソルを動かすだけ)
+    // 検索なら次・前のマッチへ、絞り込みなら一覧のカーソルを1行。同期で処理する(カーソルを動かすだけ)
     if (commandSelector == @selector(moveUp:)) {
         if (self.callbacks->on_step) self.callbacks->on_step(-1);
         return YES;
@@ -72,19 +71,19 @@ namespace {
 }
 - (void)controlTextDidChange:(NSNotification*)notification
 {
-    // IMEの変換中の扱い(検索語にしない)は、文字を読む側(SearchBar::SettledText)が決める
+    // IMEの変換中の扱い(語にしない)は、文字を読む側(QueryBar::SettledText)が決める
     if (self.callbacks && self.callbacks->on_query_changed) self.callbacks->on_query_changed();
 }
 @end
 
 // バー全体の背景。設定の背景色で塗り(OSのテーマの色は使わない)、上端に一覧との境目の線を引く。
-@interface _MiataSearchBarView : NSView
-@property (nonatomic, weak) NSTextField* slash;
+@interface _MiataQueryBarView : NSView
+@property (nonatomic, weak) NSTextField* prompt;
 @property (nonatomic, weak) NSTextField* field;
 @property (nonatomic, weak) NSTextField* count;
 - (void)layoutBar;
 @end
-@implementation _MiataSearchBarView
+@implementation _MiataQueryBarView
 - (BOOL)isFlipped { return YES; }
 - (BOOL)isOpaque { return YES; }
 - (void)drawRect:(NSRect)dirtyRect
@@ -110,7 +109,7 @@ namespace {
     [super setFrameSize:newSize];
     [self layoutBar];
 }
-// 「/」+ 入力欄 + 右端の件数を、左右の余白で挟んで横に並べる。明示的に計算する(BrowserViewの子で、
+// プロンプト + 入力欄 + 右端の件数を、左右の余白で挟んで横に並べる。明示的に計算する(BrowserViewの子で、
 // flippedなビューのautoresizingは意図どおりに効かないため。FileListViewのレイアウトコンテナと同じ)
 - (void)layoutBar
 {
@@ -122,12 +121,12 @@ namespace {
     CGFloat y = std::floor((height - line) / 2);
     NSDictionary* attrs = @{NSFontAttributeName: font};
 
-    CGFloat slash_w = std::ceil([self.slash.stringValue sizeWithAttributes:attrs].width) + 2;
+    CGFloat prompt_w = std::ceil([self.prompt.stringValue sizeWithAttributes:attrs].width) + 2;
     CGFloat count_w = std::ceil([self.count.stringValue sizeWithAttributes:attrs].width) + 4;
-    CGFloat count_x = std::max(kListPadding + slash_w, width - kListPadding - count_w);
-    CGFloat field_x = kListPadding + slash_w;
+    CGFloat count_x = std::max(kListPadding + prompt_w, width - kListPadding - count_w);
+    CGFloat field_x = kListPadding + prompt_w;
 
-    self.slash.frame = NSMakeRect(kListPadding, y, slash_w, line);
+    self.prompt.frame = NSMakeRect(kListPadding, y, prompt_w, line);
     self.field.frame = NSMakeRect(field_x, y, std::max((CGFloat)0, count_x - kGap - field_x), line);
     self.count.frame = NSMakeRect(count_x, y, std::max((CGFloat)0, width - kListPadding - count_x), line);
 }
@@ -135,12 +134,12 @@ namespace {
 
 namespace miata::views {
 
-struct SearchBar::Impl {
-    _MiataSearchBarView* bar = nil;
-    NSTextField* slash = nil;
+struct QueryBar::Impl {
+    _MiataQueryBarView* bar = nil;
+    NSTextField* prompt = nil;
     NSTextField* field = nil;
     NSTextField* count = nil;
-    _MiataSearchFieldDelegate* delegate = nil;
+    _MiataQueryFieldDelegate* delegate = nil;
     Callbacks callbacks;
     // 入力中だけ変えるキャレットの色の、元の色。フィールドエディタはウィンドウの全テキスト欄(ダイアログの
     // 入力欄など)が共有していて、設定した色は次の欄にも残る(実測)ので、入力が終わったら戻す
@@ -168,17 +167,17 @@ struct SearchBar::Impl {
     }
 };
 
-SearchBar::SearchBar() : impl_(std::make_unique<Impl>())
+QueryBar::QueryBar(const std::string& prompt) : impl_(std::make_unique<Impl>())
 {
     NSFont* font = MakeFont(Config::FontSize());
     NSColor* text_color = TextColor();
 
-    impl_->bar = [[_MiataSearchBarView alloc] initWithFrame:NSMakeRect(0, 0, 200, Height())];
+    impl_->bar = [[_MiataQueryBarView alloc] initWithFrame:NSMakeRect(0, 0, 200, Height())];
 
-    impl_->slash = [NSTextField labelWithString:@"/"];
-    impl_->slash.font = font;
-    impl_->slash.textColor = text_color;
-    impl_->slash.hidden = YES;
+    impl_->prompt = [NSTextField labelWithString:@(prompt.c_str())];
+    impl_->prompt.font = font;
+    impl_->prompt.textColor = text_color;
+    impl_->prompt.hidden = YES;
 
     impl_->count = [NSTextField labelWithString:@""];
     impl_->count.font = font;
@@ -197,73 +196,60 @@ SearchBar::SearchBar() : impl_(std::make_unique<Impl>())
     [impl_->field.cell setScrollable:YES];
     [impl_->field.cell setWraps:NO];
 
-    impl_->delegate = [[_MiataSearchFieldDelegate alloc] init];
+    impl_->delegate = [[_MiataQueryFieldDelegate alloc] init];
     impl_->delegate.callbacks = &impl_->callbacks;
     impl_->field.delegate = impl_->delegate;
     impl_->SetEditable(false);
 
-    impl_->bar.slash = impl_->slash;
+    impl_->bar.prompt = impl_->prompt;
     impl_->bar.field = impl_->field;
     impl_->bar.count = impl_->count;
-    [impl_->bar addSubview:impl_->slash];
+    [impl_->bar addSubview:impl_->prompt];
     [impl_->bar addSubview:impl_->field];
     [impl_->bar addSubview:impl_->count];
     [impl_->bar layoutBar];
 }
 
-SearchBar::~SearchBar() = default;
+QueryBar::~QueryBar() = default;
 
-void* SearchBar::NativeView() const
+void* QueryBar::NativeView() const
 {
     return (__bridge void*)impl_->bar;
 }
 
-double SearchBar::Height()
+double QueryBar::Height()
 {
     return HeaderHeight();
 }
 
-void SearchBar::SetCallbacks(Callbacks callbacks)
+void QueryBar::SetCallbacks(Callbacks callbacks)
 {
     impl_->callbacks = std::move(callbacks);
 }
 
-void SearchBar::Update(const SearchStatus& status)
+void QueryBar::Update(const Display& display)
 {
-    bool active = status.mode != SearchMode::Idle;
-
-    // 件数: 語が空なら出さない。マッチが無ければ「見つかりません」。カーソルがマッチの行にいなければ「-/件数」
-    std::string count;
-    if (active && !status.query.empty()) {
-        if (status.hit_count == 0) {
-            count = "見つかりません";
-        }
-        else {
-            count = std::format("{}/{}", status.ordinal > 0 ? std::to_string(status.ordinal) : "-", status.hit_count);
-        }
-    }
-
     bool relayout = false;
-    if (active != impl_->shown_active) {
-        impl_->shown_active = active;
-        impl_->slash.hidden = !active;
+    if (display.active != impl_->shown_active) {
+        impl_->shown_active = display.active;
+        impl_->prompt.hidden = !display.active;
     }
-    if (count != impl_->shown_count) {
-        impl_->shown_count = count;
-        impl_->count.stringValue = @(count.c_str());
+    if (display.count != impl_->shown_count) {
+        impl_->shown_count = display.count;
+        impl_->count.stringValue = @(display.count.c_str());
         relayout = true;
     }
     // 入力中は、入力欄の文字に触らない(打っている途中の文字や、IMEの変換中の文字を壊さないため)。
     // それ以外は、実際の中身と比べる: 入力が終わると、打っていた文字が欄に取り込まれて残るので
     // (取り消した語が欄に残って、古い文字が見えてしまう)、覚えていた値とは比べない
     if (!IsEditing()) {
-        NSString* want = @(status.query.c_str()) ?: @"";
+        NSString* want = @(display.query.c_str()) ?: @"";
         if (![impl_->field.stringValue isEqualToString:want]) impl_->field.stringValue = want;
     }
     if (relayout) [impl_->bar layoutBar];
 }
 
-bool SearchBar::BeginInput()
+bool QueryBar::BeginInput()
 {
     NSWindow* window = impl_->field.window;
     if (!window) return false;
@@ -283,7 +269,7 @@ bool SearchBar::BeginInput()
     return true;
 }
 
-void SearchBar::EndInput()
+void QueryBar::EndInput()
 {
     NSWindow* window = impl_->field.window;
     NSText* editor = impl_->field.currentEditor;
@@ -302,12 +288,12 @@ void SearchBar::EndInput()
     }
 }
 
-bool SearchBar::IsEditing() const
+bool QueryBar::IsEditing() const
 {
     return impl_->field.currentEditor != nil;
 }
 
-std::optional<std::string> SearchBar::SettledText() const
+std::optional<std::string> QueryBar::SettledText() const
 {
     NSText* editor = impl_->field.currentEditor;
     if (!editor || IsComposing(editor)) return std::nullopt;

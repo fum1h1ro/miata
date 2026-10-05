@@ -4,10 +4,10 @@
 #import <AppKit/AppKit.h>
 #include "../Config.h"
 
-// 一覧(FileListView)と、各ペインの下の検索バー(SearchBar)が共有する、フォントと寸法。
+// 一覧(FileListView)と、各ペインの下の入力バー(QueryBar)が共有する、フォントと寸法。
 // AppKit依存のヘルパーなので.mmファイルからのみincludeする(NSColorUtil.hと同じ規約)。
 namespace miata::views {
-    // 一覧の行・ヘッダーと、検索バーの、左右の余白(pt)
+    // 一覧の行・ヘッダーと、入力バーの、左右の余白(pt)
     inline constexpr CGFloat kListPadding = 6;
 
     // Miata.config.set_font(name) で指定されたフォントを使う。未指定、または
@@ -23,7 +23,7 @@ namespace miata::views {
     }
 
     // ヘッダー(パス表示)の高さ。フォントサイズに応じて動的に決める(固定値のままだとフォントサイズを
-    // 上げた時に文字が収まらなくなるため)。検索バーも同じ高さにそろえる。
+    // 上げた時に文字が収まらなくなるため)。入力バーも同じ高さにそろえる。
     inline CGFloat HeaderHeight()
     {
         constexpr CGFloat kHeaderVerticalMargin = 13;

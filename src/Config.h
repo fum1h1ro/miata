@@ -17,6 +17,7 @@ extern "C" {
     X(Directory, directory) \
     X(SearchMatch, search_match) \
     X(SearchCurrent, search_current) \
+    X(FilterMatch, filter_match) \
 
 
 

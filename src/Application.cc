@@ -254,6 +254,9 @@ namespace miata {
             { "search_next", lua_command_search_next },
             { "search_prev", lua_command_search_prev },
             { "search_clear", lua_command_search_clear },
+            { "filter", lua_command_filter },
+            { "filter_set", lua_command_filter_set },
+            { "filter_clear", lua_command_filter_clear },
             { "history_list", lua_command_history_list },
             { "jump_to", lua_command_jump_to },
             { "set_clipboard", lua_command_set_clipboard },
@@ -321,9 +324,9 @@ namespace miata {
         // Luaのコルーチン(Script::Update)とダイアログの後始末(CheckDialogState)の後に行う。
         // リネームなど、ダイアログの結果を受けて一覧のカーソルに作用する処理が終わってから反映するため。
         view_->UpdateAutoReload();
-        // 検索バーの入力欄とペインの検索の状態を整える。自動リロードの後に行う(リロードで検索の件数が変わる)。
+        // 入力バー(検索・絞り込み)の入力欄とペインの状態を整える。自動リロードの後に行う(リロードで検索や絞り込みの件数が変わる)。
         // バーの出入りで一覧が縮むとき、Quick Lookの覆いが追従するのはレイアウトの側で行うので、UpdateQuickLookとの順序は問わない
-        view_->UpdateSearchBar();
+        view_->UpdateQueryBars();
         // 自動リロードの後に行う(リロードで動いたカーソルに、同じティックで追従を始められるように)
         view_->UpdateQuickLook();
         // フォルダの履歴の変更を保存する。記録は移動の成功で済んでいて、ここは保存だけ(連続した移動は、ティックごとに
@@ -390,16 +393,21 @@ namespace miata {
         }
     }
 
+    // paneのビューの、見えている(画面に出ている行の)マーク済みのファイルのパス(画面の並び順)。絞り込みで隠れている行の
+    // マークは含まない。コピー・移動・ゴミ箱・リネームの「操作の対象」は、すべてこれで決める
+    static std::vector<std::filesystem::path> MarkedPaths(views::FileListView& view)
+    {
+        std::vector<std::filesystem::path> paths;
+        for (auto* entry : view.MarkedEntries()) paths.push_back(entry->Path());
+        return paths;
+    }
+
     void Application::StartFileOperation(FileOpType type)
     {
         auto& src_model = view_->CurrentList();
         auto& dest_model = view_->OtherList();
 
-        std::vector<std::filesystem::path> sources;
-        for (auto i = 0; i < src_model.Size(); ++i) {
-            auto& entry = src_model.GetEntry(i);
-            if (entry.IsMarked()) sources.push_back(entry.Path());
-        }
+        auto sources = MarkedPaths(view_->CurrentFileListView());
         if (sources.empty()) {
             // マークが無ければ、カーソル下の1件(一覧が空なら、対象が無い)
             if (auto* current = view_->CurrentEntry()) sources.push_back(current->Path());
@@ -451,7 +459,8 @@ namespace miata {
                 view_->ReloadList(*event.src_model); // 消えたファイルを一覧に反映（移せなかったファイルのマークは残る）
             }
             else {
-                view_->ClearListMarks(*event.src_model); // 中身は変わらないのでマークだけ解除する(画面にも反映する)
+                // 中身は変わらないので、操作したファイルのマークだけ解除する(画面にも反映する)
+                view_->UnmarkPaths(*event.src_model, event.sources);
             }
         }
 
@@ -475,15 +484,15 @@ namespace miata {
     {
         auto& list = view_->CurrentList();
 
-        std::vector<std::filesystem::path> targets;
-        for (auto i = 0; i < list.Size(); ++i) {
-            auto& entry = list.GetEntry(i);
-            if (entry.IsMarked()) targets.push_back(entry.Path());
-        }
-        if (targets.empty()) return; // マークが無ければ何もしない
+        auto targets = MarkedPaths(view_->CurrentFileListView());
+        if (targets.empty()) return; // 見えているマークが無ければ何もしない
 
         auto dir = list.Path();
         auto message = std::format("{}件をゴミ箱に移動しますか？", targets.size());
+        // 絞り込みで隠れているマークは、対象にならない(見えていないものを、うっかり消さないため)。件数を知らせる
+        if (auto hidden = view_->CurrentFileListView().HiddenMarkCount(); hidden > 0) {
+            message += std::format("\n(絞り込みで隠れているマーク {} 件は対象外です)", hidden);
+        }
 
         view_->RequestDialog(std::make_shared<views::YesNoDialog>(
             [this, targets, dir, &list](views::IDialog& dialog) {
@@ -712,23 +721,20 @@ namespace miata {
         return 1;
     }
 
-    // list内にマークが1件でもあれば true(rename系コマンドは単一ファイルのみ対応のため無効化する)
-    static bool AnyMarked(models::FileListModel& list)
+    // 見えている行に、マークが1件でもあれば true(rename系コマンドは単一ファイルのみ対応のため無効化する)。
+    // 絞り込みで隠れている行のマークは数えない(見えないマークのせいで、リネームできなくならないように)
+    static bool AnyVisibleMarked(views::View& view)
     {
-        for (auto i = 0; i < list.Size(); ++i) {
-            if (list.GetEntry(i).IsMarked()) return true;
-        }
-        return false;
+        return !view.CurrentFileListView().MarkedEntries().empty();
     }
 
-    // マークがある、またはリストが空ならnil。それ以外はカーソル位置のエントリ名を返す。
+    // 見えているマークがある、またはリストが空ならnil。それ以外はカーソル位置のエントリ名を返す。
     int Application::lua_private_rename_target(lua_State* L)
     {
         auto& app = Application::Instance();
-        auto& list = app.view_->CurrentList();
 
         auto* current = app.view_->CurrentEntry();
-        if (!current || AnyMarked(list)) {
+        if (!current || AnyVisibleMarked(*app.view_)) {
             lua_pushnil(L);
             return 1;
         }
@@ -757,7 +763,7 @@ namespace miata {
 
         auto& list = app.view_->CurrentList();
         auto* entry = app.view_->CurrentEntry();
-        if (!entry || AnyMarked(list)) {
+        if (!entry || AnyVisibleMarked(*app.view_)) {
             lua_pushboolean(L, false);
             return 1;
         }
@@ -862,7 +868,7 @@ namespace miata {
     }
 
     // Miata.command.cursor_entry([pane]) -> { name, path, is_dir } | nil
-    // paneのペインの、カーソル下のエントリ。一覧が空(ファイルもフォルダも1つも無い)ならnil。状態は変えない。
+    // paneのペインの、カーソル下のエントリ。一覧が空(ファイルもフォルダも1つも無い、または絞り込みで0行)ならnil。状態は変えない。
     int Application::lua_command_cursor_entry(lua_State* L)
     {
         auto& app = Application::Instance();
@@ -878,7 +884,7 @@ namespace miata {
     }
 
     // Miata.command.marked_entries([pane]) -> { {name, path, is_dir}, ... }
-    // paneのペインの、マーク済みのエントリ(画面の並び順)。マークが無ければ空の配列(カーソル下の1件には
+    // paneのペインの、マーク済みのエントリ(画面の並び順。絞り込み中は、見えている行のマークだけ)。マークが無ければ空の配列(カーソル下の1件には
     // 置き換えない: copy_marked / move_marked の「マークが無ければカーソル下」は、呼ぶ側で cursor_entry と組み合わせる)。
     // 状態は変えない。
     int Application::lua_command_marked_entries(lua_State* L)
@@ -1039,7 +1045,7 @@ namespace miata {
     }
 
     // Miata.command.unmark_all([opts]) -> matched, changed
-    // ペインの全てのマークを外す。opts と戻り値は mark_all と同じ。ただし、kind の省略は "all"(全解除は、フォルダのマークも
+    // ペインの、見えている行のマークを外す(絞り込み中は、隠れた行のマークは外さない)。opts と戻り値は mark_all と同じ。ただし、kind の省略は "all"(全解除は、フォルダのマークも
     // 残さない)。
     int Application::lua_command_unmark_all(lua_State* L)
     {
@@ -1199,6 +1205,55 @@ namespace miata {
         return 1;
     }
 
+    // Miata.command.filter() -> boolean
+    // カーソルのペインで、絞り込みを始める。そのペインの下(検索バーの上)に入力欄が出て、打つたびに、名前に語を含む行だけが
+    // 一覧に残る(入力中はNormalのキーバインドは効かない。↑↓でカーソルを動かし、Enterで確定、Escで取り消し)。
+    // 確定済みの絞り込みがあるときに呼ぶと、全行に戻って、語を空から入力し直す(Escで前の絞り込みに戻る)。語を空のまま
+    // Enterすると、絞り込みを解除する。始められたらtrue。ダイアログの表示中や、すでに入力中のときはfalse。
+    int Application::lua_command_filter(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        lua_pushboolean(L, app.view_->BeginFilter());
+        return 1;
+    }
+
+    // Miata.command.filter_set(query, [pane]) -> shown, total
+    // paneのペイン(省略またはnilなら現在のペイン)の絞り込みを、入力欄を使わずに、queryの確定済みにする。空の文字列なら解除する。
+    // カーソルは、今のファイルに留まる(隠れたら、次に見えるファイルへ)。入力中なら、先に終わらせる。戻り値は、
+    // 絞り込み後の行数と、全行数。UTF-8として不正なバイトは、U+FFFDにする。NULを含む語はエラー。
+    // ダイアログの表示中でも動く(閉じた直後のティックでは、閉じたはずのダイアログがまだ「開いている」扱いなので。jump_toと同じ)。
+    int Application::lua_command_filter_set(lua_State* L)
+    {
+        auto& app = Application::Instance();
+
+        Script::CheckArgType(L, 1, LUA_TSTRING);
+        size_t length = 0;
+        const char* raw = lua_tolstring(L, 1, &length);
+        // luaL_errorの前なので、デストラクタを持つオブジェクトを作らない
+        if (std::memchr(raw, 0, length) != nullptr) {
+            luaL_error(L, "filter_set: the query must not contain NUL");
+            return 0;
+        }
+        auto pane = OptionalPaneArg(L, 2, app.view_->CurrentPane());
+
+        // ここから先はluaL_errorを呼ばない(std::stringなどを作るため)
+        auto status = app.view_->SetFilter(pane, RepairUtf8(std::string(raw, length)));
+        lua_pushinteger(L, status.shown);
+        lua_pushinteger(L, status.total);
+        return 2;
+    }
+
+    // Miata.command.filter_clear([pane]) -> boolean
+    // paneのペイン(省略またはnilなら現在のペイン)の絞り込みを解除する。カーソルは、今のファイルに留まる。絞り込んでいたらtrue。
+    // 通常時のEsc(navigate_cancel)は、絞り込みを解除しない。
+    int Application::lua_command_filter_clear(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        auto pane = OptionalPaneArg(L, 1, app.view_->CurrentPane());
+        lua_pushboolean(L, app.view_->ClearFilter(pane));
+        return 1;
+    }
+
     // Miata.command.history_list([pane]) -> string[]
     // フォルダの履歴(左右のペインで共有する)を、新しい順のフルパスの配列で返す。paneのペイン(省略またはnilなら
     // 現在のペイン。"left" / "right")の今いるフォルダは含まない(そのペインの移動先に選ぶ前提なので)。反対側の
@@ -1220,7 +1275,7 @@ namespace miata {
 
     // Miata.command.jump_to(path, [pane]) -> boolean
     // paneのペイン(省略またはnilなら現在のペイン)を、pathのフォルダへ移す(Enterでフォルダに入るのと同じ移動。
-    // カーソルは先頭、マークと検索は消える。フォーカスは動かさない)。pathは絶対パスのみ("~" は展開しない。
+    // カーソルは先頭、マーク・検索・絞り込みは消える。フォーカスは動かさない)。pathは絶対パスのみ("~" は展開しない。
     // 空の要素・"."・".." を含むパスはエラー)。移れたらtrue。移れなければ、ダイアログで知らせてfalse(権限が無い失敗には、
     // 許可の案内が付く)。そのフォルダがもう無ければ(消えた・フォルダでなくなった)、履歴からも外す。
     int Application::lua_command_jump_to(lua_State* L)

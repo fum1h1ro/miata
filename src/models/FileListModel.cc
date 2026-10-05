@@ -145,11 +145,4 @@ namespace miata::models {
             Mark(idx);
         }
     }
-
-    void FileListModel::ClearMarks()
-    {
-        for (auto& entry : entries_) {
-            entry->Mark(false);
-        }
-    }
 }

@@ -130,8 +130,8 @@ namespace miata::views {
         std::filesystem::path target(models::PathHistory::TrimTrailingSlash(path.string()));
         bool jumped = JumpToOrReport(list, target);
         if (!jumped && IsKnownNotDirectory(target)) models::BrowserModel::Instance().History().Remove(target);
-        // 移動で検索は消えるので、次のティックを待たずに検索バーを整える(NavigateForBrowserの末尾と同じ)
-        browser_->UpdateSearchBar();
+        // 移動で検索と絞り込みは消えるので、次のティックを待たずに入力バーを整える(NavigateForBrowserの末尾と同じ)
+        browser_->UpdateQueryBars();
         return jumped;
     }
 
@@ -188,9 +188,9 @@ namespace miata::views {
     {
         if (current_dialog_ != nullptr) return;
         if (dialog_requests_.empty()) return;
-        // 検索の入力中なら、先に確定して、入力欄のfirst responderを手放す(理由は
-        // BrowserView::CommitSearchInput。ファイル操作の完了を知らせるダイアログなどが、入力中に割り込むことがある)
-        browser_->CommitSearchInput();
+        // 入力バーの入力中なら、先に終わらせて、入力欄のfirst responderを手放す(理由は
+        // BrowserView::SettleQueryInput。ファイル操作の完了を知らせるダイアログなどが、入力中に割り込むことがある)
+        browser_->SettleQueryInput();
         current_dialog_ = dialog_requests_.front();
         dialog_requests_.pop();
         current_dialog_->Open();
@@ -237,7 +237,7 @@ namespace miata::views {
             break;
         case constants::Navigate::Ok:
             {
-                // 一覧が空(ファイルもフォルダも1つも無い)なら、入るものが無い
+                // 一覧が空(ファイルもフォルダも1つも無い、または絞り込みで0行)なら、入るものが無い
                 auto* entry_model = browser_->CurrentFileEntryModel();
                 if (entry_model && entry_model->IsDirectory()) {
                     if (browser_->IsLeft()) {
@@ -250,16 +250,17 @@ namespace miata::views {
             }
             break;
         case constants::Navigate::Cancel:
-            // Escは、プレビューも、カーソルのペインの検索(ハイライトと、下端のバー)も閉じる
+            // Escは、プレビューも、カーソルのペインの検索(ハイライトと、下端のバー)も閉じる。絞り込みは解除しない
+            // (解除は、絞り込みをもう一度始めて、空のままEnter。Luaのfilter_clear()でも解除できる)
             browser_->HideQuickLook();
             browser_->ClearSearch();
             break;
         default:
             break;
         }
-        // カーソルの移動・ペインの切り替え・ディレクトリの移動で、検索バーの件数やバーの出入りが変わるので、
+        // カーソルの移動・ペインの切り替え・ディレクトリの移動で、入力バーの件数やバーの出入りが変わるので、
         // 次のティックを待たずに更新する
-        browser_->UpdateSearchBar();
+        browser_->UpdateQueryBars();
     }
 
     models::FileListModel& View::CurrentList()
@@ -315,10 +316,10 @@ namespace miata::views {
         }
     }
 
-    void View::ClearListMarks(const models::FileListModel& list)
+    void View::UnmarkPaths(const models::FileListModel& list, const std::vector<std::filesystem::path>& paths)
     {
         if (auto* view = FindFileListView(list)) {
-            view->ClearMarks();
+            view->UnmarkPaths(paths);
         }
     }
 
@@ -349,9 +350,25 @@ namespace miata::views {
         return browser_->ClearSearch();
     }
 
-    void View::UpdateSearchBar()
+    bool View::BeginFilter()
     {
-        browser_->UpdateSearchBar();
+        if (IsAnyDialogOpened()) return false;
+        return browser_->BeginFilter();
+    }
+
+    bool View::ClearFilter(constants::Pane pane)
+    {
+        return browser_->ClearFilter(pane);
+    }
+
+    FilterStatus View::SetFilter(constants::Pane pane, const std::string& query)
+    {
+        return browser_->SetFilter(pane, query);
+    }
+
+    void View::UpdateQueryBars()
+    {
+        browser_->UpdateQueryBars();
     }
 
     void View::ToggleFocus()
@@ -359,7 +376,7 @@ namespace miata::views {
         browser_->ToggleFocus();
     }
 
-    // マークの操作は、一覧が空(ファイルもフォルダも1つも無い)なら、何もしない(マークする対象が無い)
+    // マークの操作は、一覧が空(ファイルもフォルダも1つも無い、または絞り込みで0行)なら、何もしない(マークする対象が無い)
     void View::Mark()
     {
         auto* entry_model = browser_->CurrentFileEntryModel();

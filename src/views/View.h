@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <queue>
+#include <vector>
 #include "Dialog.h"
 #include "BrowserView.h"
 #include "../FileError.h"
@@ -46,7 +47,7 @@ namespace miata::views {
         void ToggleMark();
         models::FileListModel& CurrentList();
         models::FileListModel& OtherList();
-        // カーソルのペインの、カーソル下のエントリ。一覧が空(ファイルもフォルダも1つも無い)ならnullptr
+        // カーソルのペインの、カーソル下のエントリ。一覧が空(ファイルもフォルダも1つも無い、または絞り込みで0行)ならnullptr
         models::FileEntryModel* CurrentEntry();
         FileListView& CurrentFileListView();
         // カーソル(フォーカス)のあるペインと、ペインを指定して取得するアクセサ
@@ -57,8 +58,8 @@ namespace miata::views {
         // (FileListView::Reload参照。cursor_toの意味も同じ)。ファイル操作の後始末用で、
         // 失敗(ディレクトリが読めない等)しても一覧が変わらないだけなので呼び出し側には返さない。
         void ReloadList(const models::FileListModel& list, std::optional<std::filesystem::path> cursor_to = std::nullopt);
-        // listを表示しているペインのマークをすべて解除して、再描画する(FileListView::ClearMarks参照)。
-        void ClearListMarks(const models::FileListModel& list);
+        // listを表示しているペインの、pathsのファイルのマークを外して、再描画する(FileListView::UnmarkPaths参照)。
+        void UnmarkPaths(const models::FileListModel& list, const std::vector<std::filesystem::path>& paths);
 
         // paneのペインをpathのフォルダへ移す(Enterでフォルダに入るのと同じ移動。履歴にも記録される)。移れなければ、
         // 移さずにダイアログで知らせる(ReportFileError。権限の失敗には許可の案内が付く)。移れず、かつそのフォルダが
@@ -91,8 +92,15 @@ namespace miata::views {
         bool BeginSearch();
         bool StepSearch(int dir);
         bool ClearSearch();
-        // タイマーから定期的に呼ぶ。検索バーの入力欄と、ペインの検索の状態を整える(BrowserView::UpdateSearchBar参照)。
-        void UpdateSearchBar();
+        // カーソルのペインで、絞り込みを始める(BrowserViewの同名のメソッドを参照)。ダイアログの表示中は、始めない(false)。
+        bool BeginFilter();
+        // paneの絞り込みを解除する/入力欄を使わずに確定済みにする(空なら解除。戻り値は、見えている行数と全行数)。
+        // どちらも、ダイアログの表示中でも動く(閉じた直後のティックでは、閉じたはずのダイアログがまだ「開いている」扱いなので、
+        // それで弾いてはいけない。jump_toと同じ)。通常時のEsc(Navigate::Cancel)は、絞り込みを解除しない。
+        bool ClearFilter(constants::Pane pane);
+        FilterStatus SetFilter(constants::Pane pane, const std::string& query);
+        // タイマーから定期的に呼ぶ。入力バー(検索・絞り込み)の入力欄と、ペインの状態を整える(BrowserView::UpdateQueryBars参照)。
+        void UpdateQueryBars();
 
     private:
         void OpenNextDialogIfNeeded();

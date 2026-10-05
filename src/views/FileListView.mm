@@ -2,8 +2,11 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <numeric>
 #include <unordered_map>
+#include <unordered_set>
 #include "FileListView.h"
+#include "NameMatcher.h"
 #include "../platform.h"
 #include "../Config.h"
 #include "NSColorUtil.h"
@@ -107,7 +110,7 @@ namespace {
 @property (nonatomic, weak) NSView* headerView;
 @property (nonatomic, weak) NSView* scrollView;
 @property (nonatomic, assign) CGFloat headerHeight;
-// スクロール部分の下に空ける高さ。検索バーを重ねる帯(FileListView::SetBottomInset)
+// スクロール部分の下に空ける高さ。入力バーを重ねる帯(FileListView::SetBottomInset)
 @property (nonatomic, assign) CGFloat footerHeight;
 - (void)layoutChildren;
 @end
@@ -148,7 +151,7 @@ namespace {
 
     // ファイル一覧の行の高さは、フォントサイズに応じて動的に決める
     // (固定値のままだとフォントサイズを上げた時に行同士が重なってしまうため)。
-    // ヘッダーの高さとフォントはViewMetrics.h(検索バーと共有)。
+    // ヘッダーの高さとフォントはViewMetrics.h(入力バーと共有)。
     CGFloat RowHeight()
     {
         return Config::FontSize() + kRowVerticalMargin;
@@ -184,29 +187,32 @@ namespace {
     constexpr auto kAutoReloadMinInterval = std::chrono::milliseconds(500); // 自動リロードどうしの最短の間隔
     constexpr int kAutoReloadCostFactor = 8;                                // 走査が重いときは、かかった時間のこの倍以上あける
 
+    // 位置(パス)を、一覧entriesの添字にする。パスが見つからなければ、位置の添字(範囲に収める)。一覧が空なら-1。
+    // 検索は list_ の、絞り込みは sorted_(絞り込む前の全体の並び)の添字。位置が同じ世代(Fetch()から次の
+    // Fetch()まで)のものなら、控えた添字がパスと合うので、探さずに済む。合わなければ(一覧が作り直されて並びが
+    // 変わった)、パスで探す
+    int ResolvePosition(const std::vector<FileEntryView*>& entries, const ListPosition& position)
+    {
+        if (entries.empty()) return -1;
+        const int last = (int)entries.size() - 1;
+        if (position.path) {
+            if (position.row >= 0 && position.row <= last && entries[(size_t)position.row]->Model().Path() == *position.path) {
+                return position.row;
+            }
+            for (size_t i = 0; i < entries.size(); ++i) {
+                if (entries[i]->Model().Path() == *position.path) return (int)i;
+            }
+        }
+        // パスが一覧に無い(消えた等)。代わりに、控えておいた添字の近くへ
+        return std::clamp(position.row, 0, last);
+    }
+
     // 実体が確実に無くなっている場合のみtrue。エラーで判定できない場合や、壊れた
     // シンボリックリンク(リンク自体は残っている)はfalse。
     bool IsGone(const std::filesystem::path& path)
     {
         std::error_code ec;
         return std::filesystem::symlink_status(path, ec).type() == std::filesystem::file_type::not_found;
-    }
-
-    // name(UTF-16)の中の、needleの出現箇所をすべて、左から重ならないように見つける。範囲はnameの添字
-    // (検索語の長さと同じとは限らない。合成済みと分解された文字は同じ文字として一致するため)なので、
-    // そのまま属性文字列の範囲に使える。
-    std::vector<SearchRange> FindAllOccurrences(NSString* name, NSString* needle, NSStringCompareOptions options)
-    {
-        std::vector<SearchRange> found;
-        NSUInteger length = name.length;
-        NSUInteger position = 0;
-        while (position < length) {
-            NSRange range = [name rangeOfString:needle options:options range:NSMakeRange(position, length - position)];
-            if (range.location == NSNotFound || range.length == 0) break;
-            found.push_back(SearchRange{range.location, range.length});
-            position = NSMaxRange(range);
-        }
-        return found;
     }
 
     // マークの一括操作の補助。entryにmodeを適用する(マークの状態が変わったらtrue)
@@ -291,9 +297,12 @@ FileListView::FileListView(models::FileListModel& list) : model_(list), impl_(st
     subscriptions_.push_back(
         model_.ObservePath()
             .subscribe([this](const std::filesystem::path& path) {
-                // 再スキャン(Reload)ではない通知は、別のディレクトリへの移動。検索は消す(再スキャンでは、
-                // 検索語を保ったまま、Fetch()でヒットを作り直す)
-                if (!reload_memo_) search_.Clear();
+                // 再スキャン(Reload)ではない通知は、別のディレクトリへの移動。検索と絞り込みは消す(再スキャンでは、
+                // 語を保ったまま、Fetch()で一覧とヒットを作り直す)
+                if (!reload_memo_) {
+                    search_.Clear();
+                    filter_.Clear();
+                }
                 Fetch();
                 // Reload()経由の通知ならカーソルを復元する。ディレクトリ移動(JumpTo)は先頭から
                 cursorIndex_ = reload_memo_ ? RestoreCursor(*reload_memo_) : 0;
@@ -384,19 +393,19 @@ std::vector<models::FileEntryModel*> FileListView::MarkedEntries() const
 
 void FileListView::Fetch()
 {
-    list_.clear();
+    sorted_.clear();
     entries_.clear();
     auto size = model_.Size();
-    list_.reserve((size_t)size);
+    sorted_.reserve((size_t)size);
     entries_.reserve((size_t)size);
 
     for (auto i = 0; i < size; i++) {
         auto& entry = model_.GetEntry(i);
         entries_.push_back(FileEntryView(entry));
-        list_.push_back(&entries_[(size_t)i]);
+        sorted_.push_back(&entries_[(size_t)i]);
     }
 
-    std::sort(list_.begin(), list_.end(), [this](FileEntryView* a, FileEntryView* b) {
+    std::sort(sorted_.begin(), sorted_.end(), [this](FileEntryView* a, FileEntryView* b) {
         if (a->Model().IsDirectory() != b->Model().IsDirectory()) return a->Model().IsDirectory();
 
         // reverse時は引数を入れ替えて同じ比較を行う(否定すると同値要素で狭義弱順序が壊れるため)
@@ -419,14 +428,52 @@ void FileListView::Fetch()
         }
     });
 
-    // ヒットは表示順の添字なので、並べ直したら作り直す(検索していなければ何もしない)
+    // 画面に出す行(list_)を作る。絞り込んでいれば、一致する行だけ。検索のヒットも、list_の添字なので、ここで作り直す
+    ApplyFilter();
+}
+
+void FileListView::ApplyFilter()
+{
+    row_of_sorted_.assign(sorted_.size(), -1);
+    list_.clear();
+    std::vector<std::vector<MatchRange>> ranges;
+
+    NameMatcher matcher(filter_.Query()); // Idleの語は、常に空(FilterState::Query)
+    if (matcher.Empty()) {
+        // 絞り込みなし(語が空、または不正なUTF-8): 全行
+        list_ = sorted_;
+        std::iota(row_of_sorted_.begin(), row_of_sorted_.end(), 0);
+    }
+    else {
+        for (size_t i = 0; i < sorted_.size(); ++i) {
+            if (auto match = matcher.Match(sorted_[i]->Model().Name())) {
+                row_of_sorted_[i] = (int)list_.size();
+                list_.push_back(sorted_[i]);
+                ranges.push_back(std::move(match->ranges));
+            }
+        }
+    }
+    filter_.SetRowRanges(std::move(ranges));
+
+    // 検索のヒットは、list_の添字なので、list_を作り直したら作り直す(検索の対象は、絞り込んだ後の行)
     RebuildSearchHits();
 }
 
-void FileListView::ClearMarks()
+void FileListView::UnmarkPaths(const std::vector<std::filesystem::path>& paths)
 {
-    model_.ClearMarks();
-    Redraw();
+    if (paths.empty()) return;
+
+    // 画面に出ている行(list_)ではなく、モデルの全エントリを見る(絞り込みで隠れているファイルが対象に含まれていても外す)
+    std::unordered_set<std::filesystem::path> targets(paths.begin(), paths.end());
+    bool changed = false;
+    for (int i = 0; i < model_.Size(); ++i) {
+        auto& entry = model_.GetEntry(i);
+        if (entry.IsMarked() && targets.contains(entry.Path())) {
+            entry.Mark(false);
+            changed = true;
+        }
+    }
+    if (changed) Redraw();
 }
 
 FileListView::MarkResult FileListView::MarkRows(MarkMode mode, MarkKind kind, const std::function<bool(int)>& in_scope)
@@ -521,7 +568,11 @@ int FileListView::RestoreCursor(const CursorMemo& memo) const
     if (memo.target) {
         if (auto it = index_of.find(*memo.target); it != index_of.end()) return it->second;
     }
-    if (memo.order.empty()) return 0;
+    if (memo.order.empty()) {
+        // 再スキャン前の一覧が空だった。絞り込みで0件になっていたなら、基準のファイルの近くへ寄せる(語に合うファイルが
+        // 現れたときに、先頭へ飛ばない)。絞り込んでいなければ基準は空で、先頭になる
+        return ShownRowNear(filter_.Anchor());
+    }
 
     // カーソルのファイルが残っていればそれを指す(並びが変わっても同じファイルに追従する)。
     // 消えていたら、再スキャン前の並びで「カーソル以降→カーソルより前」の順に最初に残っている
@@ -565,41 +616,27 @@ void FileListView::Redraw()
 void FileListView::RebuildSearchHits()
 {
     std::vector<SearchHit> hits;
-    // 検索していないとき(Idle)の語は、常に空(SearchState::Query)。不正なUTF-8だとneedleはnilで、長さは0
-    NSString* needle = @(search_.Query().c_str());
-    if (needle.length > 0) {
-        // スマートケース: 検索語に大文字(Unicodeの大文字を含む)があれば大文字小文字を区別し、無ければ区別しない。
-        // NSLiteralSearchは付けない(付けると、合成済みの文字と分解された文字(「が」と「か」+濁点)が一致しなくなる)。
-        bool has_upper = [needle rangeOfCharacterFromSet:[NSCharacterSet uppercaseLetterCharacterSet]].location != NSNotFound;
-        NSStringCompareOptions options = has_upper ? 0 : NSCaseInsensitiveSearch;
+    // 検索していないとき(Idle)の語は、常に空(SearchState::Query)。不正なUTF-8の語もEmpty()で、ヒットは無い
+    NameMatcher matcher(search_.Query());
+    if (!matcher.Empty()) {
         for (size_t i = 0; i < list_.size(); ++i) {
-            @autoreleasepool {
-                NSString* name = @(list_[i]->Model().Name().c_str());
-                if (!name) continue;
-                auto ranges = FindAllOccurrences(name, needle, options);
-                if (!ranges.empty()) hits.push_back(SearchHit{(int)i, std::move(ranges)});
+            if (auto match = matcher.Match(list_[i]->Model().Name())) {
+                hits.push_back(SearchHit{(int)i, std::move(match->ranges)});
             }
         }
     }
     search_.SetHits(std::move(hits));
 }
 
-int FileListView::ResolveRow(const SearchPosition& position) const
+int FileListView::ResolveRow(const ListPosition& position) const
 {
-    if (list_.empty()) return -1;
-    if (position.path) {
-        for (size_t i = 0; i < list_.size(); ++i) {
-            if (list_[i]->Model().Path() == *position.path) return (int)i;
-        }
-    }
-    // パスが一覧に無い(消えた等)。代わりに、控えておいた添字の近くへ
-    return std::clamp(position.row, 0, (int)list_.size() - 1);
+    return ResolvePosition(list_, position);
 }
 
-SearchPosition FileListView::PositionAt(int row) const
+ListPosition FileListView::PositionAt(int row) const
 {
     if (row < 0 || (size_t)row >= list_.size()) return {};
-    return SearchPosition{list_[(size_t)row]->Model().Path(), row};
+    return ListPosition{list_[(size_t)row]->Model().Path(), row};
 }
 
 void FileListView::JumpCursorTo(int row)
@@ -629,7 +666,7 @@ void FileListView::JumpCursorTo(int row)
 
 void FileListView::BeginSearch()
 {
-    if (search_.Mode() == SearchMode::Typing) return;
+    if (search_.Mode() == QueryMode::Typing) return;
 
     search_.Begin(PositionAt(cursorIndex_)); // 入力するまでヒットは無い(前の検索のハイライトも隠れる)
     Redraw();
@@ -637,7 +674,7 @@ void FileListView::BeginSearch()
 
 void FileListView::SetSearchQuery(const std::string& query)
 {
-    if (search_.Mode() != SearchMode::Typing || query == search_.Query()) return;
+    if (search_.Mode() != QueryMode::Typing || query == search_.Query()) return;
 
     search_.SetQuery(query);
     RebuildSearchHits();
@@ -658,14 +695,14 @@ bool FileListView::StepSearch(int dir)
     if (!row) return false;
 
     // 入力中に↓ / ↑で移ったときは、以降の入力を、移った先から探す
-    if (search_.Mode() == SearchMode::Typing) search_.SetAnchor(PositionAt(*row));
+    if (search_.Mode() == QueryMode::Typing) search_.SetAnchor(PositionAt(*row));
     JumpCursorTo(*row);
     return true;
 }
 
 void FileListView::CommitSearch()
 {
-    if (search_.Mode() != SearchMode::Typing) return;
+    if (search_.Mode() != QueryMode::Typing) return;
 
     // 語があれば、確定しても語もヒットも変わらない。語が空のときは、検索を始める前の状態に戻る
     // (確定済みの検索があれば、その語に戻る)ので、ヒットを作り直す
@@ -677,7 +714,7 @@ void FileListView::CommitSearch()
 
 void FileListView::CancelSearch()
 {
-    if (search_.Mode() != SearchMode::Typing) return;
+    if (search_.Mode() != QueryMode::Typing) return;
 
     search_.Cancel(); // 戻り先(Origin)は消えない。消えるのはClear()のとき
     RebuildSearchHits();
@@ -691,6 +728,135 @@ bool FileListView::ClearSearch()
     search_.Clear();
     Redraw();
     return true;
+}
+
+ListPosition FileListView::FullPositionAt(int row) const
+{
+    if (row < 0 || (size_t)row >= list_.size()) return {};
+    auto* entry = list_[(size_t)row];
+    auto it = std::find(sorted_.begin(), sorted_.end(), entry);
+    int index = it == sorted_.end() ? 0 : (int)(it - sorted_.begin());
+    return ListPosition{entry->Model().Path(), index};
+}
+
+ListPosition FileListView::CursorOrAnchor() const
+{
+    if (list_.empty()) return filter_.Anchor();
+    return FullPositionAt(cursorIndex_);
+}
+
+int FileListView::ResolveSortedIndex(const ListPosition& position) const
+{
+    return ResolvePosition(sorted_, position);
+}
+
+int FileListView::ShownRowNear(const ListPosition& position) const
+{
+    // 全体が空なら添字は-1だが、NearestShownRowは範囲外の添字を丸める(並びが空なら0)
+    return NearestShownRow(row_of_sorted_, ResolveSortedIndex(position));
+}
+
+void FileListView::RefilterAround(const ListPosition& pivot)
+{
+    ApplyFilter();
+    JumpCursorTo(ShownRowNear(pivot));
+}
+
+void FileListView::BeginFilter()
+{
+    if (filter_.Mode() == QueryMode::Typing) return;
+
+    ListPosition origin = CursorOrAnchor();
+    filter_.Begin(origin);
+    // 入力を始めた直後は語が空なので、全行になる(前の絞り込みは外れる)。カーソルは、同じファイルに留まる
+    RefilterAround(origin);
+}
+
+void FileListView::SetFilterQuery(const std::string& query)
+{
+    if (filter_.Mode() != QueryMode::Typing || query == filter_.Query()) return;
+
+    filter_.SetQuery(query);
+    // 語を全部消しても、基準は戻さない(検索と違い、カーソルは「ファイルに付いていく」)
+    RefilterAround(filter_.Anchor());
+}
+
+bool FileListView::StepFilter(int dir)
+{
+    if (filter_.Mode() != QueryMode::Typing || list_.empty()) return false;
+
+    int row = std::clamp(cursorIndex_ + (dir > 0 ? 1 : -1), 0, (int)list_.size() - 1);
+    if (row == cursorIndex_) return false;
+
+    // 動いた先を、以降の入力の基準にする
+    filter_.SetAnchor(FullPositionAt(row));
+    JumpCursorTo(row);
+    return true;
+}
+
+void FileListView::CommitFilter()
+{
+    if (filter_.Mode() != QueryMode::Typing) return;
+
+    // 語が空なら、確定ではなく解除になる。一覧は、入力中からすでに全行なので、作り直さない
+    filter_.Commit();
+    Redraw();
+}
+
+void FileListView::CancelFilter()
+{
+    if (filter_.Mode() != QueryMode::Typing) return;
+
+    ListPosition origin = filter_.Origin();
+    filter_.Cancel(); // 始める前に確定していた絞り込みがあれば、その語に戻る
+    RefilterAround(origin);
+}
+
+bool FileListView::ClearFilter()
+{
+    if (!filter_.Active()) return false;
+
+    // 解除の前に、カーソルの位置を控える(0件に絞り込んでいたときは、一覧が空なので、基準のファイルを引き継ぐ)
+    ListPosition pivot = CursorOrAnchor();
+    filter_.Clear();
+    RefilterAround(pivot);
+    return true;
+}
+
+FilterStatus FileListView::SetFilter(const std::string& query)
+{
+    if (query.empty()) {
+        ClearFilter();
+        return GetFilterStatus();
+    }
+
+    ListPosition pivot = CursorOrAnchor();
+    filter_.Set(query, pivot);
+    RefilterAround(pivot);
+    return GetFilterStatus();
+}
+
+int FileListView::HiddenMarkCount() const
+{
+    // 絞り込んでいなければ(語が空なら全行が出ている)、隠れた行は無い
+    if (!filter_.Active() || filter_.Query().empty()) return 0;
+
+    int count = 0;
+    for (size_t i = 0; i < sorted_.size(); ++i) {
+        if (row_of_sorted_[i] < 0 && sorted_[i]->Model().IsMarked()) ++count;
+    }
+    return count;
+}
+
+FilterStatus FileListView::GetFilterStatus() const
+{
+    FilterStatus status;
+    status.mode = filter_.Mode();
+    status.query = filter_.Query();
+    status.shown = (int)list_.size();
+    status.total = (int)sorted_.size();
+    status.hidden_marks = HiddenMarkCount();
+    return status;
 }
 
 void FileListView::SetBottomInset(double height)
@@ -793,7 +959,11 @@ void FileListView::EndDrag(bool accepted)
             (void)Reload();
         }
         else {
-            ClearMarks(); // 中身は変わらない(コピー等)のでマークだけ解除する
+            // 中身は変わらない(コピー等)ので、運んだファイルのマークだけ解除する
+            std::vector<std::filesystem::path> paths;
+            paths.reserve(entries.size());
+            for (const auto& entry : entries) paths.push_back(entry.path);
+            UnmarkPaths(paths);
         }
     });
 }
@@ -828,6 +998,7 @@ void FileListView::Draw(double min_y, double max_y)
     {
         auto dir_color = ToNSColor(Config::Color().Get(Config::Color::Type::Directory));
         auto file_color = ToNSColor(Config::Color().Get(Config::Color::Type::NormalFile));
+        auto filter_color = ToNSColor(Config::Color().Get(Config::Color::Type::FilterMatch));
         auto match_color = ToNSColor(Config::Color().Get(Config::Color::Type::SearchMatch));
         auto current_color = ToNSColor(Config::Color().Get(Config::Color::Type::SearchCurrent));
         NSFont* font = MakeFont(Config::FontSize());
@@ -876,17 +1047,22 @@ void FileListView::Draw(double min_y, double max_y)
                 name_size.height
             );
 
-            // 検索で一致した行は、一致した部分(すべての出現)に背景色を付ける。カーソルのある行(今いるマッチ)は
-            // 別の色にする。カーソルの下線と同じく、フォーカスのあるペインだけ
+            // 絞り込みと検索で一致した部分(すべての出現)に、背景色を付ける。同じ文字に両方当たれば、検索の色になる
+            // (検索を後に塗る)。検索のカーソルのある行(今いるマッチ)は別の色にする。カーソルの下線と同じく、
+            // フォーカスのあるペインだけ
+            auto* filtered = name ? filter_.RangesFor(i) : nullptr;
             auto* matches = name ? search_.RangesFor(i) : nullptr;
-            if (matches) {
+            if (filtered || matches) {
                 NSMutableAttributedString* highlighted = [[NSMutableAttributedString alloc] initWithString:name attributes:attrs];
-                NSColor* background = (i == cursorIndex_ && focus_) ? current_color : match_color;
-                for (const auto& match : *matches) {
-                    // 範囲外はNSRangeExceptionになるので、一覧が作り直された直後などの食い違いは捨てる
-                    if (match.location + match.length > highlighted.length) continue;
-                    [highlighted addAttribute:NSBackgroundColorAttributeName value:background range:NSMakeRange(match.location, match.length)];
-                }
+                auto paint = [highlighted](const std::vector<MatchRange>& ranges, NSColor* background) {
+                    for (const auto& range : ranges) {
+                        // 範囲外はNSRangeExceptionになるので、一覧が作り直された直後などの食い違いは捨てる
+                        if (range.location + range.length > highlighted.length) continue;
+                        [highlighted addAttribute:NSBackgroundColorAttributeName value:background range:NSMakeRange(range.location, range.length)];
+                    }
+                };
+                if (filtered) paint(*filtered, filter_color);
+                if (matches) paint(*matches, (i == cursorIndex_ && focus_) ? current_color : match_color);
                 [highlighted drawInRect:name_rect];
             }
             else {
