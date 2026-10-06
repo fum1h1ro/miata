@@ -167,9 +167,14 @@ end)
 -- 絞り込み(名前に語を含む行だけを一覧に出す)。f でそのペインの下(検索バーの上)に入力欄が出て、打つたびに一覧が絞られる。
 -- Enter で確定(別のフォルダへ移動するまで続く。通常時の Esc では解除されない)、入力中の Esc で取り消し(前の絞り込みに戻る)。
 -- 解除は、もう一度 f を押して語を空のまま Enter。絞り込んだ上で mark_all などを使うと、見えている行だけが対象になる。
--- 入力欄を使わずに絞り込むには Miata.command.filter_set("語", [pane])、解除には Miata.command.filter_clear([pane])
+-- 入力欄を使わずに絞り込むには Miata.command.filter_set("語", [pane], [mode])、解除には Miata.command.filter_clear([pane])
 Miata.command.bind("n", "f", function()
     Miata.command.filter()
+end)
+-- あいまい一致で絞り込む(F)。外部の fzf を使う(無ければ部分一致になる)。一覧は fzf の得点順で、一致した部分は強調しない。
+-- 語には fzf の拡張検索の構文が使える(空白区切りで AND、^先頭、末尾$、'完全一致、!否定、|OR)。それ以外は f と同じ
+Miata.command.bind("n", "<S-f>", function()
+    Miata.command.filter("fuzzy")
 end)
 Miata.command.bind("n", "s", function()
     -- 基準の行で Enter すると、その場で並べ替える(Esc で取り消し)。ダイアログは、今のソート(current_sort)から始まる:

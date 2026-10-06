@@ -93,11 +93,20 @@ namespace {
 
     // 入力の種類ごとの違い(FileListViewのどの操作を呼ぶか、バーのプロンプトと中身)は、ここに集める。
     // 種類を足したら、これらのswitchにcaseを足す(足し忘れはコンパイラが警告する)。
+    // 絞り込みのプロンプトは、一致のしかたで変わる(バーを作るときは、部分一致のもの。出すときは、DisplayOfが毎回渡す)
+    const char* FilterPromptOf(MatchKind kind)
+    {
+        switch (kind) {
+        case MatchKind::Substring: return "絞り込み";
+        case MatchKind::Fuzzy: return "あいまい";
+        }
+        return "";
+    }
     const char* PromptOf(constants::QueryKind kind)
     {
         switch (kind) {
         case constants::QueryKind::Search: return "/";
-        case constants::QueryKind::Filter: return "絞り込み";
+        case constants::QueryKind::Filter: return FilterPromptOf(MatchKind::Substring);
         }
         return "";
     }
@@ -109,11 +118,12 @@ namespace {
         }
         return QueryMode::Idle;
     }
-    void BeginOf(FileListView& view, constants::QueryKind kind)
+    // matchは、絞り込みの語の一致のしかた(検索では使わない)
+    void BeginOf(FileListView& view, constants::QueryKind kind, MatchKind match)
     {
         switch (kind) {
         case constants::QueryKind::Search: view.BeginSearch(); break;
-        case constants::QueryKind::Filter: view.BeginFilter(); break;
+        case constants::QueryKind::Filter: view.BeginFilter(match); break;
         }
     }
     void SetQueryOf(FileListView& view, constants::QueryKind kind, const std::string& query)
@@ -160,7 +170,8 @@ namespace {
         case constants::QueryKind::Filter:
             {
                 auto status = view.GetFilterStatus();
-                return QueryBar::Display{.active = status.mode != QueryMode::Idle, .query = status.query, .count = FilterCountText(status)};
+                return QueryBar::Display{.active = status.mode != QueryMode::Idle, .query = status.query, .count = FilterCountText(status),
+                                         .prompt = FilterPromptOf(status.kind)};
             }
         }
         return {};
@@ -334,13 +345,13 @@ std::optional<BrowserView::QueryTarget> BrowserView::TypingTarget() const
     return std::nullopt;
 }
 
-bool BrowserView::BeginInput(constants::QueryKind kind)
+bool BrowserView::BeginInput(constants::QueryKind kind, MatchKind match)
 {
     if (TypingTarget()) return false; // 入力中のキーは、入力欄の文字になる(ここには来ない)
 
     QueryTarget target{CurrentPane(), kind};
     auto& view = *ViewOf(target.pane);
-    BeginOf(view, kind);
+    BeginOf(view, kind, match);
     // 入力欄をfirst responderにする前に、バーを出してレイアウトしておく(隠れたビューは文字を受けられない)。
     // UpdateQueryBars()は使わない: 入力欄がまだfirst responderでないので、「フォーカスを失った」と誤って確定してしまう
     SyncQueryBars();
@@ -358,9 +369,9 @@ bool BrowserView::BeginSearch()
     return BeginInput(constants::QueryKind::Search);
 }
 
-bool BrowserView::BeginFilter()
+bool BrowserView::BeginFilter(MatchKind kind)
 {
-    return BeginInput(constants::QueryKind::Filter);
+    return BeginInput(constants::QueryKind::Filter, kind);
 }
 
 bool BrowserView::ClearFilter(constants::Pane pane)
@@ -370,10 +381,10 @@ bool BrowserView::ClearFilter(constants::Pane pane)
     return cleared;
 }
 
-FilterStatus BrowserView::SetFilter(constants::Pane pane, const std::string& query)
+FilterStatus BrowserView::SetFilter(constants::Pane pane, const std::string& query, MatchKind kind)
 {
     SettleQueryInput(); // 入力中なら、先に終わらせる(入力欄が語を持ったままだと、設定した語を上書きしてしまう)
-    auto status = ViewOf(pane)->SetFilter(query);
+    auto status = ViewOf(pane)->SetFilter(query, kind);
     UpdateQueryBars();
     return status;
 }

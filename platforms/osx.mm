@@ -4,6 +4,14 @@
 #include "../src/platform.h"
 #include "../src/Utf8.h"
 #include <unistd.h>
+#include <crt_externs.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <chrono>
+#include <cstring>
 #include <fstream>
 #include <format>
 #include <functional>
@@ -292,40 +300,108 @@ std::optional<std::filesystem::path> pl_find_executable(const std::string& name)
 std::expected<ProcessRunResult, std::string> pl_run_process(
     const std::filesystem::path& executable,
     const std::vector<std::string>& args,
-    const std::filesystem::path& stdin_file)
+    const std::filesystem::path& stdin_file,
+    double timeout_seconds)
 {
-    @autoreleasepool {
-        NSFileHandle* input = [NSFileHandle fileHandleForReadingAtPath:@(stdin_file.c_str())];
-        if (!input) {
-            return std::unexpected(std::format("stdin file not readable: {}", stdin_file.string()));
-        }
-
-        NSTask* task = [[NSTask alloc] init];
-        task.executableURL = [NSURL fileURLWithPath:@(executable.c_str())];
-        NSMutableArray<NSString*>* ns_args = [NSMutableArray arrayWithCapacity:args.size()];
-        for (auto& a : args) [ns_args addObject:@(a.c_str())];
-        task.arguments = ns_args;
-        task.standardInput = input;
-        NSPipe* output_pipe = [NSPipe pipe];
-        task.standardOutput = output_pipe;
-        task.standardError = [NSFileHandle fileHandleWithNullDevice];
-
-        NSError* error = nil;
-        if (![task launchAndReturnError:&error]) {
-            return std::unexpected(std::string(error.localizedDescription.UTF8String));
-        }
-
-        // 標準出力を先に読み切ってから waitUntilExit する。
-        // 先に待ってしまうと、出力がパイプのバッファを超えた場合に
-        // 子プロセスと親プロセスが互いを待ち続けて止まる(デッドロック)。
-        NSData* output_data = [output_pipe.fileHandleForReading readDataToEndOfFile];
-        [task waitUntilExit];
-
-        ProcessRunResult result;
-        result.exit_code = task.terminationStatus;
-        result.stdout_text = std::string((const char*)output_data.bytes, output_data.length);
-        return result;
+    // NSTaskは使わない(waitUntilExitが実行ループを回すため。宣言のコメント参照)。posix_spawn + 自前の待ち。
+    int in_fd = open(stdin_file.c_str(), O_RDONLY | O_CLOEXEC);
+    if (in_fd < 0) {
+        return std::unexpected(std::format("stdin file not readable: {}", stdin_file.string()));
     }
+    int pipe_fds[2];
+    if (pipe(pipe_fds) != 0) {
+        int error = errno;
+        close(in_fd);
+        return std::unexpected(std::string(std::strerror(error)));
+    }
+    fcntl(pipe_fds[0], F_SETFD, FD_CLOEXEC);
+    fcntl(pipe_fds[1], F_SETFD, FD_CLOEXEC);
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, in_fd, STDIN_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, pipe_fds[1], STDOUT_FILENO);
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+
+    // 0 / 1 / 2 以外のファイル記述子は、子に渡さない。シグナルのマスクと、無視の設定は、既定に戻す
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    sigset_t no_signals, all_signals;
+    sigemptyset(&no_signals);
+    sigfillset(&all_signals);
+    posix_spawnattr_setsigmask(&attr, &no_signals);
+    posix_spawnattr_setsigdefault(&attr, &all_signals);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
+
+    std::string executable_string = executable.string();
+    std::vector<std::string> argv_strings;
+    argv_strings.reserve(args.size() + 1);
+    argv_strings.push_back(executable_string);
+    for (auto& a : args) argv_strings.push_back(a);
+    std::vector<char*> argv;
+    argv.reserve(argv_strings.size() + 1);
+    for (auto& a : argv_strings) argv.push_back(a.data());
+    argv.push_back(nullptr);
+
+    pid_t pid = 0;
+    int spawn_result = posix_spawn(&pid, executable_string.c_str(), &actions, &attr, argv.data(), *_NSGetEnviron());
+    posix_spawn_file_actions_destroy(&actions);
+    posix_spawnattr_destroy(&attr);
+    close(in_fd);
+    close(pipe_fds[1]);
+    if (spawn_result != 0) {
+        close(pipe_fds[0]);
+        return std::unexpected(std::string(std::strerror(spawn_result)));
+    }
+
+    // 標準出力を、終わり(EOF)まで読む。先に子の終了を待つと、出力がパイプのバッファを超えたとき、子と親が互いを
+    // 待ち続けて止まる(デッドロック)。期限を過ぎたら、子を強制終了する
+    using Clock = std::chrono::steady_clock;
+    const auto deadline = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(timeout_seconds));
+    auto remaining_ms = [&]() -> int {
+        auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+        return left <= 0 ? 0 : (int)std::min<long long>(left + 1, 1000000);
+    };
+    ProcessRunResult result;
+    bool timed_out = false;
+    char buffer[65536];
+    for (;;) {
+        int wait_ms = remaining_ms();
+        if (wait_ms == 0) { timed_out = true; break; }
+        pollfd pfd{pipe_fds[0], POLLIN, 0};
+        int ready = poll(&pfd, 1, wait_ms);
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (ready == 0) { timed_out = true; break; }
+        ssize_t n = read(pipe_fds[0], buffer, sizeof buffer);
+        if (n > 0) { result.stdout_text.append(buffer, (size_t)n); continue; }
+        if (n < 0 && errno == EINTR) continue;
+        break; // EOF(子が標準出力を閉じた=ふつうは終了した)、またはエラー
+    }
+    close(pipe_fds[0]);
+
+    // 子の終了を待つ(標準出力を閉じても終わらない子のために、期限つき。waitpidのブロックはしない)
+    int status = 0;
+    bool reaped = false;
+    if (!timed_out) {
+        for (;;) {
+            pid_t r = waitpid(pid, &status, WNOHANG);
+            if (r == pid) { reaped = true; break; }
+            if (r < 0 && errno != EINTR) break;
+            if (remaining_ms() == 0) { timed_out = true; break; }
+            usleep(200);
+        }
+    }
+    if (timed_out || !reaped) {
+        kill(pid, SIGKILL);
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    }
+    if (timed_out) return std::unexpected(std::string("timed out"));
+
+    result.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    return result;
 }
 
 std::filesystem::path pl_find_font_filename(const std::string& font_name)

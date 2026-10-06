@@ -819,6 +819,22 @@ namespace miata {
         return *parsed;
     }
 
+    // 省略可の一致のしかた引数(Luaの引数のindex番目)を読む。省略またはnilなら部分一致。"substring" / "fuzzy" 以外は、
+    // Luaのエラー(luaL_errorはlongjmpなので、呼ぶ前にC++のオブジェクトを作らないこと)。
+    static views::MatchKind OptionalMatchKindArg(lua_State* L, int index)
+    {
+        if (lua_gettop(L) < index || lua_isnil(L, index)) return views::MatchKind::Substring;
+        Script::CheckArgType(L, index, LUA_TSTRING);
+        size_t length = 0;
+        const char* raw = lua_tolstring(L, index, &length);
+        auto parsed = views::ParseMatchKind(std::string_view(raw, length));
+        if (!parsed) {
+            luaL_error(L, "unknown match mode: %s (expected \"substring\" or \"fuzzy\")", raw);
+            return views::MatchKind::Substring; // luaL_errorは戻らない
+        }
+        return *parsed;
+    }
+
     // Quick Lookを被せる範囲。ペイン名に、両ペインを表す "both" を足したもの
     static std::optional<views::constants::QuickLookArea> ParseQuickLookArea(const char* name)
     {
@@ -1205,21 +1221,25 @@ namespace miata {
         return 1;
     }
 
-    // Miata.command.filter() -> boolean
+    // Miata.command.filter([mode]) -> boolean
     // カーソルのペインで、絞り込みを始める。そのペインの下(検索バーの上)に入力欄が出て、打つたびに、名前に語を含む行だけが
     // 一覧に残る(入力中はNormalのキーバインドは効かない。↑↓でカーソルを動かし、Enterで確定、Escで取り消し)。
+    // modeは、語の一致のしかた: "substring"(部分一致。省略・nilも同じ。一致した部分を強調する)、"fuzzy"(あいまい一致。外部の
+    // fzfに任せる。一覧は得点順で、強調しない)。それ以外はエラー。
     // 確定済みの絞り込みがあるときに呼ぶと、全行に戻って、語を空から入力し直す(Escで前の絞り込みに戻る)。語を空のまま
     // Enterすると、絞り込みを解除する。始められたらtrue。ダイアログの表示中や、すでに入力中のときはfalse。
     int Application::lua_command_filter(lua_State* L)
     {
         auto& app = Application::Instance();
-        lua_pushboolean(L, app.view_->BeginFilter());
+        auto kind = OptionalMatchKindArg(L, 1);
+        lua_pushboolean(L, app.view_->BeginFilter(kind));
         return 1;
     }
 
-    // Miata.command.filter_set(query, [pane]) -> shown, total
+    // Miata.command.filter_set(query, [pane], [mode]) -> shown, total
     // paneのペイン(省略またはnilなら現在のペイン)の絞り込みを、入力欄を使わずに、queryの確定済みにする。空の文字列なら解除する。
-    // カーソルは、今のファイルに留まる(隠れたら、次に見えるファイルへ)。入力中なら、先に終わらせる。戻り値は、
+    // modeは一致のしかた("substring" / "fuzzy"。filterと同じ)。
+    // カーソルは、今のファイルに留まる(隠れたら、次に見えるファイルへ。あいまい一致では、先頭の行へ)。入力中なら、先に終わらせる。戻り値は、
     // 絞り込み後の行数と、全行数。UTF-8として不正なバイトは、U+FFFDにする。NULを含む語はエラー。
     // ダイアログの表示中でも動く(閉じた直後のティックでは、閉じたはずのダイアログがまだ「開いている」扱いなので。jump_toと同じ)。
     int Application::lua_command_filter_set(lua_State* L)
@@ -1235,9 +1255,10 @@ namespace miata {
             return 0;
         }
         auto pane = OptionalPaneArg(L, 2, app.view_->CurrentPane());
+        auto kind = OptionalMatchKindArg(L, 3);
 
         // ここから先はluaL_errorを呼ばない(std::stringなどを作るため)
-        auto status = app.view_->SetFilter(pane, RepairUtf8(std::string(raw, length)));
+        auto status = app.view_->SetFilter(pane, RepairUtf8(std::string(raw, length)), kind);
         lua_pushinteger(L, status.shown);
         lua_pushinteger(L, status.total);
         return 2;

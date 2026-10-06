@@ -8,6 +8,7 @@
 #include "FileListView.h"
 #include "NameMatcher.h"
 #include "../platform.h"
+#include "../FzfFilter.h"
 #include "../Config.h"
 #include "NSColorUtil.h"
 #include "ViewMetrics.h"
@@ -428,8 +429,21 @@ void FileListView::Fetch()
         }
     });
 
+    // あいまい一致の候補は、sorted_の名前。作り直したので、古い窓口(候補の一時ファイル)は捨てる
+    fuzzy_source_.reset();
     // 画面に出す行(list_)を作る。絞り込んでいれば、一致する行だけ。検索のヒットも、list_の添字なので、ここで作り直す
     ApplyFilter();
+}
+
+FzfFilter& FileListView::FuzzySource()
+{
+    if (!fuzzy_source_) {
+        std::vector<std::string> names;
+        names.reserve(sorted_.size());
+        for (auto* entry : sorted_) names.push_back(entry->Model().Name());
+        fuzzy_source_ = std::make_unique<FzfFilter>(std::move(names));
+    }
+    return *fuzzy_source_;
 }
 
 void FileListView::ApplyFilter()
@@ -438,18 +452,29 @@ void FileListView::ApplyFilter()
     list_.clear();
     std::vector<std::vector<MatchRange>> ranges;
 
-    NameMatcher matcher(filter_.Query()); // Idleの語は、常に空(FilterState::Query)
-    if (matcher.Empty()) {
-        // 絞り込みなし(語が空、または不正なUTF-8): 全行
-        list_ = sorted_;
-        std::iota(row_of_sorted_.begin(), row_of_sorted_.end(), 0);
+    if (filter_.Kind() == MatchKind::Fuzzy && !filter_.Query().empty()) {
+        // あいまい一致: fzfの出力の順(得点順)。fzfには、sorted_の順に候補を渡すので、同じ得点の行は、ソートの順になる。
+        // 一致した位置は分からないので、一致箇所(ranges)は空のまま(強調しない)
+        for (size_t index : FuzzySource().FilterIndices(filter_.Query())) {
+            if (index >= sorted_.size()) continue;
+            row_of_sorted_[index] = (int)list_.size();
+            list_.push_back(sorted_[index]);
+        }
     }
     else {
-        for (size_t i = 0; i < sorted_.size(); ++i) {
-            if (auto match = matcher.Match(sorted_[i]->Model().Name())) {
-                row_of_sorted_[i] = (int)list_.size();
-                list_.push_back(sorted_[i]);
-                ranges.push_back(std::move(match->ranges));
+        NameMatcher matcher(filter_.Query()); // Idleの語は、常に空(FilterState::Query)
+        if (matcher.Empty()) {
+            // 絞り込みなし(語が空、または不正なUTF-8): 全行
+            list_ = sorted_;
+            std::iota(row_of_sorted_.begin(), row_of_sorted_.end(), 0);
+        }
+        else {
+            for (size_t i = 0; i < sorted_.size(); ++i) {
+                if (auto match = matcher.Match(sorted_[i]->Model().Name())) {
+                    row_of_sorted_[i] = (int)list_.size();
+                    list_.push_back(sorted_[i]);
+                    ranges.push_back(std::move(match->ranges));
+                }
             }
         }
     }
@@ -762,12 +787,20 @@ void FileListView::RefilterAround(const ListPosition& pivot)
     JumpCursorTo(ShownRowNear(pivot));
 }
 
-void FileListView::BeginFilter()
+void FileListView::RefilterToTop()
+{
+    ApplyFilter();
+    if (list_.empty()) return; // 0件: カーソルも基準も、そのまま(語を戻せば、元の付近に戻る)
+    JumpCursorTo(0);
+    filter_.SetAnchor(FullPositionAt(0));
+}
+
+void FileListView::BeginFilter(MatchKind kind)
 {
     if (filter_.Mode() == QueryMode::Typing) return;
 
     ListPosition origin = CursorOrAnchor();
-    filter_.Begin(origin);
+    filter_.Begin(origin, kind);
     // 入力を始めた直後は語が空なので、全行になる(前の絞り込みは外れる)。カーソルは、同じファイルに留まる
     RefilterAround(origin);
 }
@@ -777,6 +810,11 @@ void FileListView::SetFilterQuery(const std::string& query)
     if (filter_.Mode() != QueryMode::Typing || query == filter_.Query()) return;
 
     filter_.SetQuery(query);
+    if (filter_.Kind() == MatchKind::Fuzzy && !query.empty()) {
+        // あいまい一致は、得点順に並ぶので、いちばん一致する行(先頭)へ
+        RefilterToTop();
+        return;
+    }
     // 語を全部消しても、基準は戻さない(検索と違い、カーソルは「ファイルに付いていく」)
     RefilterAround(filter_.Anchor());
 }
@@ -823,7 +861,7 @@ bool FileListView::ClearFilter()
     return true;
 }
 
-FilterStatus FileListView::SetFilter(const std::string& query)
+FilterStatus FileListView::SetFilter(const std::string& query, MatchKind kind)
 {
     if (query.empty()) {
         ClearFilter();
@@ -831,8 +869,9 @@ FilterStatus FileListView::SetFilter(const std::string& query)
     }
 
     ListPosition pivot = CursorOrAnchor();
-    filter_.Set(query, pivot);
-    RefilterAround(pivot);
+    filter_.Set(query, pivot, kind);
+    if (kind == MatchKind::Fuzzy) RefilterToTop();
+    else RefilterAround(pivot);
     return GetFilterStatus();
 }
 
@@ -852,7 +891,10 @@ FilterStatus FileListView::GetFilterStatus() const
 {
     FilterStatus status;
     status.mode = filter_.Mode();
+    status.kind = filter_.Kind();
     status.query = filter_.Query();
+    // あいまい一致で絞り込んでいる(語がある)のに、fzfを使えていない。fuzzy_source_は、ApplyFilter()が作っている
+    status.fuzzy_fallback = filter_.Kind() == MatchKind::Fuzzy && !filter_.Query().empty() && fuzzy_source_ && !fuzzy_source_->UsesFzf();
     status.shown = (int)list_.size();
     status.total = (int)sorted_.size();
     status.hidden_marks = HiddenMarkCount();

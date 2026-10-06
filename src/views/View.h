@@ -93,12 +93,13 @@ namespace miata::views {
         bool StepSearch(int dir);
         bool ClearSearch();
         // カーソルのペインで、絞り込みを始める(BrowserViewの同名のメソッドを参照)。ダイアログの表示中は、始めない(false)。
-        bool BeginFilter();
+        // kindは、語の一致のしかた(部分一致か、あいまい一致か)。
+        bool BeginFilter(MatchKind kind = MatchKind::Substring);
         // paneの絞り込みを解除する/入力欄を使わずに確定済みにする(空なら解除。戻り値は、見えている行数と全行数)。
         // どちらも、ダイアログの表示中でも動く(閉じた直後のティックでは、閉じたはずのダイアログがまだ「開いている」扱いなので、
         // それで弾いてはいけない。jump_toと同じ)。通常時のEsc(Navigate::Cancel)は、絞り込みを解除しない。
         bool ClearFilter(constants::Pane pane);
-        FilterStatus SetFilter(constants::Pane pane, const std::string& query);
+        FilterStatus SetFilter(constants::Pane pane, const std::string& query, MatchKind kind = MatchKind::Substring);
         // タイマーから定期的に呼ぶ。入力バー(検索・絞り込み)の入力欄と、ペインの状態を整える(BrowserView::UpdateQueryBars参照)。
         void UpdateQueryBars();
 

@@ -118,13 +118,16 @@ struct ProcessRunResult {
     int exit_code = -1;
     std::string stdout_text;
 };
-// executableをargsで起動し、標準入力をstdin_fileから読み込ませ、標準出力を回収する。
-// 起動そのものに失敗した場合のみ unexpected を返す(プロセスが非0で終了しても失敗扱いにはしない。
-// 呼び出し側がexit_codeを見て判断する)。
+// executableをargsで起動し、標準入力をstdin_fileから読み込ませ、標準出力を回収する(標準エラーは捨てる。環境変数は継承する)。
+// 起動そのものに失敗した場合と、timeout_seconds以内に終わらなかった場合(プロセスは強制終了する)のみ unexpected を返す
+// (プロセスが非0で終了しても失敗扱いにはしない。呼び出し側がexit_codeを見て判断する。シグナルで終了したときは128 + シグナル番号)。
+// 終わるまで呼び出し元のスレッドを止めるが、実行ループは回さない(NSTask::waitUntilExitは、待つ間に実行ループを回すので、
+// 数msで終わる子プロセスでも1回に約80msかかり、その間にタイマーが割り込んで、呼び出し元の更新の途中に再入する)。
 std::expected<ProcessRunResult, std::string> pl_run_process(
     const std::filesystem::path& executable,
     const std::vector<std::string>& args,
-    const std::filesystem::path& stdin_file
+    const std::filesystem::path& stdin_file,
+    double timeout_seconds = 10.0
 );
 
 struct CustomDialogCheckbox {

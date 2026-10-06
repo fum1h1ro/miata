@@ -40,6 +40,8 @@ namespace miata::views {
             bool active = false;
             std::string query; // 語
             std::string count; // 右端の件数の文言。出さないなら空
+            // 語の入力欄の左に出す文字。空なら、変えない(作るときのプロンプトのまま)。絞り込みは、一致のしかたで変わる
+            std::string prompt;
         };
 
         // promptは、語の入力欄の左に出す文字(検索なら「/」)

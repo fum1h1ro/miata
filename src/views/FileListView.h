@@ -16,6 +16,10 @@
 #include "FilterState.h"
 #include "SearchState.h"
 
+namespace miata {
+    class FzfFilter;
+}
+
 namespace miata::views {
     class FileEntryView {
     public:
@@ -199,20 +203,26 @@ namespace miata::views {
         // 検索バーに出す内容(語、ヒット数、カーソルのある行の順番)
         SearchStatus GetSearchStatus() const;
 
-        // --- 絞り込み(語を部分文字列として含む名前の行だけを、一覧に出す) ---
-        // 絞り込みはペインごと。状態の遷移はFilterState、ここは実際の一致(NameMatcher)と、一覧(list_)の作り直し、
-        // カーソルの追従、ハイライトの描画を受け持つ。語に大文字が無ければ大文字小文字を区別しない(スマートケース。検索と同じ)。
-        // 一致した部分(すべての出現)は、検索とは別の色(filter_match)で強調する。list_は、絞り込んだ後の行だけになる。
+        // --- 絞り込み(語に一致する名前の行だけを、一覧に出す) ---
+        // 絞り込みはペインごと。状態の遷移はFilterState、ここは実際の一致(NameMatcher、またはfzf)と、一覧(list_)の作り直し、
+        // カーソルの追従、ハイライトの描画を受け持つ。一致のしかた(MatchKind)は2つ:
+        //  - Substring(部分一致): 語を部分文字列として含む名前。語に大文字が無ければ大文字小文字を区別しない(スマートケース。
+        //    検索と同じ)。一致した部分(すべての出現)は、検索とは別の色(filter_match)で強調する。一覧は、ソートの順のまま
+        //  - Fuzzy(あいまい一致): 外部のfzf(--filter)に任せる(FzfFilter)。fzfの拡張検索の構文がそのまま使える。一覧は、
+        //    fzfの得点順(同じ得点なら、ソートの順)。一致した位置は分からないので、強調しない。カーソルは、語が変わるたびに、
+        //    先頭(いちばん一致する行)へ移る。fzfが無いときは、部分一致にフォールバックする(バーに出る)
+        // list_は、絞り込んだ後の行だけになる。
         // 絞り込む前の全エントリのソート済みの並びはsorted_に持ち、語が変わるたびに、再ソートせずに、そこから選び直す。
         // 検索(/ n N)、マークの一括操作、ドラッグ、Quick Look、Luaのcursor_entry / marked_entriesは、list_を見るので、
         // 見えている行だけが対象になる。再スキャン(リロード・ソート)では絞り込みを保ち、ディレクトリを移動したら解除する。
         // ペインの下の入力バーは、BrowserViewが持つ。
 
         // 語の入力を始める(Idle / Committed → Typing)。語はまだ空なので、全行が出る(前の絞り込みは外れる。Escで戻る)。
-        // カーソルは、同じファイルに留まる。すでにTypingなら何もしない。
-        void BeginFilter();
+        // カーソルは、同じファイルに留まる。kindは、これから入れる語の一致のしかた。すでにTypingなら何もしない。
+        void BeginFilter(MatchKind kind = MatchKind::Substring);
         // 入力中の語を更新する(Typingのときだけ)。一覧を絞り込み直し、カーソルを、基準のファイルへ寄せる(そのファイルが
         // 隠れたら、一覧の並びで次に見えるファイル、無ければその前)。0件になっても基準は失わない(語を戻せば、元に戻る)。
+        // あいまい一致で語があるときは、基準ではなく、先頭の行(いちばん一致する行)へ移り、その行のファイルを基準にする。
         void SetFilterQuery(const std::string& query);
         // 一覧のカーソルを、1行下(dir > 0)・上(dir < 0)へ動かす(端で止まる。折り返さない)。動いた先を、以降の入力の
         // 基準にする。入力中でない、または動けなければfalse。
@@ -226,8 +236,8 @@ namespace miata::views {
         // 絞り込んでいたらtrue。
         bool ClearFilter();
         // 入力欄を使わずに、語を確定済みにする(Luaのfilter_set)。語が空なら解除する。入力中でないときに呼ぶこと。
-        // 戻り値は、結果の状態(見えている行数と全行数)。
-        FilterStatus SetFilter(const std::string& query);
+        // カーソルは、今のファイルに留まる(あいまい一致では、先頭の行へ移る)。戻り値は、結果の状態(見えている行数と全行数)。
+        FilterStatus SetFilter(const std::string& query, MatchKind kind = MatchKind::Substring);
         QueryMode GetFilterMode() const { return filter_.Mode(); }
         // 入力中の語、または確定した語(絞り込んでいなければ空)
         const std::string& FilterQuery() const { return filter_.Query(); }
@@ -256,8 +266,15 @@ namespace miata::views {
         ListPosition PositionAt(int row) const;
 
         // 絞り込む前の全体の並び(sorted_)から、今の語に一致する行を選んで、list_とrow_of_sorted_と、絞り込みの
-        // 一致箇所を作り直し、検索のヒットも作り直す。list_を書くのは、これだけ(Fetch()と、語が変わったとき(RefilterAround)に呼ぶ)。語が空なら全行。
+        // 一致箇所を作り直し、検索のヒットも作り直す。list_を書くのは、これだけ(Fetch()と、語が変わったとき(RefilterAround /
+        // RefilterToTop)に呼ぶ)。語が空なら全行。あいまい一致は、fzfの得点順(FuzzySource)。
         void ApplyFilter();
+        // あいまい一致の絞り込み(語がある)を、今のsorted_に対して行うfzfの窓口。sorted_を作り直すFetch()のたびに作り直す
+        // (候補を一時ファイルに書き出すのは、作るとき1回だけ。語が変わるたびに、fzfを起動する)
+        FzfFilter& FuzzySource();
+        // 絞り込み直して、カーソルを先頭の行(あいまい一致の、いちばん一致する行)へ動かし、そのファイルを基準にする。
+        // 一覧が空なら、カーソルも基準も動かさない
+        void RefilterToTop();
         // pivotのファイル(全体の並びでの位置)を基準に、絞り込み直して、カーソルをそのファイル(隠れたら近くの見える行)へ寄せる
         void RefilterAround(const ListPosition& pivot);
         // 位置を、sorted_(絞り込む前の全体の並び)の添字にする。パスが見つからなければ、位置の添字(範囲に収める)。全体が空なら-1
@@ -302,6 +319,8 @@ namespace miata::views {
         std::vector<FileEntryView*> sorted_;
         // sorted_[i]がlist_の何行目か(絞り込みで隠れていれば-1)。sorted_と同じ長さ
         std::vector<int> row_of_sorted_;
+        // あいまい一致のfzfの窓口。sorted_の名前を候補にする(sorted_と同じ並びの添字を返す)。Fetch()で捨てて、必要になったら作る
+        std::unique_ptr<FzfFilter> fuzzy_source_;
         // 絞り込みと検索の状態。一致箇所とヒットは、list_(の添字)を使うので、list_を作り直すApplyFilter()のたびに作り直す。
         // 購読(subscriptions_)の通知はFetch()を呼ぶので、購読より先に宣言する(破棄は逆順)
         FilterState filter_;

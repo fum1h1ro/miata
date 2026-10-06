@@ -350,10 +350,10 @@ namespace miata::views {
         return browser_->ClearSearch();
     }
 
-    bool View::BeginFilter()
+    bool View::BeginFilter(MatchKind kind)
     {
         if (IsAnyDialogOpened()) return false;
-        return browser_->BeginFilter();
+        return browser_->BeginFilter(kind);
     }
 
     bool View::ClearFilter(constants::Pane pane)
@@ -361,9 +361,9 @@ namespace miata::views {
         return browser_->ClearFilter(pane);
     }
 
-    FilterStatus View::SetFilter(constants::Pane pane, const std::string& query)
+    FilterStatus View::SetFilter(constants::Pane pane, const std::string& query, MatchKind kind)
     {
-        return browser_->SetFilter(pane, query);
+        return browser_->SetFilter(pane, query, kind);
     }
 
     void View::UpdateQueryBars()

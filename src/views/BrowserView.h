@@ -96,12 +96,13 @@ namespace miata::views {
         // カーソルのペインの検索を終える(ハイライトを消す)。検索していたらtrue。
         bool ClearSearch();
         // カーソルのペインで、絞り込みの語の入力を始める(入力欄に打つたびに、一覧が絞り込まれる)。始める条件はBeginSearchと同じ。
-        bool BeginFilter();
+        // kindは、語の一致のしかた(部分一致か、あいまい一致か)。
+        bool BeginFilter(MatchKind kind = MatchKind::Substring);
         // paneの絞り込みを解除する(入力中なら入力欄も手放す)。絞り込んでいたらtrue。
         bool ClearFilter(constants::Pane pane);
         // paneの絞り込みを、入力欄を使わずに、queryの確定済みにする(空なら解除)。入力中なら、先に終わらせる。
         // 戻り値は、結果の状態(見えている行数と全行数)。
-        FilterStatus SetFilter(constants::Pane pane, const std::string& query);
+        FilterStatus SetFilter(constants::Pane pane, const std::string& query, MatchKind kind = MatchKind::Substring);
         // 入力中なら、成り行きで終わらせて(語があれば確定する。絞り込みの語が空なら、解除ではなく取り消す=前の絞り込みに戻る。
         // 空で確定=解除は、ユーザーがEnterで押したときだけ)、入力欄のfirst responderを手放す。ダイアログを開く前と、
         // ペインを切り替える前に呼ぶ。ダイアログが閉じるときのDialogPanel::Hide()は、first responderを無条件に
@@ -128,7 +129,8 @@ namespace miata::views {
         // 入力中(Typing)の対象。無ければnullopt
         std::optional<QueryTarget> TypingTarget() const;
         // カーソルのペインで、kindの入力を始める
-        bool BeginInput(constants::QueryKind kind);
+        // matchは、絞り込みの語の一致のしかた(検索では使わない)
+        bool BeginInput(constants::QueryKind kind, MatchKind match = MatchKind::Substring);
         // 入力中のtargetを終わらせる(入力欄の最新の文字を取り込んでから、確定する)。explicit_enterは、ユーザーがEnterで
         // 確定した(true)か、成り行きで終わる(false。ダイアログが開く前・ペインの切り替え・入力欄がfirst responderを失った)か。
         // 絞り込みの語が空のとき、Enterなら解除、成り行きなら取り消す(前の絞り込みを、黙って失わないため)

@@ -11,7 +11,24 @@ std::string FilterCountText(const FilterStatus& status)
 
     std::string text = status.shown == 0 ? "見つかりません" : std::format("{}/{}", status.shown, status.total);
     if (status.hidden_marks > 0) text += std::format("  隠れたマーク {}", status.hidden_marks);
+    if (status.fuzzy_fallback) text += "  fzfなし(部分一致)";
     return text;
+}
+
+const char* MatchKindName(MatchKind kind)
+{
+    switch (kind) {
+    case MatchKind::Substring: return "substring";
+    case MatchKind::Fuzzy: return "fuzzy";
+    }
+    return "";
+}
+
+std::optional<MatchKind> ParseMatchKind(std::string_view name)
+{
+    if (name == "substring") return MatchKind::Substring;
+    if (name == "fuzzy") return MatchKind::Fuzzy;
+    return std::nullopt;
 }
 
 int NearestShownRow(const std::vector<int>& row_of_sorted, int pivot)
@@ -29,13 +46,14 @@ int NearestShownRow(const std::vector<int>& row_of_sorted, int pivot)
     return 0;
 }
 
-void FilterState::Begin(ListPosition origin)
+void FilterState::Begin(ListPosition origin, MatchKind kind)
 {
     if (mode_ == QueryMode::Typing) return;
 
-    // 確定済みの絞り込みがあれば、Escで戻れるよう語を取っておく
-    saved_query_ = mode_ == QueryMode::Committed ? std::optional<std::string>(query_) : std::nullopt;
+    // 確定済みの絞り込みがあれば、Escで戻れるよう、語と一致のしかたを取っておく
+    saved_ = mode_ == QueryMode::Committed ? std::optional<Saved>(Saved{query_, kind_}) : std::nullopt;
     mode_ = QueryMode::Typing;
+    kind_ = kind;
     query_.clear();
     row_ranges_.clear();
     origin_ = origin;
@@ -59,7 +77,7 @@ void FilterState::Commit()
         return;
     }
     mode_ = QueryMode::Committed;
-    saved_query_.reset();
+    saved_.reset();
 }
 
 void FilterState::Cancel()
@@ -67,27 +85,30 @@ void FilterState::Cancel()
     if (mode_ != QueryMode::Typing) return;
 
     row_ranges_.clear();
-    if (saved_query_) {
-        query_ = std::move(*saved_query_);
+    if (saved_) {
+        query_ = std::move(saved_->query);
+        kind_ = saved_->kind;
         mode_ = QueryMode::Committed;
     }
     else {
         query_.clear();
+        kind_ = MatchKind::Substring;
         mode_ = QueryMode::Idle;
     }
-    saved_query_.reset();
+    saved_.reset();
     anchor_ = origin_;
 }
 
-void FilterState::Set(std::string query, ListPosition anchor)
+void FilterState::Set(std::string query, ListPosition anchor, MatchKind kind)
 {
     if (query.empty()) {
         Clear();
         return;
     }
     mode_ = QueryMode::Committed;
+    kind_ = kind;
     query_ = std::move(query);
-    saved_query_.reset();
+    saved_.reset();
     row_ranges_.clear();
     origin_ = anchor;
     anchor_ = std::move(anchor);
@@ -96,8 +117,9 @@ void FilterState::Set(std::string query, ListPosition anchor)
 void FilterState::Clear()
 {
     mode_ = QueryMode::Idle;
+    kind_ = MatchKind::Substring;
     query_.clear();
-    saved_query_.reset();
+    saved_.reset();
     anchor_ = {};
     origin_ = {};
     row_ranges_.clear();
