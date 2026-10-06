@@ -149,6 +149,7 @@ struct QueryBar::Impl {
     // 変わる(打鍵、編集の終了で欄に取り込まれる)ので、覚えておかず、実際の中身と比べる
     bool shown_active = false;
     std::string shown_count;
+    std::string shown_prompt;
 
     ~Impl()
     {
@@ -161,6 +162,10 @@ struct QueryBar::Impl {
         if (field.editable == editable && field.refusesFirstResponder == !editable) return; // 毎ティックの片付けから呼ばれる
         field.editable = editable;
         field.selectable = editable;
+        // 単一行モードは、入力中だけ。確定後に残すと、文字が、ラベル(プロンプト・件数)と違う縦位置に描かれる:
+        // システムフォント以外で、ラベルより上に寄る(実測: Osaka 20pt で 5pt ほど。フォントによって、11pt も)。
+        // 確定後は、ラベルと同じ設定にして、同じ描き方にする(スクロールは、残しても、ずれない=実測)
+        [field.cell setUsesSingleLineMode:editable];
         // 確定後は、クリックで入力欄がfirst responderを奪えないようにする(奪われると、キー入力が
         // MiataRootViewに届かなくなる)
         field.refusesFirstResponder = !editable;
@@ -192,7 +197,6 @@ QueryBar::QueryBar(const std::string& prompt) : impl_(std::make_unique<Impl>())
     impl_->field.drawsBackground = NO;
     impl_->field.focusRingType = NSFocusRingTypeNone;
     impl_->field.lineBreakMode = NSLineBreakByClipping;
-    [impl_->field.cell setUsesSingleLineMode:YES];
     [impl_->field.cell setScrollable:YES];
     [impl_->field.cell setWraps:NO];
 
@@ -237,6 +241,11 @@ void QueryBar::Update(const Display& display)
     if (display.count != impl_->shown_count) {
         impl_->shown_count = display.count;
         impl_->count.stringValue = @(display.count.c_str());
+        relayout = true;
+    }
+    if (!display.prompt.empty() && display.prompt != impl_->shown_prompt) {
+        impl_->shown_prompt = display.prompt;
+        impl_->prompt.stringValue = @(display.prompt.c_str());
         relayout = true;
     }
     // 入力中は、入力欄の文字に触らない(打っている途中の文字や、IMEの変換中の文字を壊さないため)。
