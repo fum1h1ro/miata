@@ -9,7 +9,10 @@
 #include <vector>
 #include "Dialog.h"
 #include "BrowserView.h"
+#include "ProgressOverlay.h"
+#include "ProgressState.h"
 #include "../FileError.h"
+#include "../FileOperationProgress.h"
 #include "../models/Model.h"
 #include "../models/PaneState.h"
 
@@ -103,6 +106,14 @@ namespace miata::views {
         // タイマーから定期的に呼ぶ。入力バー(検索・絞り込み)の入力欄と、ペインの状態を整える(BrowserView::UpdateQueryBars参照)。
         void UpdateQueryBars();
 
+        // 進捗パネル(ウィンドウの右上。ファイル操作の進み具合)。タイマーから毎ティック呼ぶ。running は、実行中の操作の写し
+        // (FileOperationManager::Running())。0.3 秒たった操作のパネルを出し、進み具合を更新し、終わったものを消す。
+        // ダイアログや Quick Look が出ていても、パネルは出し続ける(Quick Look の覆いより上、ダイアログより下)
+        void UpdateProgress(ProgressClock::time_point now, const std::vector<FileOperationStatus>& running);
+        // 操作が終わった(FileOperationManager のコールバックから)。成功なら、パネルに「完了」を見せてから消す。失敗は、
+        // ダイアログで知らせるので、パネルは、その場で消す。画面への反映は、同じティックの UpdateProgress で行う
+        void FinishProgress(FileOperationId id, bool succeeded, ProgressClock::time_point now);
+
     private:
         void OpenNextDialogIfNeeded();
         // 親ディレクトリ/pathへ移動する。読めない場合(権限が無い等)は、移動せずに、ダイアログで知らせる
@@ -116,6 +127,9 @@ namespace miata::views {
         models::PaneState GetPaneState(constants::Pane pane);
 
         std::unique_ptr<BrowserView> browser_;
+        // 進捗パネルの、表示の状態と、画面(contentView の、ブラウザの上に足す)
+        ProgressState progress_state_;
+        std::unique_ptr<ProgressOverlay> progress_overlay_;
         std::shared_ptr<IDialog> current_dialog_;
         std::queue<std::shared_ptr<IDialog>> dialog_requests_;
         // 保存した(または復元した)ペインの状態(添字はconstants::Pane)と、フォーカスしているペイン。これと違えば保存する。

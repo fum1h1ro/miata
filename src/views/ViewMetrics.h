@@ -2,9 +2,10 @@
 #define VIEWS_VIEW_METRICS_H__
 
 #import <AppKit/AppKit.h>
+#include <cmath>
 #include "../Config.h"
 
-// 一覧(FileListView)と、各ペインの下の入力バー(QueryBar)が共有する、フォントと寸法。
+// 一覧(FileListView)と、各ペインの下の入力バー(QueryBar)・進捗パネル(ProgressOverlay)が共有する、フォントと寸法。
 // AppKit依存のヘルパーなので.mmファイルからのみincludeする(NSColorUtil.hと同じ規約)。
 namespace miata::views {
     // 一覧の行・ヘッダーと、入力バーの、左右の余白(pt)
@@ -20,6 +21,12 @@ namespace miata::views {
             if (f) return f;
         }
         return [NSFont systemFontOfSize:size];
+    }
+
+    // 1 行の文字の高さ(フォントの上端から下端まで。行間を含む)
+    inline CGFloat LineHeight(NSFont* font)
+    {
+        return std::ceil(font.ascender - font.descender + font.leading);
     }
 
     // ヘッダー(パス表示)の高さ。フォントサイズに応じて動的に決める(固定値のままだとフォントサイズを

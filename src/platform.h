@@ -158,6 +158,29 @@ struct CustomDialogResult {
 // FileError::permission_deniedで分かる。
 std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path& path);
 
+// ファイル1つをコピーする(copyfile(3))。Finderのコピーと同じく、中身に加えて、更新日時・権限・拡張属性・ACLも引き継ぐ。
+// srcがシンボリックリンクなら、たどらずに、リンクそのものを写す(壊れたリンクも写せる)。APFSの同じボリュームの中では、
+// クローン(中身を共有する、瞬間のコピー)になる(別のボリュームやAPFS以外では、普通のコピーに戻る)。
+// replaceが true なら、dstに同名があれば置き換える: 同じフォルダの一時ファイル(".miata-copy-…")へ置いて、全部成功したときだけ、
+// 名前を付け替える(rename)。途中で失敗しても(元が読めない・容量が足りない・先が外れた)、dstの元の内容は残る。dstがリンクなら、
+// リンク先ではなく、リンクそのものを置き換える。別のハードリンクの中身は変わらない。dstがフォルダなら、EISDIRで失敗する(消さない)。
+// false なら、同名があると EEXISTで失敗する(上書きしない)。失敗したとき、作りかけのファイルは残らない。
+// 渡してよいのは、普通のファイルとシンボリックリンクだけ。フォルダを渡すと、中身は写さずに、空のフォルダを作る。FIFO・デバイスなどを
+// 渡すと、デバイスなら読み出して普通のファイルにしてしまう(/dev/null で、空のファイルができた)ので、呼ぶ側が先に除くこと。
+// on_progress: 中身をコピーしている間、1 MiB ほどごとに、このファイルでこれまでにコピーしたバイト数(累計)で呼ぶ(コピーしているスレッドで)。
+// クローン(瞬間のコピー)・リンクのときは、呼ばない(呼ばれずに、終わる)。nullptr でもよい。
+// 失敗はerror_code(errno)で返す。
+std::error_code pl_copy_file(
+    const std::filesystem::path& src,
+    const std::filesystem::path& dst,
+    bool replace,
+    const std::function<void(std::int64_t copied)>& on_progress = nullptr
+);
+
+// フォルダの属性(権限・更新日時・BSDフラグ・拡張属性・ACL)だけを、srcからdstへ写す。中身は写さない。dstは存在するフォルダ。
+// 更新日時は、dstの中身が変わるたびに書き換わるので、中身を置き終えた後に呼ぶこと。読み取り専用の権限も、置き終えてから付けること。
+std::error_code pl_copy_directory_attributes(const std::filesystem::path& src, const std::filesystem::path& dst);
+
 // システム設定の「プライバシーとセキュリティ > フルディスクアクセス」を開く。OSの保護で止められたファイル操作を、
 // 許可してもらうための案内用。その画面を直接開けなければ、システム設定そのものを開く。何かを開けたらtrue。
 // 許可を与えるのはユーザーで、アプリからは変えられない(許可した後、アプリの起動し直しが要る場合がある)。

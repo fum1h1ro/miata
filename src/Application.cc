@@ -329,6 +329,9 @@ namespace miata {
         view_->UpdateQueryBars();
         // 自動リロードの後に行う(リロードで動いたカーソルに、同じティックで追従を始められるように)
         view_->UpdateQuickLook();
+        // 進捗パネル(右上)を、実行中の操作に合わせる。完了は、上の file_operations_.Update() のコールバック
+        // (OnFileOperationCompleted)が、View::FinishProgress で伝えている(失敗のダイアログと同じティックで、パネルが消える)
+        view_->UpdateProgress(std::chrono::steady_clock::now(), file_operations_.Running());
         // フォルダの履歴の変更を保存する。記録は移動の成功で済んでいて、ここは保存だけ(連続した移動は、ティックごとに
         // 1回にまとまる)。終了時にまとめて保存する処理は無いので、強制終了で失うのは、最後のティック1回分だけ
         models::BrowserModel::Instance().SaveHistoryIfChanged();
@@ -417,10 +420,28 @@ namespace miata {
         auto src_dir = src_model.Path();
         auto dest_dir = dest_model.Path();
 
+        // 元と先の関係が、データを失う・暴走する組み合わせなら、始める前に断る(同じフォルダ・フォルダを自分の中へ・
+        // 先の同名のフォルダが元の祖先)。上書きの確認より前に行う(確認に答えさせても、どちらを選んでも進められないため)。
+        // 調べられなかったとき(元が外部で消えた、権限が無いなど)は断らず、項目の失敗として知らせる
+        {
+            FileOperationGuard guard(dest_dir);
+            for (auto& src : sources) {
+                bool unknown = false;
+                if (auto reason = guard.Check(type, src, unknown)) {
+                    view_->ReportFileError(
+                        std::format("{}できませんでした ({})", FileOpLabel(type), src.filename().string()),
+                        FileError{.message = *reason}
+                    );
+                    return;
+                }
+            }
+        }
+
+        // 壊れたシンボリックリンクも、同名として数える(コピー・移動が、リンクをたどらずに、同名があるかを見るのと合わせる。
+        // 数えないと、確認が出ないまま、黙ってスキップされる)
         auto conflicts = 0;
         for (auto& src : sources) {
-            std::error_code ec;
-            if (std::filesystem::exists(dest_dir / src.filename(), ec)) ++conflicts;
+            if (ExistsNoFollow(dest_dir / src.filename())) ++conflicts;
         }
 
         auto start = [this, type, sources, src_dir, dest_dir, &src_model, &dest_model](bool overwrite) {
@@ -449,6 +470,9 @@ namespace miata {
 
     void Application::OnFileOperationCompleted(FileOperationCompleted& event)
     {
+        // 進捗パネルに伝える。成功なら「完了」を見せてから消え、失敗なら、その場で消える(下で、ダイアログで知らせる)
+        view_->FinishProgress(event.id, event.success, std::chrono::steady_clock::now());
+
         // バックグラウンド実行中にペインが別ディレクトリへ移動されている場合があるため、
         // 操作開始時点のパスを今も表示している場合に限って再スキャンする。
         if (event.dest_model && event.dest_model->Path() == event.dest_dir) {
@@ -469,15 +493,8 @@ namespace miata {
                 std::format("エラーが発生しました（{}件失敗）", event.failed_count),
                 FileError{.message = event.error_message, .permission_denied = event.permission_denied}
             );
-            return;
         }
-        view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
-            [](views::IDialog&) {},
-            views::ConfirmDialog::arguments{
-                .message_ = "完了しました",
-                .button_text_ = "OK",
-            }
-        ));
+        // 成功したときは、何も出さない(進捗パネルが「完了」を見せる。0.3 秒より早く終わった操作は、一覧の更新が、完了の合図になる)
     }
 
     void Application::DeleteMarked()
