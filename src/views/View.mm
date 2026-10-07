@@ -54,6 +54,14 @@ namespace miata::views {
         browser_view.frame = content.bounds;
         browser_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [content addSubview:browser_view];
+
+        // 進捗パネルの、全面の素通しのホスト。ブラウザの上に足す(Quick Look の覆いは、ブラウザの中にあるので、その上になる)。
+        // ダイアログは、開くたびに contentView の末尾に足されるので、常にこれより手前になる
+        progress_overlay_ = std::make_unique<ProgressOverlay>();
+        NSView* progress_view = (__bridge NSView*)progress_overlay_->NativeView();
+        progress_view.frame = content.bounds;
+        progress_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        [content addSubview:progress_view];
     }
 
     View::~View() = default;
@@ -189,7 +197,7 @@ namespace miata::views {
         if (current_dialog_ != nullptr) return;
         if (dialog_requests_.empty()) return;
         // 入力バーの入力中なら、先に終わらせて、入力欄のfirst responderを手放す(理由は
-        // BrowserView::SettleQueryInput。ファイル操作の完了を知らせるダイアログなどが、入力中に割り込むことがある)
+        // BrowserView::SettleQueryInput。ファイル操作の失敗を知らせるダイアログなどが、入力中に割り込むことがある)
         browser_->SettleQueryInput();
         current_dialog_ = dialog_requests_.front();
         dialog_requests_.pop();
@@ -369,6 +377,17 @@ namespace miata::views {
     void View::UpdateQueryBars()
     {
         browser_->UpdateQueryBars();
+    }
+
+    void View::UpdateProgress(ProgressClock::time_point now, const std::vector<FileOperationStatus>& running)
+    {
+        progress_state_.Update(now, running);
+        progress_overlay_->Update(progress_state_.Panels(now));
+    }
+
+    void View::FinishProgress(FileOperationId id, bool succeeded, ProgressClock::time_point now)
+    {
+        progress_state_.Finish(id, succeeded, now);
     }
 
     void View::ToggleFocus()
