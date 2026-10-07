@@ -97,9 +97,10 @@ namespace miata {
     {
         // アプリ終了時にまだ動いているスレッドが残っていると
         // std::thread のデストラクタが terminate() を呼ぶため、detach して安全に終了させる。
-        for (auto& job : jobs_) {
-            if (job->thread_.joinable()) {
-                job->thread_.detach();
+        // 状態(Job)はワーカーも shared_ptr で持っているので、ここで jobs_ が壊れても、ワーカーは破棄済みのものに触れない
+        for (auto& entry : jobs_) {
+            if (entry.thread.joinable()) {
+                entry.thread.detach();
             }
         }
     }
@@ -109,7 +110,28 @@ namespace miata {
         callback_ = std::move(callback);
     }
 
-    void FileOperationManager::Start(
+    void FileOperationManager::Job::BeginItem(std::size_t index, std::string name)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        progress_.done_items = static_cast<std::int64_t>(index);
+        progress_.current_name = std::move(name);
+    }
+
+    void FileOperationManager::Job::Complete(FileOperationCompleted completed)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        progress_.done_items = progress_.total_items;
+        progress_.current_name.clear();
+        result_ = std::move(completed);
+    }
+
+    FileOperationProgress FileOperationManager::Job::Snapshot() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return progress_;
+    }
+
+    FileOperationId FileOperationManager::Start(
         FileOpType type,
         std::vector<std::filesystem::path> sources,
         std::filesystem::path src_dir,
@@ -119,36 +141,61 @@ namespace miata {
         models::FileListModel* dest_model
     )
     {
-        auto job = std::make_unique<Job>();
-        auto job_ptr = job.get();
-        job->thread_ = std::thread(
-            Run, job_ptr, type, std::move(sources), std::move(src_dir), std::move(dest_dir), overwrite, src_model, dest_model
+        auto job = std::make_shared<Job>();
+        job->id = next_id_++;
+        job->type = type;
+        job->started_at = std::chrono::steady_clock::now();
+        job->progress_.total_items = static_cast<std::int64_t>(sources.size()); // スレッドを起こす前に決める(競合しない)
+        std::thread thread(
+            Run, job, type, std::move(sources), std::move(src_dir), std::move(dest_dir), overwrite, src_model, dest_model
         );
-        jobs_.push_back(std::move(job));
+        jobs_.push_back(Entry{job, std::move(thread)});
+        return job->id;
     }
 
     void FileOperationManager::Update()
     {
+        // 1段目: 完了した操作の結果を取り出して、スレッドを join し、jobs_ から外す。jobs_ を触っている間は、コールバックを呼ばない
+        std::vector<FileOperationCompleted> completed;
         for (auto it = jobs_.begin(); it != jobs_.end(); ) {
-            auto& job = *it;
             std::optional<FileOperationCompleted> result;
             {
-                std::lock_guard<std::mutex> lock(job->mutex_);
-                result = job->result_;
+                std::lock_guard<std::mutex> lock(it->job->mutex_);
+                result = std::move(it->job->result_);
             }
-            if (result) {
-                job->thread_.join();
-                if (callback_) callback_(*result);
-                it = jobs_.erase(it);
-            }
-            else {
+            if (!result) {
                 ++it;
+                continue;
             }
+            it->thread.join();
+            completed.push_back(std::move(*result));
+            it = jobs_.erase(it);
+        }
+
+        // 2段目: 通知する。jobs_ は整合しているので、コールバックの中から Start() や Update() を呼んでもよい
+        if (!callback_) return;
+        for (auto& event : completed) {
+            callback_(event);
         }
     }
 
+    std::vector<FileOperationStatus> FileOperationManager::Running() const
+    {
+        std::vector<FileOperationStatus> statuses;
+        statuses.reserve(jobs_.size());
+        for (auto& entry : jobs_) {
+            statuses.push_back(FileOperationStatus{
+                .id = entry.job->id,
+                .type = entry.job->type,
+                .started_at = entry.job->started_at,
+                .progress = entry.job->Snapshot(),
+            });
+        }
+        return statuses;
+    }
+
     void FileOperationManager::Run(
-        Job* job,
+        std::shared_ptr<Job> job,
         FileOpType type,
         std::vector<std::filesystem::path> sources,
         std::filesystem::path src_dir,
@@ -165,9 +212,12 @@ namespace miata {
         FileErrorSummary failures;
         FileOperationGuard guard(dest_dir);
 
-        for (auto& src : sources) {
+        for (std::size_t index = 0; index < sources.size(); ++index) {
+            auto& src = sources[index];
             auto dst = dest_dir / src.filename();
             std::error_code ec;
+            // いま処理する項目(これより前の項目は、スキップや失敗も含めて、終えたものとして数える)
+            job->BeginItem(index, src.filename().string());
 
             // 始める前の確認(Application::StartFileOperation)と同じ確認を、コピー・消す直前にもやる(多重の防御)。
             // 確認してから、ここに順番が来るまでに、状況が変わっていることがある
@@ -212,6 +262,7 @@ namespace miata {
         }
 
         FileOperationCompleted completed{
+            .id = job->id,
             .type = type,
             .success = failures.count == 0,
             .failed_count = failures.count,
@@ -224,7 +275,6 @@ namespace miata {
             .sources = std::move(sources),
         };
 
-        std::lock_guard<std::mutex> lock(job->mutex_);
-        job->result_ = std::move(completed);
+        job->Complete(std::move(completed));
     }
 }

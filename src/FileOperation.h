@@ -1,6 +1,8 @@
 #ifndef FILE_OPERATION_H__
 #define FILE_OPERATION_H__
 
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -12,19 +14,16 @@
 #include <utility>
 #include <vector>
 #include "FileError.h"
+#include "FileOperationProgress.h"
 #include "models/FileListModel.h"
 
 namespace miata {
-    enum class FileOpType {
-        Copy,
-        Move,
-    };
-
     // FileOperationManager からコールバックで通知される完了イベント。
     // src_dir / dest_dir は操作開始時点でのペインの表示パスのスナップショット。
     // 完了時、該当ペインが今もこのパスを表示している場合のみ再スキャンするために使う
     // （バックグラウンド実行中に別ディレクトリへ移動された場合に誤って再スキャンしないため）。
     struct FileOperationCompleted {
+        FileOperationId id; // Start() が返した ID
         FileOpType type;
         bool success;
         int failed_count;
@@ -76,15 +75,17 @@ namespace miata {
     };
 
     // ファイルのコピー・移動をバックグラウンドスレッドで実行する。
-    // Job はファイルI/Oのみを行い、Lua/ImGui/View 等のメインスレッド専用オブジェクトには一切触れない。
-    // 完了は Update() を呼んだスレッド（メインスレッド）上でコールバックを通じて通知される。
+    // ワーカー(Run)は、ファイルI/Oと、自分の Job の進捗の更新だけを行い、Lua / View などのメインスレッド専用オブジェクトには、
+    // 一切触れない。完了は Update() を呼んだスレッド(メインスレッド)上で、コールバックを通じて通知される。
+    // Start / Update / Running / SetCallback は、メインスレッド専用(jobs_ に、ロックは無い)。
     class FileOperationManager {
     public:
         ~FileOperationManager();
 
         void SetCallback(std::function<void(FileOperationCompleted&)> callback);
 
-        void Start(
+        // 操作を、裏スレッドで始める。戻り値は、この操作の ID(Running() の写しと、完了のコールバックの id で、同じ操作と分かる)
+        FileOperationId Start(
             FileOpType type,
             std::vector<std::filesystem::path> sources,
             std::filesystem::path src_dir,
@@ -94,18 +95,41 @@ namespace miata {
             models::FileListModel* dest_model
         );
 
-        // Application::FrameImpl から毎フレーム呼ぶ。完了したジョブを検出して通知する。
+        // Application::Update から毎ティック呼ぶ。完了した操作を拾って、jobs_ から外し、それから、コールバックで通知する。
+        // 外してから通知するので、コールバックの中から Start() や Update() を呼んでもよい(jobs_ のイテレータが壊れず、
+        // ネストした Update() が、同じ完了を二重に通知することもない)
         void Update();
 
+        // 実行中の操作の、進み具合の写し(開始順)。ワーカーが終えていても、Update() が拾って通知するまでは含める
+        // (除くと、拾う前に終えた操作が、通知もなく居なくなったように見える)
+        std::vector<FileOperationStatus> Running() const;
+
     private:
+        // ワーカー(Run)と共有する状態。shared_ptr で持つ: マネージャが先に破棄されても、動いているワーカーが、破棄済みの
+        // Job に触れない。std::thread は、ここには入れない(ワーカー自身が最後の持ち主になって、動いているスレッドの
+        // std::thread を壊す、を構造で避ける。下の Entry)
         struct Job {
-            std::thread thread_;
-            std::mutex mutex_;
+            FileOperationId id = 0;
+            FileOpType type = FileOpType::Copy;
+            std::chrono::steady_clock::time_point started_at;
+            mutable std::mutex mutex_; // progress_ と result_ を守る
+            FileOperationProgress progress_;
             std::optional<FileOperationCompleted> result_;
+
+            // ワーカー側
+            void BeginItem(std::size_t index, std::string name); // index 件目の項目を始める(done_items = index)
+            void Complete(FileOperationCompleted completed);      // 全部終えた(done_items = total)。結果を置く
+            // メインスレッド側
+            FileOperationProgress Snapshot() const;
+        };
+        // マネージャが持つ 1 操作
+        struct Entry {
+            std::shared_ptr<Job> job;
+            std::thread thread;
         };
 
         static void Run(
-            Job* job,
+            std::shared_ptr<Job> job,
             FileOpType type,
             std::vector<std::filesystem::path> sources,
             std::filesystem::path src_dir,
@@ -116,7 +140,8 @@ namespace miata {
         );
 
         std::function<void(FileOperationCompleted&)> callback_;
-        std::vector<std::unique_ptr<Job>> jobs_;
+        std::vector<Entry> jobs_;
+        FileOperationId next_id_ = 1;
     };
 }
 
