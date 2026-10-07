@@ -10,6 +10,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/attr.h>
 #include <sys/wait.h>
 #include <atomic>
 #include <cerrno>
@@ -560,6 +561,19 @@ std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path&
         }
         return {};
     }
+}
+
+bool pl_is_alias_file(const std::filesystem::path& path)
+{
+    // Finderのエイリアスは、通常のファイルで、Finder情報(32バイト)の finderFlags(オフセット8のビッグエンディアン16ビット)に
+    // kIsAlias(0x8000)が立っている。FSOPT_NOFOLLOWで、シンボリックリンクはリンクそのもの(印は無い)を見る。
+    // パスは c_str() のバイト列のまま渡す(NSStringにすると、UTF-8として不正な名前でnilになる)
+    struct attrlist wanted = {};
+    wanted.bitmapcount = ATTR_BIT_MAP_COUNT;
+    wanted.commonattr = ATTR_CMN_FNDRINFO;
+    struct { uint32_t length; uint8_t finder_info[32]; } buffer = {};
+    if (getattrlist(path.c_str(), &wanted, &buffer, sizeof(buffer), FSOPT_NOFOLLOW) != 0) return false;
+    return (buffer.finder_info[8] & 0x80) != 0;
 }
 
 // copyfile(3) の進捗のコールバック: 中身をコピーしている間、1 MiB ごとに来る。COPYFILE_STATE_COPIED は、このファイルの累計。

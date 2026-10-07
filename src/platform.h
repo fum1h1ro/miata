@@ -158,6 +158,11 @@ struct CustomDialogResult {
 // FileError::permission_deniedで分かる。
 std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path& path);
 
+// pathがFinderのエイリアス(「エイリアスを作成」で作る、リンク先を指す通常のファイル)か。Finder情報の「エイリアス」の印(kIsAlias)を見る。
+// シンボリックリンクは含まない(リンクそのものを見るので、false。NSURLIsAliasFileKeyは、シンボリックリンクにも真を返すので使わない)。
+// リンク先は見ない(壊れたエイリアスでも true)。調べられないとき(存在しない・権限が無い・Finder情報を持たないボリューム)は false。
+bool pl_is_alias_file(const std::filesystem::path& path);
+
 // ファイル1つをコピーする(copyfile(3))。Finderのコピーと同じく、中身に加えて、更新日時・権限・拡張属性・ACLも引き継ぐ。
 // srcがシンボリックリンクなら、たどらずに、リンクそのものを写す(壊れたリンクも写せる)。APFSの同じボリュームの中では、
 // クローン(中身を共有する、瞬間のコピー)になる(別のボリュームやAPFS以外では、普通のコピーに戻る)。

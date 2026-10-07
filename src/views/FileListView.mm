@@ -174,6 +174,22 @@ namespace {
         return std::format("{:.1f}{}", size, units[unit]);
     }
 
+    // 行の右側の、サイズの欄。フォルダとリンクは、サイズの代わりに札を出す。リンクは、リンク先の種類に関わらず札にする
+    // (フォルダへのリンクも <LNK>。壊れたリンクも。行の文字の色は、リンク先がフォルダならフォルダの色のまま)。
+    // シンボリックリンクと、Finderのエイリアスは、別の札で、別の色
+    struct SizeCell {
+        std::string text;
+        // 札の部分(text 全体)だけの文字色の種類。<LNK> と <ALIAS> だけ。サイズと <DIR> は、行の色のまま(nullopt)
+        std::optional<Config::Color::Type> tag_color;
+    };
+    SizeCell SizeColumn(const models::FileEntryModel& entry)
+    {
+        if (entry.IsSymlink()) return {"<LNK>", Config::Color::Type::Symlink};
+        if (entry.IsAlias()) return {"<ALIAS>", Config::Color::Type::Alias};
+        if (entry.IsDirectory()) return {"<DIR>", std::nullopt};
+        return {FormatSize(entry.Size()), std::nullopt};
+    }
+
     // ファイル名/拡張子のソート用。大文字小文字を区別しない(Unicodeの大文字小文字も正しく畳み込む)。
     NSComparisonResult CaseInsensitiveCompare(const std::string& a, const std::string& b)
     {
@@ -1070,15 +1086,25 @@ void FileListView::Draw(double min_y, double max_y)
                 NSForegroundColorAttributeName: entry_model.IsDirectory() ? dir_color : file_color,
             };
 
-            std::string size_or_dir = entry_model.IsDirectory() ? "<DIR>" : FormatSize(entry_model.Size());
-            NSString* right_text = [NSString stringWithFormat:@"%s  %s", size_or_dir.c_str(), entry_model.ModifiedTime().c_str()];
+            auto cell = SizeColumn(entry_model);
+            NSString* right_text = [NSString stringWithFormat:@"%s  %s", cell.text.c_str(), entry_model.ModifiedTime().c_str()];
             NSSize right_size = [right_text sizeWithAttributes:attrs];
             NSRect right_rect = NSMakeRect(
                 row_rect.origin.x + row_rect.size.width - right_size.width - kPadding,
                 row_rect.origin.y + (row_height - right_size.height) / 2,
                 right_size.width, right_size.height
             );
-            [right_text drawInRect:right_rect withAttributes:attrs];
+            if (cell.tag_color) {
+                // 札(<LNK> / <ALIAS>)の部分だけ、別の色にする(色で大きさは変わらないので、右寄せの位置は同じ)
+                NSMutableAttributedString* colored = [[NSMutableAttributedString alloc] initWithString:right_text attributes:attrs];
+                [colored addAttribute:NSForegroundColorAttributeName
+                                value:ToNSColor(Config::Color().Get(*cell.tag_color))
+                                range:NSMakeRange(0, [NSString stringWithUTF8String:cell.text.c_str()].length)];
+                [colored drawInRect:right_rect];
+            }
+            else {
+                [right_text drawInRect:right_rect withAttributes:attrs];
+            }
 
             NSString* name = @(entry_model.Name().c_str());
             NSSize name_size = [name sizeWithAttributes:attrs];

@@ -18,6 +18,8 @@ extern "C" {
     X(SearchMatch, search_match) \
     X(SearchCurrent, search_current) \
     X(FilterMatch, filter_match) \
+    X(Symlink, symlink) \
+    X(Alias, alias) \
 
 
 

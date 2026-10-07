@@ -63,11 +63,14 @@ namespace miata::models {
             std::error_code ec;
             return raw_.is_directory(ec);
         }
+        // シンボリックリンクそのものか(リンク先は見ない。壊れていても true)
         inline bool IsSymlink() const
         {
             std::error_code ec;
             return raw_.is_symlink(ec);
         }
+        // Finderのエイリアスか(シンボリックリンクは含まない。リンク先は見ない)。呼ぶたびにファイルシステムを見る(1回 2µs ほど)
+        bool IsAlias() const;
         inline bool IsMarked() const
         {
             return flags_.is(flags::marked);

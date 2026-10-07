@@ -10,6 +10,9 @@ Miata.config.color.search_match = "#7a5c00ff"
 Miata.config.color.search_current = "#c06000ff"
 -- 絞り込みで一致した部分の背景色(検索の色と同時に出るので、別の色)
 Miata.config.color.filter_match = "#5a2d82ff"
+-- 一覧の右側の札の文字色: <LNK>(シンボリックリンク)と <ALIAS>(Finder のエイリアス)の、札の部分だけ(名前と更新日時は行の色のまま。<DIR> とサイズも)
+Miata.config.color.symlink = "#ffd24dff"
+Miata.config.color.alias = "#ff8ad8ff"
 -- Miata.config.set_font("フォント名") / Miata.config.set_font_size(size) でファイル一覧のフォントを指定できる(未指定ならデフォルト)
 -- Miata.config.set_history_limit(n) でフォルダの履歴の件数(左右のペイン合わせて)を指定できる(0〜10000。未指定なら 100。0 なら記録しない)
 
