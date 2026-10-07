@@ -4,12 +4,15 @@
 #include "../src/platform.h"
 #include "../src/Utf8.h"
 #include <unistd.h>
+#include <copyfile.h>
 #include <crt_externs.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
+#include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -557,6 +560,90 @@ std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path&
         }
         return {};
     }
+}
+
+// copyfile(3) の進捗のコールバック: 中身をコピーしている間、1 MiB ごとに来る。COPYFILE_STATE_COPIED は、このファイルの累計。
+// **エラー(COPYFILE_ERR)のときに、CONTINUE を返してはいけない**: man page のとおり、「同じデータの書き込みをやり直す」ことになり、
+// 容量が足りない・書き込み中に先が外れた、のような書き込みの失敗で、終わらなくなる(実測: ENOSPC で、再試行が続いた)。
+// QUIT なら、コールバックが無いときと同じく、copyfile が、そのエラー(errno はそのまま)で失敗する
+static int CopyStatusCallback(int what, int stage, copyfile_state_t state, const char* /*src*/, const char* /*dst*/, void* context)
+{
+    if (stage == COPYFILE_ERR) return COPYFILE_QUIT;
+    if (what == COPYFILE_COPY_DATA && stage == COPYFILE_PROGRESS) {
+        off_t copied = 0;
+        copyfile_state_get(state, COPYFILE_STATE_COPIED, &copied);
+        (*static_cast<const std::function<void(std::int64_t)>*>(context))(static_cast<std::int64_t>(copied));
+    }
+    return COPYFILE_CONTINUE;
+}
+
+// copyfile(3) を1回呼ぶ。失敗は errno の error_code にする。on_progress が空でなければ、進捗のコールバックを付ける
+static std::error_code CopyFileWithFlags(
+    const std::filesystem::path& src,
+    const std::filesystem::path& dst,
+    copyfile_flags_t flags,
+    const std::function<void(std::int64_t)>& on_progress = nullptr
+)
+{
+    copyfile_state_t state = copyfile_state_alloc();
+    if (on_progress) {
+        copyfile_state_set(state, COPYFILE_STATE_STATUS_CB, reinterpret_cast<const void*>(&CopyStatusCallback));
+        copyfile_state_set(state, COPYFILE_STATE_STATUS_CTX, &on_progress);
+    }
+    int result = ::copyfile(src.c_str(), dst.c_str(), state, flags);
+    // copyfile_state_free が errno を書き換えることがあるので、先に退避する
+    int saved_errno = errno;
+    copyfile_state_free(state);
+    // (-1 なのに errno が 0 なら、成功に見えてしまうので、EIO にする)
+    return result == 0 ? std::error_code() : std::error_code(saved_errno != 0 ? saved_errno : EIO, std::generic_category());
+}
+
+// コピー中の一時ファイルの名前(dst と同じフォルダ)。dst の名前は使わない(名前の長さの上限を超えないため)。同じ名前が既にあれば
+// (前の異常終了の残りなど)、COPYFILE_EXCL が EEXIST にするので、attempt を変えて、やり直す
+static std::filesystem::path TemporaryCopyPath(const std::filesystem::path& dst, int attempt)
+{
+    static std::atomic<unsigned> counter{0};
+    return dst.parent_path() / std::format(".miata-copy-{}-{}-{}", ::getpid(), counter.fetch_add(1), attempt);
+}
+
+std::error_code pl_copy_file(
+    const std::filesystem::path& src,
+    const std::filesystem::path& dst,
+    bool replace,
+    const std::function<void(std::int64_t copied)>& on_progress
+)
+{
+    // ALL: 中身・更新日時・権限・拡張属性・ACL。NOFOLLOW_SRC: 元がリンクなら、リンクそのものを写す。
+    // CLONE: APFSの同じボリュームでは、クローン(別のボリュームやAPFS以外では、普通のコピーに戻る)。
+    // EXCL: 先に同名があれば、EEXIST
+    constexpr copyfile_flags_t kFlags = COPYFILE_ALL | COPYFILE_NOFOLLOW_SRC | COPYFILE_CLONE | COPYFILE_EXCL;
+    if (!replace) return CopyFileWithFlags(src, dst, kFlags, on_progress);
+
+    // 置き換え: COPYFILE_UNLINK(先を消してから置く)は使わない。置く途中で失敗すると、先だけが失われる:クローンのときは、元を調べる前に
+    // 先を消すので、元が読めないだけで、先が消える(実測)。容量が足りないときも同じ。同じフォルダの一時ファイルへ置いて、全部成功したときだけ、
+    // rename で置き換える(rename は、先がリンクならリンクそのものを置き換え、別のハードリンクの中身は変えず、フォルダには EISDIR で失敗する)
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        auto temporary = TemporaryCopyPath(dst, attempt);
+        auto ec = CopyFileWithFlags(src, temporary, kFlags, on_progress);
+        if (ec == std::errc::file_exists) continue; // 一時ファイルの名前が、使われていた(消さない: 自分のものではない)
+        if (ec) {
+            ::unlink(temporary.c_str()); // 作りかけは copyfile が消すが、念のため
+            return ec;
+        }
+        if (::rename(temporary.c_str(), dst.c_str()) != 0) {
+            int saved_errno = errno;
+            ::unlink(temporary.c_str());
+            return std::error_code(saved_errno, std::generic_category());
+        }
+        return {};
+    }
+    return std::make_error_code(std::errc::file_exists);
+}
+
+std::error_code pl_copy_directory_attributes(const std::filesystem::path& src, const std::filesystem::path& dst)
+{
+    // METADATA = 権限・更新日時・BSDフラグ(STAT)、拡張属性(XATTR)、ACL。DATA は含まないので、中身は写らない
+    return CopyFileWithFlags(src, dst, COPYFILE_METADATA);
 }
 
 bool pl_open_full_disk_access_settings()

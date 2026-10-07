@@ -10,15 +10,8 @@
 namespace {
     constexpr CGFloat kGap = 6; // 入力欄と件数の間
 
-    CGFloat LineHeight(NSFont* font)
-    {
-        return std::ceil(font.ascender - font.descender + font.leading);
-    }
-
-    NSColor* TextColor()
-    {
-        return miata::views::ToNSColor(miata::Config::Color().Get(miata::Config::Color::Type::NormalText));
-    }
+    using miata::views::LineHeight;
+    using miata::views::NormalTextColor;
 
     // フィールドエディタ(ウィンドウの全テキスト欄が共有する)が、IMEの変換中の文字を持っているか
     BOOL IsComposing(NSText* editor)
@@ -94,7 +87,7 @@ namespace {
     if (NSIsEmptyRect(rect)) return;
     [miata::views::ToNSColor(miata::Config::Background()) setFill];
     NSRectFill(rect);
-    [[TextColor() colorWithAlphaComponent:0.35] setFill];
+    [[NormalTextColor() colorWithAlphaComponent:0.35] setFill];
     NSRectFillUsingOperation(NSIntersectionRect(NSMakeRect(0, 0, self.bounds.size.width, 1), rect), NSCompositingOperationSourceOver);
 }
 // 入力中以外は、マウスを常にこのビューが受ける(何もしない)。入力欄はクリックでfirst responderを
@@ -175,7 +168,7 @@ struct QueryBar::Impl {
 QueryBar::QueryBar(const std::string& prompt) : impl_(std::make_unique<Impl>())
 {
     NSFont* font = MakeFont(Config::FontSize());
-    NSColor* text_color = TextColor();
+    NSColor* text_color = NormalTextColor();
 
     impl_->bar = [[_MiataQueryBarView alloc] initWithFrame:NSMakeRect(0, 0, 200, Height())];
 
@@ -273,7 +266,7 @@ bool QueryBar::BeginInput()
     NSText* editor = impl_->field.currentEditor;
     if ([editor isKindOfClass:[NSTextView class]]) {
         impl_->saved_caret_color = ((NSTextView*)editor).insertionPointColor;
-        ((NSTextView*)editor).insertionPointColor = TextColor();
+        ((NSTextView*)editor).insertionPointColor = NormalTextColor();
     }
     return true;
 }

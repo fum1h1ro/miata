@@ -8,11 +8,6 @@ namespace miata::views {
     namespace {
         using Seconds = std::chrono::duration<double>;
 
-        const char* LabelOf(FileOpType type)
-        {
-            return type == FileOpType::Copy ? "コピー" : "移動";
-        }
-
         // 不定のバーの区間の位置(0〜1)。周期を kProgressPulseSteps 段に量子化する。整数(ミリ秒)で計算する
         // (浮動小数点だと、段の境目で 1 段ずれることがある)
         double PulseAt(ProgressClock::duration elapsed)
@@ -38,7 +33,7 @@ namespace miata::views {
 
     std::string ProgressTitleText(FileOpType type, const FileOperationProgress& progress, std::optional<double> fraction, bool finished)
     {
-        const char* label = LabelOf(type);
+        const char* label = FileOpLabel(type);
         if (finished) return std::format("{}  完了", label);
         if (progress.phase == FileOperationProgress::Phase::Preparing) return std::format("{}  準備中", label);
 

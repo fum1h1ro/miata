@@ -20,19 +20,11 @@ namespace {
     constexpr CGFloat kPulseWidthRatio = 0.3; // 割合が不定のときの、バーの区間の幅(溝に対する比)
     constexpr CGFloat kDetailFontScale = 0.85;
 
-    CGFloat LineHeight(NSFont* font)
-    {
-        return std::ceil(font.ascender - font.descender + font.leading);
-    }
+    using miata::views::LineHeight;
 
     CGFloat BarHeight()
     {
         return std::max<CGFloat>(4, std::round(miata::Config::FontSize() / 3));
-    }
-
-    NSColor* TextColor()
-    {
-        return miata::views::ToNSColor(miata::Config::Color().Get(miata::Config::Color::Type::NormalText));
     }
 
     NSColor* BarColor()
@@ -78,15 +70,18 @@ namespace {
     CGContextSetAlpha(NSGraphicsContext.currentContext.CGContext, self.panelAlpha);
 
     NSRect bounds = self.bounds;
+    NSColor* text_color = NormalTextColor();
+    NSColor* bar_color = BarColor();
     // 背景: 設定の背景色の RGB に、固定の透過(下の一覧が、透けて見える)。半透明なので、SourceOver で重ねる
     // (NSRectFill は Copy 合成で、下を置き換えてしまう。NSBezierPath の fill は SourceOver)
     NSBezierPath* shape = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(bounds, 0.5, 0.5) xRadius:kCornerRadius yRadius:kCornerRadius];
     [[ToNSColor(miata::Config::Background()) colorWithAlphaComponent:kBackgroundAlpha] setFill];
     [shape fill];
     shape.lineWidth = 1;
-    [[TextColor() colorWithAlphaComponent:kBorderAlpha] setStroke];
+    [[text_color colorWithAlphaComponent:kBorderAlpha] setStroke];
     [shape stroke];
 
+    // 縦の積み方(余白・題・バー・名前・余白)は、PanelHeight() と同じ。片方を直すときは、もう片方も
     CGFloat size = miata::Config::FontSize();
     NSFont* title_font = MakeFont(size);
     NSFont* detail_font = MakeFont(size * kDetailFontScale);
@@ -98,14 +93,14 @@ namespace {
     tail.lineBreakMode = NSLineBreakByTruncatingTail;
     CGFloat title_height = LineHeight(title_font);
     [self.title drawInRect:NSMakeRect(kPadding, y, inner_width, title_height)
-            withAttributes:@{NSFontAttributeName: title_font, NSForegroundColorAttributeName: TextColor(), NSParagraphStyleAttributeName: tail}];
+            withAttributes:@{NSFontAttributeName: title_font, NSForegroundColorAttributeName: text_color, NSParagraphStyleAttributeName: tail}];
     y += title_height + kRowGap;
 
     // バー: 溝(薄い)の上に、割合の分だけ塗る。割合が不定なら、溝の中を往復する区間
     CGFloat bar_height = BarHeight();
     NSRect track = NSMakeRect(kPadding, y, inner_width, bar_height);
     NSBezierPath* track_path = [NSBezierPath bezierPathWithRoundedRect:track xRadius:bar_height / 2 yRadius:bar_height / 2];
-    [[BarColor() colorWithAlphaComponent:kTrackAlpha] setFill];
+    [[bar_color colorWithAlphaComponent:kTrackAlpha] setFill];
     [track_path fill];
     [NSGraphicsContext saveGraphicsState];
     [track_path addClip];
@@ -118,7 +113,7 @@ namespace {
         double t = self.pulse < 0.5 ? self.pulse * 2 : (1 - self.pulse) * 2; // 三角波(0 → 1 → 0)
         fill = NSMakeRect(track.origin.x + std::round((track.size.width - segment) * t), track.origin.y, segment, bar_height);
     }
-    [BarColor() setFill];
+    [bar_color setFill];
     NSRectFillUsingOperation(fill, NSCompositingOperationSourceOver);
     [NSGraphicsContext restoreGraphicsState];
     y += bar_height + kRowGap;
@@ -128,7 +123,7 @@ namespace {
     middle.lineBreakMode = NSLineBreakByTruncatingMiddle;
     [self.detail drawInRect:NSMakeRect(kPadding, y, inner_width, LineHeight(detail_font))
              withAttributes:@{NSFontAttributeName: detail_font,
-                              NSForegroundColorAttributeName: [TextColor() colorWithAlphaComponent:kDetailAlpha],
+                              NSForegroundColorAttributeName: [text_color colorWithAlphaComponent:kDetailAlpha],
                               NSParagraphStyleAttributeName: middle}];
 
     [NSGraphicsContext restoreGraphicsState];
@@ -173,7 +168,7 @@ struct ProgressOverlay::Impl {
 
 ProgressOverlay::ProgressOverlay() : impl_(std::make_unique<Impl>())
 {
-    impl_->host = [[_MiataProgressHostView alloc] initWithFrame:NSMakeRect(0, 0, 400, 400)];
+    impl_->host = [[_MiataProgressHostView alloc] initWithFrame:NSZeroRect]; // 大きさは、View が、窓に足すときに決める
     // layer-backed にする: パネルの更新が、下の一覧の描き直しを起こさず、一覧のスクロール(copiesOnScroll)にも、残像を残さない。
     // 重なる別のビュー(NSScrollView・QLPreviewView)と、安全に合成される
     impl_->host.wantsLayer = YES;
@@ -187,6 +182,7 @@ void* ProgressOverlay::NativeView() const
     return (__bridge void*)impl_->host;
 }
 
+// パネル 1 枚の高さ。縦の積み方は、drawRect: と同じ
 double ProgressOverlay::PanelHeight()
 {
     CGFloat size = Config::FontSize();
@@ -212,7 +208,7 @@ void ProgressOverlay::Update(const std::vector<ProgressPanel>& panels)
         auto* view = (_MiataProgressPanelView*)host.subviews[i];
         auto& panel = panels[i];
         // 変わったものがあるパネルだけ、描き直す(同じ位置のパネルの、前の内容と比べる)
-        if (i >= impl_->shown.size() || !(impl_->shown[i] == panel)) {
+        if (i >= impl_->shown.size() || impl_->shown[i] != panel) {
             view.title = @(panel.title.c_str());
             view.detail = @(panel.detail.c_str());
             view.fraction = panel.fraction ? *panel.fraction : -1.0;

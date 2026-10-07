@@ -74,6 +74,15 @@ namespace miata {
         Chain parent_chain_;
     };
 
+    // リンクそのもの(たどらない)で、path があるか。壊れたシンボリックリンクも「ある」(std::filesystem::exists は、リンクをたどるので「無い」)。
+    // 開始前の上書きの確認(Application::StartFileOperation)と、移動の「先が既にあるか」が使う。コピー(CopyEntry)は、lstat で同じ見方をする
+    bool ExistsNoFollow(const std::filesystem::path& path);
+
+    // コピーするバイト数の見積り(進捗の割合の分母にする、事前の走査。テストも直接呼ぶ)。path が普通のファイルなら、その大きさ。フォルダなら、中にある
+    // 普通のファイルの大きさの合計(再帰)。リンク(たどらない)と、特殊ファイル(FIFO・ソケット・デバイス)は 0。調べられないもの
+    // (権限が無い・走査の途中で消えた)も 0 として数える(コピーの失敗で、改めて知らせる)
+    std::int64_t MeasureCopyBytes(const std::filesystem::path& path);
+
     // ファイルのコピー・移動をバックグラウンドスレッドで実行する。
     // ワーカー(Run)は、ファイルI/Oと、自分の Job の進捗の更新だけを行い、Lua / View などのメインスレッド専用オブジェクトには、
     // 一切触れない。完了は Update() を呼んだスレッド(メインスレッド)上で、コールバックを通じて通知される。
@@ -109,18 +118,26 @@ namespace miata {
         // Job に触れない。std::thread は、ここには入れない(ワーカー自身が最後の持ち主になって、動いているスレッドの
         // std::thread を壊す、を構造で避ける。下の Entry)
         struct Job {
-            FileOperationId id = 0;
-            FileOpType type = FileOpType::Copy;
-            std::chrono::steady_clock::time_point started_at;
+            // 作るのはメインスレッド(Start)で、スレッドを起こす前。id・type・started_at は、以降変わらない(ロック不要)。
+            // 合計の項目数も、このとき決める。合計のバイト数は、ワーカーが事前に走査して決める(それまでは「準備中」)
+            Job(FileOperationId id, FileOpType type, std::int64_t total_items);
+
+            const FileOperationId id;
+            const FileOpType type;
+            const std::chrono::steady_clock::time_point started_at;
             mutable std::mutex mutex_; // progress_ と result_ を守る
             FileOperationProgress progress_;
             std::optional<FileOperationCompleted> result_;
 
             // ワーカー側
-            void BeginItem(std::size_t index, std::string name); // index 件目の項目を始める(done_items = index)
-            void Complete(FileOperationCompleted completed);      // 全部終えた(done_items = total)。結果を置く
+            void SetTotals(std::int64_t total_bytes);              // 事前の走査が終わった: 合計を入れて、Running にする
+            void BeginItem(std::size_t index, std::string name);   // index 件目の項目を始める(done_items = index。名前は、その項目の名前)
+            void SetCurrentName(std::string name);                  // いま写しているファイルの名前(項目の中の、葉)
+            void AddBytes(std::int64_t bytes);                      // 終えた(コピーした・スキップした)バイト数を足す
+            void Complete(FileOperationCompleted completed);        // 全部終えた(done_items = total)。結果を置く
             // メインスレッド側
             FileOperationProgress Snapshot() const;
+            std::optional<FileOperationCompleted> TakeResult(); // 結果が置かれていれば、取り出す(1 回だけ)
         };
         // マネージャが持つ 1 操作
         struct Entry {
@@ -130,7 +147,6 @@ namespace miata {
 
         static void Run(
             std::shared_ptr<Job> job,
-            FileOpType type,
             std::vector<std::filesystem::path> sources,
             std::filesystem::path src_dir,
             std::filesystem::path dest_dir,

@@ -1,5 +1,5 @@
-#ifndef PROGRESS_OVERLAY_H__
-#define PROGRESS_OVERLAY_H__
+#ifndef VIEWS_PROGRESS_OVERLAY_H__
+#define VIEWS_PROGRESS_OVERLAY_H__
 
 #include <memory>
 #include <vector>
@@ -31,4 +31,4 @@ namespace miata::views {
     };
 }
 
-#endif // PROGRESS_OVERLAY_H__
+#endif // VIEWS_PROGRESS_OVERLAY_H__

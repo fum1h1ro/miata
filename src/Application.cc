@@ -429,7 +429,7 @@ namespace miata {
                 bool unknown = false;
                 if (auto reason = guard.Check(type, src, unknown)) {
                     view_->ReportFileError(
-                        std::format("{}できませんでした ({})", type == FileOpType::Copy ? "コピー" : "移動", src.filename().string()),
+                        std::format("{}できませんでした ({})", FileOpLabel(type), src.filename().string()),
                         FileError{.message = *reason}
                     );
                     return;
@@ -437,10 +437,11 @@ namespace miata {
             }
         }
 
+        // 壊れたシンボリックリンクも、同名として数える(コピー・移動が、リンクをたどらずに、同名があるかを見るのと合わせる。
+        // 数えないと、確認が出ないまま、黙ってスキップされる)
         auto conflicts = 0;
         for (auto& src : sources) {
-            std::error_code ec;
-            if (std::filesystem::exists(dest_dir / src.filename(), ec)) ++conflicts;
+            if (ExistsNoFollow(dest_dir / src.filename())) ++conflicts;
         }
 
         auto start = [this, type, sources, src_dir, dest_dir, &src_model, &dest_model](bool overwrite) {
@@ -492,10 +493,8 @@ namespace miata {
                 std::format("エラーが発生しました（{}件失敗）", event.failed_count),
                 FileError{.message = event.error_message, .permission_denied = event.permission_denied}
             );
-            return;
         }
-        // 成功したときは、何も出さない(進捗パネルが、「完了」を見せる。以前は、「完了しました」のダイアログを出していて、
-        // 出ている間は、キー操作を奪った。0.3 秒より早く終わった操作は、何も出ない: 一覧の更新が、完了の合図になる)
+        // 成功したときは、何も出さない(進捗パネルが「完了」を見せる。0.3 秒より早く終わった操作は、一覧の更新が、完了の合図になる)
     }
 
     void Application::DeleteMarked()

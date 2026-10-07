@@ -11,6 +11,12 @@ namespace miata {
         Move,
     };
 
+    // 画面に出す、操作の名前
+    inline const char* FileOpLabel(FileOpType type)
+    {
+        return type == FileOpType::Copy ? "コピー" : "移動";
+    }
+
     // コピー・移動の 1 回の操作を区別する番号(FileOperationManager::Start が付ける。プロセスの中で、使い回さない)。
     // Running() の写しと、完了のコールバック(FileOperationCompleted::id)が、同じ操作かどうかを、これで見分ける
     using FileOperationId = std::uint64_t;

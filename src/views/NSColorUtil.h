@@ -13,6 +13,12 @@ namespace miata::views {
         return [NSColor colorWithRed:c.r green:c.g blue:c.b alpha:c.a];
     }
 
+    // 設定の文字の色(Miata.config.color.normal_text)。ヘッダー・入力バー・進捗パネルの文字
+    inline NSColor* NormalTextColor()
+    {
+        return ToNSColor(Config::Color().Get(Config::Color::Type::NormalText));
+    }
+
     // 設定の背景色(Config::Background)に合う見た目(暗い背景ならDark、明るければLight)。
     // ペインの境目の線やスクロールバーのように、OSが描く部品は、見た目(appearance)に合わせた色になる。
     // OSのテーマに任せると、暗い背景の上にLight用の部品(黒の薄い線=見えない、明るい帯)が載ってしまう。

@@ -1,5 +1,5 @@
-#ifndef PROGRESS_STATE_H__
-#define PROGRESS_STATE_H__
+#ifndef VIEWS_PROGRESS_STATE_H__
+#define VIEWS_PROGRESS_STATE_H__
 
 #include <chrono>
 #include <optional>
@@ -60,12 +60,12 @@ namespace miata::views {
     };
 
     // 割合(0〜1)。準備中は不定。バイトの合計が分かればバイト、そうでなく項目が 2 つ以上なら項目数、それ以外(項目が 1 つで
-    // バイトが不明)は不定(nullopt)。1 を超えない
+    // バイトが不明)は不定(nullopt)。1 を超えない。(Panels の部品。テストが、直接呼ぶ)
     std::optional<double> ProgressFraction(const FileOperationProgress& progress);
 
     // 1 行目の文言。「コピー  3/12 · 45%」(項目が 1 つなら n/N は出さない。割合が不定なら % は出さない)。実行中の % は、
-    // 99 を上限にする(100 は、完了のときだけ)。準備中は「コピー  準備中」、完了は「コピー  完了」
+    // 99 を上限にする(100 は、完了のときだけ)。準備中は「コピー  準備中」、完了は「コピー  完了」。(Panels の部品。テストが、直接呼ぶ)
     std::string ProgressTitleText(FileOpType type, const FileOperationProgress& progress, std::optional<double> fraction, bool finished);
 }
 
-#endif // PROGRESS_STATE_H__
+#endif // VIEWS_PROGRESS_STATE_H__
