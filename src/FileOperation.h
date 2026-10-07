@@ -1,6 +1,7 @@
 #ifndef FILE_OPERATION_H__
 #define FILE_OPERATION_H__
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -8,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 #include "FileError.h"
 #include "models/FileListModel.h"
@@ -38,6 +40,39 @@ namespace miata {
         // 解除するマークを、そのペインの全マークではなく、これだけにするため(絞り込みで隠れているマークや、
         // 操作の最中に付けたマークは、解除しない)
         std::vector<std::filesystem::path> sources;
+    };
+
+    // 操作(コピー・移動)を始めてよいかの確認。元(src)と、先(dest_dir / src.filename())の関係が、データを失う・暴走する
+    // 組み合わせのとき、断る理由を返す。画面で始める前(Application::StartFileOperation)と、裏スレッドが項目を処理する直前
+    // (FileOperationManager::Run。外部の変更や、確認してから開始するまでの状況の変化に備える、多重の防御)の、両方で使う。
+    // 断る組み合わせは、次の3つ:
+    //   (1) 先が、元と同じ実体(同じフォルダへの操作)。Moveの「上書き」が、先 = 元を remove_all で消してしまう
+    //   (2) 先のフォルダが、元のフォルダの中(またはそのもの)。フォルダを自分の中へ。Copyが、入れ子に増殖し続ける
+    //   (3) 先の同名のフォルダが、元の祖先(/a/b/b を /a へ)。Moveの「上書き」が、/a/b を、元ごと丸ごと消す
+    // 比べるのは、パスの文字列ではなく実体(st_dev, st_ino)。接頭辞の比較は foo と foobar を取り違え、シンボリックリンクや、
+    // 大文字小文字を区別しないボリュームの別の綴りを見逃す。
+    class FileOperationGuard {
+    public:
+        explicit FileOperationGuard(std::filesystem::path dest_dir);
+
+        // srcへの操作を断る理由(「コピー先が、…」のような、画面に出す文)。断らなければ nullopt。
+        // 元か先を調べられず、判断できなかったとき(statの失敗)は、unknown を true にして nullopt を返す。先を消す操作の前では、
+        // 呼ぶ側が、これを「断る」側に倒す(調べられないまま消さない)
+        std::optional<std::string> Check(FileOpType type, const std::filesystem::path& src, bool& unknown);
+
+    private:
+        using FileId = std::pair<std::uint64_t, std::uint64_t>; // (st_dev, st_ino)
+        struct Chain {
+            bool ok = false;
+            std::vector<FileId> ids; // 自分と、ルートまでの祖先の実体(自分が先頭)
+        };
+        static Chain ChainOf(const std::filesystem::path& path);
+
+        std::filesystem::path dest_dir_;
+        Chain dest_chain_;
+        // 元の親フォルダの鎖。操作の対象は同じフォルダにあるので、直近の1つを覚えて、項目ごとにやり直さない
+        std::filesystem::path cached_parent_;
+        Chain parent_chain_;
     };
 
     // ファイルのコピー・移動をバックグラウンドスレッドで実行する。

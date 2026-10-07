@@ -417,6 +417,23 @@ namespace miata {
         auto src_dir = src_model.Path();
         auto dest_dir = dest_model.Path();
 
+        // 元と先の関係が、データを失う・暴走する組み合わせなら、始める前に断る(同じフォルダ・フォルダを自分の中へ・
+        // 先の同名のフォルダが元の祖先)。上書きの確認より前に行う(確認に答えさせても、どちらを選んでも進められないため)。
+        // 調べられなかったとき(元が外部で消えた、権限が無いなど)は断らず、項目の失敗として知らせる
+        {
+            FileOperationGuard guard(dest_dir);
+            for (auto& src : sources) {
+                bool unknown = false;
+                if (auto reason = guard.Check(type, src, unknown)) {
+                    view_->ReportFileError(
+                        std::format("{}できませんでした ({})", type == FileOpType::Copy ? "コピー" : "移動", src.filename().string()),
+                        FileError{.message = *reason}
+                    );
+                    return;
+                }
+            }
+        }
+
         auto conflicts = 0;
         for (auto& src : sources) {
             std::error_code ec;

@@ -61,6 +61,7 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 | `FzfFilter.h/.cc` | 外部の fzf（`fzf --filter`）による文字列一覧の絞り込み。AppKit 非依存。候補を一時ファイルに書き出し、語ごとに fzf を起動する（`pl_run_process`）。`dialog_filter_list` と、絞り込みのあいまい一致（`FileListView::FuzzySource`）が使う。fzf が無いときは部分一致にフォールバック（後述「絞り込み（フィルタ）」「外部コマンドの起動」） |
 | `Utf8.h/.cc` | UTF-8 の検証と修復（`IsValidUtf8` / `RepairUtf8`）。AppKit 非依存。ファイル名を、UTF-8 として正しい形にするために使う（後述「名前が UTF-8 として不正なファイル」） |
 | `FileError.h` | ファイル操作の失敗（`FileError` = OS の説明 + 「権限が無い失敗か」、`FileErrorSummary` = 複数の失敗のまとめ）。権限の失敗に、許可のしかたを案内するために使う（後述「権限エラーの案内」） |
+| `FileOperation.h/.cc` | コピー・移動を裏スレッドで実行する `FileOperationManager`（開始 `Start`・毎ティックの `Update`・完了のコールバック）と、始める前の確認 `FileOperationGuard`（同じフォルダ・フォルダを自分の中へ・先の同名のフォルダが元の祖先、を断る）。AppKit 非依存。呼ぶのは `Application`（後述「ファイル操作（コピー・移動）」） |
 | `misc.h` | `Flags`、`ReactiveProperty`、`MessageBroker` などのユーティリティ |
 | `platform.h` | OS 依存処理の抽象境界（`pl_*` 関数群の宣言）。色・フォント・ダイアログ用構造体・ファイル操作・ディレクトリ監視（`pl_watch_directory`）・設定の保存（`pl_save_string_list` / `pl_save_string_map`）・プロセス起動・ファイルを開く/Finderで表示/クリップボード（`pl_open_paths` / `pl_reveal_paths` / `pl_set_clipboard_text` / `pl_find_application`）・外部コマンドの起動（`pl_run_process`。後述）など |
 | `platforms/osx.mm` | `platform.h` の macOS 実装。AppKit 型はこの層（と `views/*.mm`）にのみ閉じ込め、ヘッダ（`.h`）には持ち込まない規約 |
@@ -184,6 +185,22 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 - **ダイアログ表示中は保留する**：`View::UpdateAutoReload()` が `!IsAnyDialogOpened()` を渡す。リネームの入力中に外部でそのファイルが消えると、反映によってカーソルが隣のファイルへ動き、確定時の `rename_execute`（カーソル位置のエントリを改名する）が**別のファイルを改名してしまう**ため。`Application::Update()` では `Script::Update()`（コルーチンがダイアログの結果を受けて `rename_execute` などを呼ぶ）と `CheckDialogState()` の**後**に `UpdateAutoReload()` を呼ぶこと。
 - **待ちとスロットル**（`FileListView.mm` の定数）：検知から 300ms 待って反映し、自動リロードどうしは最短 500ms（走査に時間がかかるときは、かかった時間の 8 倍）あける。失敗（ディレクトリが消えた等）は再試行しない（次のイベントか、手動のリロードを待つ）。
 - **テストの罠**：`rxcpp` の subscription はスコープを抜けても購読解除されない。ローカル変数を参照するラムダを `ObservePath().subscribe` に渡したら、変数の寿命が切れる前に `unsubscribe()` すること（アプリ側は `misc::SubscriptionGuard`）。
+
+## ファイル操作（コピー・移動）
+
+`Miata.command.copy_marked()` / `move_marked()` → `Application::StartFileOperation`（`Application.cc`）→ `FileOperationManager::Start`（`FileOperation.h/.cc`）→ 裏スレッドの `Run`。完了は、毎ティックの `FileOperationManager::Update()` が拾って、メインスレッドでコールバック（`Application::OnFileOperationCompleted`）を呼ぶ。そこで、一覧の再スキャン・マークの解除・失敗の通知（`View::ReportFileError`）をする。上書きかスキップかは、スレッドを始める前に、操作全体で 1 つ決まる（`bool overwrite`。実行中に画面の返事は待たない）。ゴミ箱（`DeleteMarked`）はメインスレッドで同期、他アプリへのドラッグ（`BeginDrag`）は相手が処理するので、どちらもここを通らない。
+
+### 始める前に断る（`FileOperationGuard`）
+
+- **断る 3 つの組み合わせ**（どれも、そのまま進めると、ファイルを失う・コピーが増え続ける。2026-10-06 に、スクラッチの一時フォルダで再現した）：
+  1. **先が元と同じ実体**（同じフォルダへの操作。起動直後は左右とも `$HOME` なので、起こりやすい）。Move の「上書き」が、`Run` の `remove_all(dst)`（dst == src）で、元のファイル・フォルダを、中身ごと**完全に消した**（ゴミ箱に入らず、結果は「失敗」と表示された）。Copy は `std::filesystem::copy` が同一ファイルを検出して失敗にするだけ（`Function not implemented`）
+  2. **先のフォルダが、元のフォルダの中**（またはそのもの）。Copy が、`File name too long` で止まるまで、入れ子に増殖し続けた（小さなテスト用ツリーで 670 個。大きなフォルダなら、ディスクを埋めうる）。Move は OS が拒否する
+  3. **Move だけ**：先の同名のフォルダが、元の祖先（`/a/b/b` を `/a` へ。先 = `/a/b` が元の親）。「上書き」が `/a/b` を丸ごと消し、**移すフォルダごと、無関係な兄弟のファイル（`/a/b/other.txt`）まで失う**。Copy は、フォルダへ重ねるだけで壊さないので、断らない
+- **比べるのは実体（`st_dev` と `st_ino`）**で、パスの文字列ではない。接頭辞の比較は、`foo` と `foobar` を取り違え、シンボリックリンクや、大文字小文字を区別しないボリューム（APFS の既定）の別の綴りを見逃す。`ChainOf` が、`weakly_canonical` でリンクを解決したパスの、自分とルートまでの祖先の実体の列を作る。(2) は「元の実体が、先の列にあるか」、(3) は「先の同名の実体が、元の親の列にあるか」で判定する。**`st_dev` も比べる**：ボリュームのルートの inode は、どのボリュームでも 2 なので、`st_ino` だけだと、別のボリューム全体を通常のフォルダへコピーするのを、「先の祖先 `/` が元」と取り違えて断る（ディスクイメージで確かめた）
+- **元はリンクそのもの（`lstat`）を見る**。リンク先は見ない。いまの `Run` は `std::filesystem::copy` で、リンクをたどって中身をコピーするので、**フォルダへのリンクを、そのリンク先の中へコピーする**と、(2) に当たらずに増殖する（再現済み: `File name too long` で止まるまで）。既知の穴で、コピーを「リンクはリンクのままコピー」にする段階で消える
+- **開始前（`StartFileOperation`）と、`Run` の直前の、両方で確認する**（同じ `FileOperationGuard`）。`Run` の確認は、確認してから項目の順番が来るまでに、状況が変わっていたときの多重の防御。断る理由は `FileError` にして、開始前は `ReportFileError`（「コピーできませんでした (名前): 理由」）、`Run` は失敗として数える。**開始前は、上書きの確認（`YesNoDialog`）より前**（どちらを選んでも進められないので、答えさせない）。複数の対象のうち、どれかが断られたら、全体を断る（最初に断られた 1 つの名前を出す。並びは画面の順で、フォルダが先）
+- **調べられなかったとき（`unknown`）**：元か先の場所を `stat` できない（元が外部で消えた、権限が無い）。**開始前は断らない**（操作を始めて、項目の失敗として知らせる）。**`Run` は、Move の「上書き」で先を消す直前だけ、`unknown` なら消さずに失敗にする**（元が消えているのに、先だけ消す、を防ぐ）。親の祖先の列だけが調べられない状況は、元の `lstat` が通れば作れない（到達しない防御。変異テストで生き残る）
+- **テスト**（リポジトリ外のスクラッチ）：`file_guard_test`（AppKit なし。ASan + UBSan。実ファイル・実スレッド。122 件。3 つの断る場合、断らない紛らわしい場合（`foo`/`foobar`・兄弟・普通の衝突・親の兄弟）、リンク・`..`・大文字小文字・ハードリンク、調べられない場合、5000 件（28 ms ほど）、**ディスクイメージ（`hdiutil create` + `attach -nobrowse`。権限は要らず、Finder にも出ない）で別のボリューム**、`Run` の防御（ガードを通らずに直接 `Start`）、普通の操作が変わらないこと）と、`ops_test` の `guard_*`（実物のアプリで、断りのダイアログ・ジョブが始まらない・ファイルが無傷・普通の衝突は確認に進む・元が消えたときは断らない）。実装を 1 か所ずつ壊す変異 24 件（ガード）+ 8 件（`Application.cc`）を、すべて検出した。**罠**：(1) ディスクイメージのテストは、必ず `detach` する（デストラクタと、実行スクリプトの後始末の両方で）。(2) 読めないフォルダ（`chmod 000`）は、後始末の前に戻す。(3) `Run` の防御を外す変異は、ガードを通らずに直接 `Start` するテストでだけ検出できる（アプリ全体のテストは、開始前の確認で止まる）。(4) macOS には `timeout` コマンドが無い（暴走するかもしれない調査は、`perl -e 'alarm 60; exec @ARGV'` で包む）
 
 ## プレビュー（Quick Look）
 
