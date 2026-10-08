@@ -341,6 +341,16 @@ namespace miata::views {
         browser_->UpdateQuickLook();
     }
 
+    std::optional<double> View::QuickLookZoom() const
+    {
+        return browser_->QuickLookZoom();
+    }
+
+    std::optional<double> View::SetQuickLookZoom(double factor)
+    {
+        return browser_->SetQuickLookZoom(factor);
+    }
+
     bool View::BeginSearch()
     {
         if (IsAnyDialogOpened()) return false;

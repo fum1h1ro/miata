@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -249,6 +250,7 @@ namespace miata {
             { "current_sort", lua_command_current_sort },
             { "reload", lua_command_reload },
             { "quick_look", lua_command_quick_look },
+            { "quick_look_zoom", lua_command_quick_look_zoom },
             { "sort", lua_command_sort },
             { "search", lua_command_search },
             { "search_next", lua_command_search_next },
@@ -1170,6 +1172,75 @@ namespace miata {
         }
 
         lua_pushboolean(L, app.view_->ToggleQuickLook(area));
+        return 1;
+    }
+
+    // "in" / "out" の1回あたりの倍率(今の倍率に掛ける・割る)
+    static constexpr double kQuickLookZoomStep = 1.25;
+
+    // Miata.command.quick_look_zoom([zoom]) -> number | nil
+    // Quick Lookのプレビューの倍率(1.0 = 100%)を指定して、指定した後の倍率を返す。zoomは、数値(その倍率。0.25〜4.0に丸める)、
+    // "in"(今の倍率の1.25倍) / "out"(1.25で割る) / "reset"(100%)。省略・nilなら、変えずに今の倍率を返す。
+    // 表示していない・読み込み中・ズームできない種類(画像・PDF・json)のときは、何もせずnilを返す
+    // (ズームできる種類は、QuickLookView::Zoomを参照)。ファイルを切り替えると、100%に戻る。
+    int Application::lua_command_quick_look_zoom(lua_State* L)
+    {
+        auto& app = Application::Instance();
+
+        // 引数を、倍率の指定に直す。luaL_error(longjmp)の前に、デストラクタを持つオブジェクトを作らない
+        // (doubleとstd::string_viewは、持たないので使ってよい)
+        enum class Op { Get, Set, In, Out, Reset };
+        auto op = Op::Get;
+        double factor = 1.0;
+        if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
+            if (lua_type(L, 1) == LUA_TNUMBER) {
+                factor = lua_tonumber(L, 1);
+                if (!std::isfinite(factor) || factor <= 0) {
+                    luaL_error(L, "quick_look_zoom: the zoom must be a finite positive number");
+                    return 0;
+                }
+                op = Op::Set;
+            }
+            else if (lua_type(L, 1) == LUA_TSTRING) {
+                size_t len = 0;
+                const char* s = lua_tolstring(L, 1, &len);
+                const std::string_view name(s, len);
+                if (name == "in") {
+                    op = Op::In;
+                }
+                else if (name == "out") {
+                    op = Op::Out;
+                }
+                else if (name == "reset") {
+                    op = Op::Reset;
+                }
+                else {
+                    luaL_error(L, "quick_look_zoom: unknown zoom: %s (expected a number, \"in\", \"out\" or \"reset\")", s);
+                    return 0;
+                }
+            }
+            else {
+                luaL_error(L, "quick_look_zoom: expected a number, \"in\", \"out\" or \"reset\"");
+                return 0;
+            }
+        }
+
+        auto zoom = app.view_->QuickLookZoom();
+        if (zoom && op != Op::Get) {
+            switch (op) {
+            case Op::In: factor = *zoom * kQuickLookZoomStep; break;
+            case Op::Out: factor = *zoom / kQuickLookZoomStep; break;
+            case Op::Reset: factor = 1.0; break;
+            default: break; // Set: 引数の倍率のまま
+            }
+            zoom = app.view_->SetQuickLookZoom(factor);
+        }
+        if (zoom) {
+            lua_pushnumber(L, *zoom);
+        }
+        else {
+            lua_pushnil(L);
+        }
         return 1;
     }
 

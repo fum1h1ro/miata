@@ -88,6 +88,10 @@ namespace miata::views {
         bool ToggleQuickLook(constants::QuickLookArea area);
         // タイマーから定期的に呼ぶ。プレビューを、カーソル下のファイルに追従させる。
         void UpdateQuickLook();
+        // Quick Lookのプレビューの倍率(1.0 = 100%)を読む/指定する(BrowserView::QuickLookZoom参照)。
+        // 表示していない・読み込み中・ズームできない種類のときは、nulloptを返して何もしない。
+        std::optional<double> QuickLookZoom() const;
+        std::optional<double> SetQuickLookZoom(double factor);
 
         // カーソルのペインで、ファイル名の検索を始める/次・前のマッチへ動く/終える(BrowserViewの同名の
         // メソッドを参照)。ダイアログの表示中は、始めない・動かない(falseを返す)。

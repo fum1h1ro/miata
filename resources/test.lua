@@ -142,6 +142,11 @@ Miata.command.bind("n", "<S-p>", function()
     local other = Miata.command.current_pane() == "left" and "right" or "left"
     Miata.command.quick_look(other)
 end)
+-- プレビューの倍率は、トラックパッドのピンチでも変えられる(xlsx・docx・csv・html・svg・txt・md・rtf など、ズームできる種類だけ。
+-- 画像・PDF・json は、できない)。キーは付けていないので、使うなら ~/.config/miata/init.lua に、例えば次のように書く:
+-- Miata.command.bind("n", "=", function() Miata.command.quick_look_zoom("in") end)
+-- Miata.command.bind("n", "-", function() Miata.command.quick_look_zoom("out") end)
+-- Miata.command.bind("n", "0", function() Miata.command.quick_look_zoom("reset") end)
 -- 開く(o)・Finder で表示(O)・パスをクリップボードへ(yy)。対象は、マーク済み。無ければカーソル下の1件。
 -- o は、フォルダも .app も開く(.app は起動、フォルダは Finder)。10 件を超えると、確認する
 Miata.command.bind("n", "o", function()
