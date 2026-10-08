@@ -13,6 +13,28 @@ directory BUILD_DIR_DEBUG
 directory BUILD_DIR_RELEASE
 directory BUILD_DIR_XCODE
 
+# 署名(任意)。環境変数 MIATA_CODESIGN_IDENTITY に、署名に使う証明書(`security find-identity -v -p codesigning` に出る
+# SHA-1 ハッシュか、名前)を入れておくと、ビルドのたびに(make のあとで毎回)、その証明書で .app に署名する。
+# 無ければ、これまでどおり、アドホック署名(リンカーがつけるもの)のまま。
+#
+# なぜ: アドホック署名だと、フルディスクアクセスなどの許可(TCC)が、実行ファイルのハッシュに結び付くので、ビルドし直すたびに
+# 外れる(別のアプリとして扱われる)。証明書で署名すると、許可は、アプリの ID + 証明書の署名の要件に結び付くので、ビルドし直しても
+# 残る。毎回署名し直すのは、make が、リソース(resources/ の Lua など)だけをコピーし直したときも、署名が古くならないようにするため。
+#
+# 証明書の名前・チーム ID は、リポジトリに書かない(環境変数で渡す)。コマンドも、出力に出さない(verbose: false)。
+# hardened runtime は付けない(テストが DYLD_INSERT_LIBRARIES を使うため。配布用の署名・公証は、まだ組み込んでいない)。
+def sign_app(build_dir)
+  identity = ENV["MIATA_CODESIGN_IDENTITY"].to_s.strip
+  return if identity.empty?
+
+  app = File.join(build_dir, "Miata.app")
+  sh "codesign", "--force", "--sign", identity, "--timestamp=none", app, verbose: false do |ok, _|
+    abort "codesign failed: check MIATA_CODESIGN_IDENTITY (usable identities: security find-identity -v -p codesigning)" unless ok
+  end
+  sh "codesign", "--verify", "--strict", app, verbose: false
+  puts "signed #{app} (identity from MIATA_CODESIGN_IDENTITY)"
+end
+
 namespace :cmake do
   desc "Generate Debug build files"
   task :debug => [BUILD_DIR_DEBUG] do
@@ -43,6 +65,7 @@ task :build do
     cd dir do
       sh "make"
     end
+    sign_app(dir)
   end
 end
 
@@ -52,12 +75,14 @@ namespace :build do
     cd BUILD_DIR_DEBUG do
       sh "make"
     end
+    sign_app(BUILD_DIR_DEBUG)
   end
   desc "Build Release"
   task :release => ["cmake:release"] do
     cd BUILD_DIR_RELEASE do
       sh "make"
     end
+    sign_app(BUILD_DIR_RELEASE)
   end
 end
 
