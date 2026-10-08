@@ -79,6 +79,16 @@ namespace miata::views {
         // 毎ティック(Application::Update)から呼ぶ。カーソル下のファイルが変わったら、カーソルの動きが
         // 落ち着くのを少し待ってからプレビューを切り替える(動かし続けている間は切り替えない)。
         void UpdateQuickLook();
+        // プレビューの倍率(1.0 = 100%。QuickLookView::Zoom / SetZoom参照)。表示していない・読み込み中・
+        // ズームできない種類(画像・PDFなど)のときは、nulloptを返して何もしない。
+        inline std::optional<double> QuickLookZoom() const
+        {
+            return quick_look_->Zoom();
+        }
+        inline std::optional<double> SetQuickLookZoom(double factor)
+        {
+            return quick_look_->SetZoom(factor);
+        }
 
         // --- ペインごとの入力(各ペインの下端の入力バー。ファイル名の検索と、絞り込み) ---
         // 入力の状態はペインごとにFileListViewが持つ(FileListView::BeginSearch / BeginFilter参照)。ここは、入力バー(入力欄と

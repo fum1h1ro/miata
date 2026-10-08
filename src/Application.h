@@ -75,6 +75,7 @@ namespace miata {
         static int lua_command_current_sort(lua_State* L);
         static int lua_command_reload(lua_State* L);
         static int lua_command_quick_look(lua_State* L);
+        static int lua_command_quick_look_zoom(lua_State* L);
         static int lua_command_sort(lua_State* L);
         static int lua_command_search(lua_State* L);
         static int lua_command_search_next(lua_State* L);

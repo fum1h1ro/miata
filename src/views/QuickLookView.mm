@@ -1,15 +1,69 @@
 #import <AppKit/AppKit.h>
 #import <Quartz/Quartz.h>
+#import <WebKit/WebKit.h>
+#include <algorithm>
 #include <system_error>
 #include "QuickLookView.h"
 #include "../Config.h"
 #include "NSColorUtil.h"
 
+namespace {
+
+// プレビューの中の、倍率を指定できるビュー(無ければnil)。QLPreviewViewの中身の作りは、種類で違う(macOS 27で実測):
+//   ・WebKitで描かれる種類(xlsx・docx・csv・html・svg): QLWeb2View(WKWebViewのサブクラス)。アプリ内で描かれる
+//   ・テキスト系(txt・md・rtf): QLTextScrollView(NSScrollView。documentViewはNSTextView)。アプリ内で描かれる
+//   ・画像・PDF・json: NSRemoteView。別プロセスで描かれ、倍率を指定する手段が無い(非公開のzoomFactor等も効かない)
+// 非公開のクラス名には頼らず、公開の基底クラスで探す(OSの更新で作りが変わったら、見つからなくなる=ズームできなくなる
+// だけで、壊れはしない)。
+NSView* FindZoomTarget(NSView* root)
+{
+    for (NSView* child in root.subviews) {
+        if ([child isKindOfClass:[WKWebView class]]) return child;
+        if ([child isKindOfClass:[NSScrollView class]] &&
+            [static_cast<NSScrollView*>(child).documentView isKindOfClass:[NSTextView class]]) {
+            return child;
+        }
+        if (NSView* found = FindZoomTarget(child)) return found;
+    }
+    return nil;
+}
+
+double Magnification(NSView* target)
+{
+    if ([target isKindOfClass:[WKWebView class]]) return static_cast<WKWebView*>(target).magnification;
+    return static_cast<NSScrollView*>(target).magnification;
+}
+
+void SetMagnification(NSView* target, double factor)
+{
+    if ([target isKindOfClass:[WKWebView class]]) {
+        static_cast<WKWebView*>(target).magnification = factor;
+    }
+    else {
+        static_cast<NSScrollView*>(target).magnification = factor;
+    }
+}
+
+// ピンチを受けられるようにする。テキスト系のNSScrollViewは、既定ではallowsMagnification = NOで、ピンチを受けない
+void AllowMagnification(NSView* target)
+{
+    if ([target isKindOfClass:[WKWebView class]]) {
+        static_cast<WKWebView*>(target).allowsMagnification = YES;
+    }
+    else {
+        static_cast<NSScrollView*>(target).allowsMagnification = YES;
+    }
+}
+
+} // namespace
+
 // プレビューを載せる覆い。中のQLPreviewViewにマウスを渡さず、一覧が透けて見えないよう不透明に塗る。
 // 色は一覧と同じ(設定の背景色)。読み込み中や空のときに、ここが見える。
 @interface _MiataQuickLookShield : NSView
 @end
-@implementation _MiataQuickLookShield
+@implementation _MiataQuickLookShield {
+    BOOL forwarding_; // ピンチ・スクロールを転送している最中(再入を止める)
+}
 - (BOOL)isOpaque { return YES; }
 - (void)drawRect:(NSRect)dirtyRect
 {
@@ -22,6 +76,42 @@
 - (NSView*)hitTest:(NSPoint)point
 {
     return [super hitTest:point] ? self : nil;
+}
+// トラックパッドのピンチ(拡大・縮小)は、ここで受けて、倍率を指定できる中のビュー(FindZoomTarget)へ渡す。
+// QLPreviewView自身はmagnifyWithEvent:を実装していない(渡しても、nextResponder=この覆いへ戻ってくるだけ)ので、
+// 中のビューへ直接渡す。ズームできない種類(別プロセスで描かれる画像・PDFなど)では、これまで通り何もしない。
+// 中のビューが受けずにnextResponderへ戻してきたときも、戻り先はこの覆いなので、forwarding_で再入を止める
+// (止めないと、覆い→中のビュー→覆い…と、無限に再帰する)。
+- (void)magnifyWithEvent:(NSEvent*)event
+{
+    if (forwarding_) return;
+    NSView* target = FindZoomTarget(self);
+    if (!target) return;
+    forwarding_ = YES;
+    AllowMagnification(target);
+    [target magnifyWithEvent:event];
+    forwarding_ = NO;
+}
+// スクロール(トラックパッドの2本指・マウスのホイール)も、同じ理由で覆いが受けるので、プレビューの中へ渡す。
+// 渡す先は、イベントの位置にある、プレビューの中のいちばん奥のビュー(覆いが無ければ、AppKitがそのイベントを届けていた
+// ビュー)で、そこから先は、レスポンダチェーンに任せる。だから、ピンチと違って、ズームできる種類に限らない
+// (WKWebView・NSScrollView・別プロセスのNSRemoteViewなど、種類を問わない)。イベントは、位相(開始・途中・終了・慣性)も
+// 含めて、そのまま渡す。処理されずに戻ってきたときは、ピンチと同じく、forwarding_で再入を止める。
+- (NSView*)contentViewUnder:(NSEvent*)event
+{
+    // hitTest:は、親の座標系の点を取る。覆い自身のhitTest:は、常に自分を返して使えないので、NSViewの実装(super)を使う
+    NSPoint point = [self.superview convertPoint:event.locationInWindow fromView:nil];
+    NSView* hit = [super hitTest:point];
+    return hit == self ? nil : hit;
+}
+- (void)scrollWheel:(NSEvent*)event
+{
+    if (forwarding_) return;
+    NSView* target = [self contentViewUnder:event];
+    if (!target) return;
+    forwarding_ = YES;
+    [target scrollWheel:event];
+    forwarding_ = NO;
 }
 @end
 
@@ -89,6 +179,24 @@ void QuickLookView::SetFile(const std::optional<std::filesystem::path>& path)
         url = [NSURL fileURLWithFileSystemRepresentation:path->c_str() isDirectory:is_directory relativeToURL:nil];
     }
     impl_->preview.previewItem = url;
+}
+
+std::optional<double> QuickLookView::Zoom() const
+{
+    if (!impl_->preview) return std::nullopt;
+    NSView* target = FindZoomTarget(impl_->preview);
+    if (!target) return std::nullopt;
+    return Magnification(target);
+}
+
+std::optional<double> QuickLookView::SetZoom(double factor)
+{
+    if (!impl_->preview) return std::nullopt;
+    NSView* target = FindZoomTarget(impl_->preview);
+    if (!target) return std::nullopt;
+    SetMagnification(target, std::clamp(factor, kMinZoom, kMaxZoom));
+    // 中のビューが、さらに範囲を狭めることがあるので、実際になった倍率を読み戻す
+    return Magnification(target);
 }
 
 } // namespace miata::views

@@ -33,6 +33,7 @@ if (APPLE)
     target_link_libraries(app
         "-framework Cocoa"
         "-framework Quartz"
+        "-framework WebKit"
         "-framework AudioToolbox"
     )
 
