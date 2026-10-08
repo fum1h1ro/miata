@@ -62,7 +62,7 @@ void AllowMagnification(NSView* target)
 @interface _MiataQuickLookShield : NSView
 @end
 @implementation _MiataQuickLookShield {
-    BOOL forwarding_; // ピンチを転送している最中(再入を止める)
+    BOOL forwarding_; // ピンチ・スクロールを転送している最中(再入を止める)
 }
 - (BOOL)isOpaque { return YES; }
 - (void)drawRect:(NSRect)dirtyRect
@@ -90,6 +90,27 @@ void AllowMagnification(NSView* target)
     forwarding_ = YES;
     AllowMagnification(target);
     [target magnifyWithEvent:event];
+    forwarding_ = NO;
+}
+// スクロール(トラックパッドの2本指・マウスのホイール)も、同じ理由で覆いが受けるので、プレビューの中へ渡す。
+// 渡す先は、イベントの位置にある、プレビューの中のいちばん奥のビュー(覆いが無ければ、AppKitがそのイベントを届けていた
+// ビュー)で、そこから先は、レスポンダチェーンに任せる。だから、ピンチと違って、ズームできる種類に限らない
+// (WKWebView・NSScrollView・別プロセスのNSRemoteViewなど、種類を問わない)。イベントは、位相(開始・途中・終了・慣性)も
+// 含めて、そのまま渡す。処理されずに戻ってきたときは、ピンチと同じく、forwarding_で再入を止める。
+- (NSView*)contentViewUnder:(NSEvent*)event
+{
+    // hitTest:は、親の座標系の点を取る。覆い自身のhitTest:は、常に自分を返して使えないので、NSViewの実装(super)を使う
+    NSPoint point = [self.superview convertPoint:event.locationInWindow fromView:nil];
+    NSView* hit = [super hitTest:point];
+    return hit == self ? nil : hit;
+}
+- (void)scrollWheel:(NSEvent*)event
+{
+    if (forwarding_) return;
+    NSView* target = [self contentViewUnder:event];
+    if (!target) return;
+    forwarding_ = YES;
+    [target scrollWheel:event];
     forwarding_ = NO;
 }
 @end
