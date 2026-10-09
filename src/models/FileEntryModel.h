@@ -71,6 +71,9 @@ namespace miata::models {
         }
         // Finderのエイリアスか(シンボリックリンクは含まない。リンク先は見ない)。呼ぶたびにファイルシステムを見る(1回 2µs ほど)
         bool IsAlias() const;
+        // ダウンロード前のファイル(クラウドストレージのプレースホルダ)か。呼ぶたびにファイルシステムを見る(1回 1〜3µs ほど)。
+        // フォルダにも付くことがあるが、意味が違う(中身の一覧をまだ取っていない)ので、一覧の表示は、ファイルにだけ使う
+        bool IsDataless() const;
         inline bool IsMarked() const
         {
             return flags_.is(flags::marked);

@@ -20,6 +20,7 @@ extern "C" {
     X(FilterMatch, filter_match) \
     X(Symlink, symlink) \
     X(Alias, alias) \
+    X(Cloud, cloud) \
 
 
 

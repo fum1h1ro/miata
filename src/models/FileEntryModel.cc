@@ -33,6 +33,11 @@ namespace miata::models {
         return pl_is_alias_file(raw_.path());
     }
 
+    bool FileEntryModel::IsDataless() const
+    {
+        return pl_is_dataless_file(raw_.path());
+    }
+
     std::string FileEntryModel::format_time(const std::filesystem::file_time_type& time)
     {
         auto sys_time = std::chrono::file_clock::to_sys(time);

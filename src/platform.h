@@ -180,6 +180,13 @@ std::expected<void, miata::FileError> pl_trash_file_via_finder(const std::filesy
 // リンク先は見ない(壊れたエイリアスでも true)。調べられないとき(存在しない・権限が無い・Finder情報を持たないボリューム)は false。
 bool pl_is_alias_file(const std::filesystem::path& path);
 
+// pathが、ダウンロード前のファイル(クラウドストレージのプレースホルダ。大きさなどは分かるが、中身がローカルに無い)か。
+// Dropbox・iCloud Driveなどのファイルプロバイダの中で、OSがファイルに立てる SF_DATALESS(st_flags)を見る。
+// メタデータを読むだけなので、ダウンロードは起きない(実測)。中身を読む操作(開く・Quick Look・コピー)では起きる(OSの仕組み。未確認)。
+// シンボリックリンクはリンクそのものを見る(ローカルのリンクに、この印は付かない。実測)。フォルダにも付くことがあるが、
+// 意味が違う(中身の一覧をまだ取っていない。一覧すると外れる)。調べられないとき(存在しない・権限が無い)は false。
+bool pl_is_dataless_file(const std::filesystem::path& path);
+
 // ファイル1つをコピーする(copyfile(3))。Finderのコピーと同じく、中身に加えて、更新日時・権限・拡張属性・ACLも引き継ぐ。
 // srcがシンボリックリンクなら、たどらずに、リンクそのものを写す(壊れたリンクも写せる)。APFSの同じボリュームの中では、
 // クローン(中身を共有する、瞬間のコピー)になる(別のボリュームやAPFS以外では、普通のコピーに戻る)。
