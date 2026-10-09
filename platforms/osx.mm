@@ -725,6 +725,16 @@ bool pl_is_alias_file(const std::filesystem::path& path)
     return (buffer.finder_info[8] & 0x80) != 0;
 }
 
+bool pl_is_dataless_file(const std::filesystem::path& path)
+{
+    // ダウンロード前のファイルには、OSが SF_DATALESS(st_flags の 0x40000000。書き込めない合成フラグ)を立てる。lstat は
+    // メタデータだけを読むので、ダウンロードは起きない(実測)。シンボリックリンクは、リンクそのもの(ローカルのリンクに、この印は無い)を見る。
+    // パスは c_str() のバイト列のまま渡す(NSStringにすると、UTF-8として不正な名前でnilになる)
+    struct stat status;
+    if (lstat(path.c_str(), &status) != 0) return false;
+    return (status.st_flags & SF_DATALESS) != 0;
+}
+
 // copyfile(3) の進捗のコールバック: 中身をコピーしている間、1 MiB ごとに来る。COPYFILE_STATE_COPIED は、このファイルの累計。
 // **エラー(COPYFILE_ERR)のときに、CONTINUE を返してはいけない**: man page のとおり、「同じデータの書き込みをやり直す」ことになり、
 // 容量が足りない・書き込み中に先が外れた、のような書き込みの失敗で、終わらなくなる(実測: ENOSPC で、再試行が続いた)。

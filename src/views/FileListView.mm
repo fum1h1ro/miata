@@ -176,18 +176,27 @@ namespace {
 
     // 行の右側の、サイズの欄。フォルダとリンクは、サイズの代わりに札を出す。リンクは、リンク先の種類に関わらず札にする
     // (フォルダへのリンクも <LNK>。壊れたリンクも。行の文字の色は、リンク先がフォルダならフォルダの色のまま)。
-    // シンボリックリンクと、Finderのエイリアスは、別の札で、別の色
+    // シンボリックリンクと、Finderのエイリアスは、別の札で、別の色。クラウドストレージのダウンロード前のファイルは、
+    // サイズが分かっている(大きさを見て、ダウンロードするかを決められる)ので、サイズを残して、その前に <CLOUD> を足す
     struct SizeCell {
-        std::string text;
-        // 札の部分(text 全体)だけの文字色の種類。<LNK> と <ALIAS> だけ。サイズと <DIR> は、行の色のまま(nullopt)
+        std::string tag;   // 札(<DIR> <LNK> <ALIAS> <CLOUD>)。無ければ空
+        std::string size;  // サイズ。フォルダとリンクは空
+        // 札の部分(tag)だけの文字色の種類。<LNK> <ALIAS> <CLOUD> だけ。サイズと <DIR> は、行の色のまま(nullopt)
         std::optional<Config::Color::Type> tag_color;
+        // 欄の文字列。札とサイズが両方あれば、空白で区切る
+        std::string Text() const
+        {
+            return tag.empty() ? size : size.empty() ? tag : tag + " " + size;
+        }
     };
     SizeCell SizeColumn(const models::FileEntryModel& entry)
     {
-        if (entry.IsSymlink()) return {"<LNK>", Config::Color::Type::Symlink};
-        if (entry.IsAlias()) return {"<ALIAS>", Config::Color::Type::Alias};
-        if (entry.IsDirectory()) return {"<DIR>", std::nullopt};
-        return {FormatSize(entry.Size()), std::nullopt};
+        if (entry.IsSymlink()) return {"<LNK>", "", Config::Color::Type::Symlink};
+        if (entry.IsAlias()) return {"<ALIAS>", "", Config::Color::Type::Alias};
+        if (entry.IsDirectory()) return {"<DIR>", "", std::nullopt};
+        auto size = FormatSize(entry.Size());
+        if (entry.IsDataless()) return {"<CLOUD>", size, Config::Color::Type::Cloud};
+        return {"", size, std::nullopt};
     }
 
     // ファイル名/拡張子のソート用。大文字小文字を区別しない(Unicodeの大文字小文字も正しく畳み込む)。
@@ -1087,7 +1096,7 @@ void FileListView::Draw(double min_y, double max_y)
             };
 
             auto cell = SizeColumn(entry_model);
-            NSString* right_text = [NSString stringWithFormat:@"%s  %s", cell.text.c_str(), entry_model.ModifiedTime().c_str()];
+            NSString* right_text = [NSString stringWithFormat:@"%s  %s", cell.Text().c_str(), entry_model.ModifiedTime().c_str()];
             NSSize right_size = [right_text sizeWithAttributes:attrs];
             NSRect right_rect = NSMakeRect(
                 row_rect.origin.x + row_rect.size.width - right_size.width - kPadding,
@@ -1095,11 +1104,11 @@ void FileListView::Draw(double min_y, double max_y)
                 right_size.width, right_size.height
             );
             if (cell.tag_color) {
-                // 札(<LNK> / <ALIAS>)の部分だけ、別の色にする(色で大きさは変わらないので、右寄せの位置は同じ)
+                // 札(<LNK> / <ALIAS> / <CLOUD>)の部分だけ、別の色にする(色で大きさは変わらないので、右寄せの位置は同じ)
                 NSMutableAttributedString* colored = [[NSMutableAttributedString alloc] initWithString:right_text attributes:attrs];
                 [colored addAttribute:NSForegroundColorAttributeName
                                 value:ToNSColor(Config::Color().Get(*cell.tag_color))
-                                range:NSMakeRange(0, [NSString stringWithUTF8String:cell.text.c_str()].length)];
+                                range:NSMakeRange(0, [NSString stringWithUTF8String:cell.tag.c_str()].length)];
                 [colored drawInRect:right_rect];
             }
             else {
