@@ -156,7 +156,24 @@ struct CustomDialogResult {
 
 // ファイルをゴミ箱へ移す。失敗(権限が無い・消えた等)はエラーで返す。権限が無い失敗は
 // FileError::permission_deniedで分かる。
+// クラウドストレージ(下のpl_is_in_file_provider_domain)の中で、権限の失敗になったときは、Finderに頼み直す
+// (pl_trash_file_via_finder)。その場合の失敗の説明は、Finderに頼んだものになる。
 std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path& path);
+
+// pathが、ファイルプロバイダ(Dropbox・Google Driveなど)の領域の中か。サードパーティのファイルプロバイダの領域は、
+// ~/Library/CloudStorage/ の下のフォルダ(Dropbox-Personal など)で、その中身が対象。領域そのもののフォルダと、
+// ~/Library/CloudStorage/ 直下の項目は false。親フォルダを実パスにして比べる(~/Dropbox のような、領域へのシンボリック
+// リンク経由のパスも、領域の中と分かる。path 自身がリンクでも、リンクそのものを見る)。iCloud Drive(~/Library/Mobile Documents)
+// は対象外(未検証)。
+bool pl_is_in_file_provider_domain(const std::filesystem::path& path);
+
+// Finderに頼んで、ファイルをゴミ箱へ移す(Apple Events)。Finder自身の権限で行われる。pl_trash_fileのフォールバック
+// (クラウドストレージの中では、普段の起動のアプリからは、書き込みの許可があっても、ゴミ箱への移動だけが拒否される。
+// CLAUDE.mdの「権限エラーの案内」)。初回は、オートメーションの許可のダイアログが出て、答えるまで呼び出しが止まる
+// (メインスレッドで呼ぶと、その間Miata全体が止まる)。失敗(許可が無い・Finderが応答しない・Finderが断った)はFileErrorで返す。
+// permission_deniedは常にfalse(フルディスクアクセスの案内は当てはまらない。メッセージが、オートメーションの許可を案内する)。
+// シンボリックリンクは頼まずに失敗にする(Finderにファイルのurlで頼むと、返事が来ない。実測)。
+std::expected<void, miata::FileError> pl_trash_file_via_finder(const std::filesystem::path& path);
 
 // pathがFinderのエイリアス(「エイリアスを作成」で作る、リンク先を指す通常のファイル)か。Finder情報の「エイリアス」の印(kIsAlias)を見る。
 // シンボリックリンクは含まない(リンクそのものを見るので、false。NSURLIsAliasFileKeyは、シンボリックリンクにも真を返すので使わない)。

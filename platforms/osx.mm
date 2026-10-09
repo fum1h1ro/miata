@@ -11,15 +11,20 @@
 #include <signal.h>
 #include <spawn.h>
 #include <sys/attr.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <format>
 #include <functional>
 #include <mutex>
+#include <optional>
+#include <string>
 
 static uint16_t ConvertModifierFlags(NSEventModifierFlags flags)
 {
@@ -545,19 +550,163 @@ static miata::FileError ToFileError(NSError* error)
     return result;
 }
 
+// ゴミ箱へ移すファイルのURL。UTF-8として不正な名前(ネットワークボリュームなど)は、NSStringにできない(nilを渡すと
+// 例外になる)ので、バイト列のまま渡せる fileSystemRepresentation 版を使う。正しい名前は fileURLWithPath:
+static NSURL* TrashTargetURL(const std::filesystem::path& path)
+{
+    NSString* ns_path = [NSString stringWithUTF8String:path.c_str()];
+    return ns_path
+        ? [NSURL fileURLWithPath:ns_path]
+        : [NSURL fileURLWithFileSystemRepresentation:path.c_str() isDirectory:NO relativeToURL:nil];
+}
+
+// ---- クラウドストレージ(ファイルプロバイダ)の中のゴミ箱 ----
+//
+// サードパーティのファイルプロバイダ(Dropbox・Google Drive・OneDrive など)の領域は、~/Library/CloudStorage/ の下に
+// 置かれる(macOS 12.3 以降)。その中のファイルは、普段の起動(Dock・Finder・open)のアプリからは、書き込みの許可があっても、
+// ゴミ箱への移動だけが拒否される(実測、macOS 27.0、Dropbox。trashItemAtURL: も NSWorkspace の recycleURLs: も、
+// Cocoa 513 で、sandboxd が「kTCCServiceFileProviderDomain … would require prompt」と断る。作成・リネーム・unlink は通る)。
+// Finder は、自分の権限で移せるので、Apple Events で Finder に頼む。実測の詳細は CLAUDE.md の「権限エラーの案内」。
+
+// parent が、ファイルプロバイダの領域の中か。領域は root(~/Library/CloudStorage の実パス)の直下のフォルダなので、
+// parent が root の下で(root と同じではない)あれば、その領域の中身。root 直下の項目(parent == root)は、領域の外
+static bool IsInsideFileProviderDomain(const std::string& root, const std::string& parent)
+{
+    return !root.empty() && parent.size() > root.size() + 1 &&
+           parent.compare(0, root.size(), root) == 0 && parent[root.size()] == '/';
+}
+
+// 実パス(シンボリックリンクを解決したもの)。解決できなければ nullopt
+static std::optional<std::string> RealPathOf(const std::filesystem::path& path)
+{
+    char resolved[PATH_MAX];
+    if (!realpath(path.c_str(), resolved)) return std::nullopt;
+    return std::string(resolved);
+}
+
+// home をホームとして、path が領域の中か(テストで、偽のホームを使うために、分けてある)
+static bool IsInFileProviderDomainOf(const std::filesystem::path& home, const std::filesystem::path& path)
+{
+    auto root = RealPathOf(home / "Library" / "CloudStorage");
+    if (!root) return false; // CloudStorage が無い(ファイルプロバイダを使っていない)
+    // 親だけを実パスにする。path 自身がシンボリックリンクなら、ゴミ箱の対象はリンクそのもので、リンク先ではない。
+    // ~/Dropbox のような、領域へのシンボリックリンク経由のパスも、親を解決すれば、領域の中と分かる
+    auto parent = RealPathOf(path.parent_path());
+    if (!parent) return false;
+    return IsInsideFileProviderDomain(*root, *parent);
+}
+
+bool pl_is_in_file_provider_domain(const std::filesystem::path& path)
+{
+    @autoreleasepool {
+        NSString* home = NSHomeDirectory();
+        if (home.length == 0) return false;
+        return IsInFileProviderDomainOf(home.fileSystemRepresentation, path);
+    }
+}
+
+// Finder に頼んだ失敗の説明。status は OSStatus(Apple Events の送信の失敗か、Finder の返事の errn)、
+// finder_message は Finder の返事の errs(あれば)。permission_denied は false のまま(フルディスクアクセスの案内は当てはまらない)
+static miata::FileError FinderTrashError(OSStatus status, const std::string& finder_message)
+{
+    miata::FileError result;
+    switch (status) {
+    case errAEEventNotPermitted: // -1743。オートメーションの許可を拒否した(または、あとから外した)
+        result.message = "Finderを操作する許可がありません。システム設定の「プライバシーとセキュリティ」→「オートメーション」で、"
+                         "Miata の「Finder」をオンにしてください";
+        break;
+    case errAETimeout: // -1712
+        result.message = "Finderの応答がありません(ゴミ箱への移動は、続いている可能性があります)";
+        break;
+    case procNotFound: // -600。Finder が起動していない
+        result.message = "Finderが起動していないため、ゴミ箱へ移せません";
+        break;
+    default:
+        result.message = std::format("Finderがゴミ箱への移動を断りました (OSStatus {}{})", static_cast<int>(status),
+                                     finder_message.empty() ? std::string() : ": " + finder_message);
+        break;
+    }
+    return result;
+}
+
+// Finder の返事を待つ秒数の上限。ゴミ箱への移動は、フォルダが大きいと時間がかかる(Finder は続けるので、超えても、移動は
+// 続いている可能性がある)。許可のダイアログの待ちは含まない(送信の前に、別に確かめる)
+static constexpr NSTimeInterval kFinderTrashTimeoutSeconds = 20;
+
+// オートメーションの許可を確かめる関数。テストで差し替える(本物は、初回にダイアログを出す)
+static OSStatus (*g_determine_automation_permission)(const AEAddressDesc*, AEEventClass, AEEventID, Boolean) =
+    AEDeterminePermissionToAutomateTarget;
+
+std::expected<void, miata::FileError> pl_trash_file_via_finder(const std::filesystem::path& path)
+{
+    // シンボリックリンクは頼まない: ファイルの URL で頼むと、Finder の返事が来ない(実測: 絶対パスのファイルへのリンクで、
+    // 20 秒の上限まで待っても。2 回とも)ので、Miata がその間止まってしまう。ファイルプロバイダの領域には、ふつう
+    // シンボリックリンクは無い(Dropbox などは、同期しない)ので、これで足りる
+    struct stat link_status;
+    if (lstat(path.c_str(), &link_status) == 0 && S_ISLNK(link_status.st_mode)) {
+        return std::unexpected(miata::FileError{.message = "シンボリックリンクは、Finderに頼んでも、ゴミ箱へ移せません"});
+    }
+
+    // 呼んだスレッドで、そのまま行う。AEDeterminePermissionToAutomateTarget のヘッダーには「メインスレッドで呼ばない
+    // (ユーザーの答えを待つので、いくらでも長くなりうる)」とあるが、別のスレッドに任せて、呼んだスレッドをセマフォで待たせる案は、
+    // 実際の Apple Events では確かめられなかった(確かめようとしたとき、画面がロックされていて、許可のダイアログに答えられなかった)
+    // ので、採っていない。メインスレッドから呼ぶ版は、許可済みの状態で、ひととおり通った(CLAUDE.md の「権限エラーの案内」)。
+    // 初回の許可のダイアログに答えるまで、呼んだスレッドが止まる(ダイアログは別のプロセスが出す。メインスレッドなら Miata 全体が止まる)。
+    // 待つ間も、実行ループは回らない(実測: 4.7 秒待つ間、5 ms のタイマーが 1 回も発火しなかった)ので、Application::Update は再入しない
+    @autoreleasepool {
+        NSAppleEventDescriptor* finder = [NSAppleEventDescriptor descriptorWithBundleIdentifier:@"com.apple.finder"];
+
+        // 許可を、送信とは別に確かめる。初回は、オートメーションの許可のダイアログが出て、答えるまで返らない
+        // (送信の待ち時間 kFinderTrashTimeoutSeconds に、ユーザーが答えるまでの時間を含めないため。
+        // 拒否されたときの失敗も、ここで分かる)
+        OSStatus permission = g_determine_automation_permission(finder.aeDesc, typeWildCard, typeWildCard, true);
+        if (permission != noErr) return std::unexpected(FinderTrashError(permission, ""));
+
+        // Apple Events のコア(core)の delete。対象はファイルの URL。AppleScript の文字列を組まないので、
+        // 名前に " や \ や UTF-8 として不正なバイトがあっても壊れない
+        NSAppleEventDescriptor* event = [NSAppleEventDescriptor appleEventWithEventClass:kAECoreSuite
+                                                                                 eventID:kAEDelete
+                                                                        targetDescriptor:finder
+                                                                                returnID:kAutoGenerateReturnID
+                                                                           transactionID:kAnyTransactionID];
+        NSData* url_data = [TrashTargetURL(path).absoluteString dataUsingEncoding:NSUTF8StringEncoding];
+        [event setParamDescriptor:[NSAppleEventDescriptor descriptorWithDescriptorType:typeFileURL data:url_data]
+                       forKeyword:keyDirectObject];
+
+        // 返事を待つ。Finder にダイアログ(「すぐに削除しますか」など)を出させない(NeverInteract): 出させると、Miata が
+        // 見えない Finder のダイアログを待つことになり、うっかり完全に削除される恐れもある
+        NSError* error = nil;
+        NSAppleEventDescriptor* reply = [event sendEventWithOptions:NSAppleEventSendWaitForReply | NSAppleEventSendNeverInteract
+                                                            timeout:kFinderTrashTimeoutSeconds
+                                                              error:&error];
+        if (!reply) {
+            OSStatus status = (error && [error.domain isEqualToString:NSOSStatusErrorDomain]) ? static_cast<OSStatus>(error.code) : -1;
+            return std::unexpected(FinderTrashError(status, ""));
+        }
+        // Finder が断ったときは、送信は成功して、返事に errn(番号)と errs(説明)が入る
+        NSAppleEventDescriptor* error_number = [reply paramDescriptorForKeyword:keyErrorNumber];
+        if (error_number && error_number.int32Value != 0) {
+            NSString* error_string = [reply paramDescriptorForKeyword:keyErrorString].stringValue;
+            return std::unexpected(FinderTrashError(static_cast<OSStatus>(error_number.int32Value),
+                                                    error_string.length > 0 ? error_string.UTF8String : ""));
+        }
+        return {};
+    }
+}
+
 std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path& path)
 {
     @autoreleasepool {
-        // UTF-8として不正な名前(ネットワークボリュームなど)は、NSStringにできない(nilを渡すと例外になる)ので、
-        // バイト列のまま渡せる fileSystemRepresentation 版を使う。正しい名前は fileURLWithPath:
-        NSString* ns_path = [NSString stringWithUTF8String:path.c_str()];
-        NSURL* url = ns_path
-            ? [NSURL fileURLWithPath:ns_path]
-            : [NSURL fileURLWithFileSystemRepresentation:path.c_str() isDirectory:NO relativeToURL:nil];
         NSError* error = nil;
-        BOOL ok = [[NSFileManager defaultManager] trashItemAtURL:url resultingItemURL:nil error:&error];
+        BOOL ok = [[NSFileManager defaultManager] trashItemAtURL:TrashTargetURL(path) resultingItemURL:nil error:&error];
         if (!ok) {
-            return std::unexpected(ToFileError(error));
+            miata::FileError failure = ToFileError(error);
+            // クラウドストレージの中は、書き込みの許可があっても、ゴミ箱への移動だけが拒否される(上の説明)。Finder に頼む。
+            // ターミナルから起動した Miata は、この拒否が起きず、ここへは来ない
+            if (failure.permission_denied && pl_is_in_file_provider_domain(path)) {
+                return pl_trash_file_via_finder(path);
+            }
+            return std::unexpected(failure);
         }
         return {};
     }
