@@ -29,6 +29,9 @@ if (APPLE)
     set_target_properties(app PROPERTIES MACOSX_BUNDLE_BUNDLE_NAME "Miata")
     set_target_properties(app PROPERTIES MACOSX_BUNDLE_GUI_IDENTIFIER "com.fum1h1ro.miata")
     set_target_properties(app PROPERTIES MACOSX_BUNDLE_ICON_FILE "AppIcon") # resources/AppIcon.icns(rake icon で作る)
+    # Info.plist は、CMake の既定のテンプレートに NSAppleEventsUsageDescription を足したもの(Finder に Apple Events で
+    # ゴミ箱への移動を頼むときの、許可のダイアログに出る説明。pl_trash_file_via_finder)。resources/ には置かない(.app に同梱されてしまう)
+    set_target_properties(app PROPERTIES MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Info.plist.in")
     target_compile_options(app PRIVATE -fobjc-arc -fmodules -Wconversion)
     target_link_libraries(app
         "-framework Cocoa"
