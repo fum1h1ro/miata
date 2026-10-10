@@ -106,6 +106,7 @@ namespace miata {
             { "set_font", lua_set_font },
             { "set_font_size", lua_set_font_size },
             { "set_history_limit", lua_set_history_limit },
+            { "set_show_icons", lua_set_show_icons },
         };
         script.RegisterFunctions("Miata.config", std::vector<luaL_Reg>(std::begin(config_funcs), std::end(config_funcs)));
     }
@@ -128,6 +129,19 @@ namespace miata {
             return luaL_error(L, "set_history_limit: expected an integer from 0 to %d", kHistoryLimitMax);
         }
         Instance().history_limit_ = static_cast<size_t>(n);
+        return 0;
+    }
+
+    // Miata.config.set_show_icons(bool): ファイル名の頭のアイコンを出すか。真偽値だけ受け付ける
+    // (lua_tobooleanは何でも受けて、0 や "" を真にしてしまうので、型を見る)。違う型は、設定を変えずにエラーにする
+    // (設定の読み込みのエラーとして、起動時のダイアログに出る)。luaL_errorはlongjmpなので、C++のオブジェクトを
+    // 作る前に検証する。
+    int Config::lua_set_show_icons(lua_State* L)
+    {
+        if (lua_type(L, 1) != LUA_TBOOLEAN) {
+            return luaL_error(L, "set_show_icons: expected a boolean (true or false)");
+        }
+        Instance().show_icons_ = lua_toboolean(L, 1) != 0;
         return 0;
     }
 

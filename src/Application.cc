@@ -262,6 +262,7 @@ namespace miata {
             { "history_list", lua_command_history_list },
             { "jump_to", lua_command_jump_to },
             { "set_clipboard", lua_command_set_clipboard },
+            { "toggle_icons", lua_command_toggle_icons },
         };
         script.RegisterFunctions(
             "Miata.command",
@@ -680,6 +681,21 @@ namespace miata {
         auto& app = Application::Instance();
         app.view_->ToggleFocus();
         return 0;
+    }
+
+    // Miata.command.toggle_icons() -> boolean
+    // ファイル名の頭のアイコンの表示を、入り切りする(AFXWの . と同じ)。切り替えた後の状態(出していればtrue)を返す。
+    // Miata.config.set_show_icons で決めた値を書き換えるだけで、保存はしない(起動し直すと、設定が決める)。
+    // 両ペインを描き直す(フォーカスのあるペインは、カーソルの行へスクロールする。マークの変更などと同じ)。
+    int Application::lua_command_toggle_icons(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        const bool show = !Config::ShowIcons();
+        Config::SetShowIcons(show);
+        app.view_->GetFileListView(views::constants::Pane::Left).Redraw();
+        app.view_->GetFileListView(views::constants::Pane::Right).Redraw();
+        lua_pushboolean(L, show);
+        return 1;
     }
 
     int Application::lua_command_mark(lua_State* L)

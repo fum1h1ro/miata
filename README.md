@@ -80,7 +80,7 @@ src/
 ├── FileOperation.cc/h    # コピー・移動（別スレッドで実行。始める前の確認 FileOperationGuard と、進捗の写し FileOperationProgress。AppKit 非依存）
 ├── platform.h            # OS 依存処理の抽象化（`pl_*` 関数。色・フォント・ファイル操作・ディレクトリ監視・プロセス起動等）
 ├── models/               # データモデル（ファイルリスト・ブラウザ状態。フォルダの履歴は PathHistory、ペインの保存用の状態は PaneState。どちらも AppKit 非依存）
-└── views/                # UI レイヤー（View・BrowserView・FileListView・QuickLookView・QueryBar・ProgressOverlay・Dialog。検索・絞り込みの状態は AppKit 非依存の SearchState・FilterState。進捗パネルに何を出すかは AppKit 非依存の ProgressState。名前の照合は NameMatcher）
+└── views/                # UI レイヤー（View・BrowserView・FileListView・QuickLookView・QueryBar・ProgressOverlay・Dialog。検索・絞り込みの状態は AppKit 非依存の SearchState・FilterState。進捗パネルに何を出すかは AppKit 非依存の ProgressState。名前の照合は NameMatcher。ファイル名の頭のアイコンを引いて保持するのは FileIconCache）
 
 platforms/
 └── osx.mm                # platform.h の macOS 実装。AppKit 型はここと views/*.mm にのみ閉じ込める
@@ -115,6 +115,19 @@ assets/
 - OS が、中身がまだ無いファイルに付ける印（`ls -lO` で `dataless` と出るもの）を見る。`~/Library/CloudStorage` の中（Dropbox・Google Drive・OneDrive など）に限らず、この印が付いたファイルのすべてに出る（Dropbox・Google Drive・iCloud Drive で確かめた。iCloud Drive の実体は `~/Library/Mobile Documents/com~apple~CloudDocs`）。サイズは、ダウンロードしたあとの、本来のサイズ。大きなファイルかどうかを見てから、開くかを決められる
 - 印を見るだけでは、ダウンロードは起きない。**中身を読む操作（開く・コピー・プレビュー（Quick Look））では、ダウンロードが始まる**（Miata は、これらの動きを変えない）。プレビューは、カーソルに追従する（開いたまま `<CLOUD>` のファイルへ動かすと、その中身を読む）。ダウンロードが終わって、一覧が更新されると、札は消える
 - フォルダは、いつも `<DIR>`（フォルダにも「中身の一覧をまだ取っていない」印が付くことがあるが、ファイルのダウンロードとは別のことで、フォルダを一覧すると外れる）。リンクとエイリアスは、`<LNK>` / `<ALIAS>` のまま
+
+## ファイル名の頭のアイコン
+
+各行の、ファイル名の頭に、ファイルのアイコン（Finder が出すものと同じ）が出る。サムネイル（画像の中身のプレビュー）ではなく、ファイルの種類のアイコン。
+
+- **Finder と同じアイコン**: 拡張子ごとの種類のアイコン、`.app` の本物のアイコン、フォルダ（`~/Documents` などの特別なフォルダも）、カスタムアイコン、リンクとエイリアスの矢印のバッジ。OS（`NSWorkspace` の `iconForFile:`）が返すものを、そのまま出す。右側の札（`<LNK>` `<ALIAS>` など）は、これまでどおり出る
+- **大きさは、フォントサイズに連動する**（行の高さ −4pt。12pt なら 16pt、20pt なら 24pt）。大きさの設定は無い
+- **入り切り**: 設定 `Miata.config.set_show_icons(true / false)`（**既定は出す**）で、起動時の状態を決める。実行中の切り替えは `Miata.command.toggle_icons()`（`resources/test.lua` では **`.` キー**。AFXW と同じ）。切り替えは保存しない（起動し直すと、設定の値になる）（[設定](#設定)）
+- **ダウンロード前のファイル（`<CLOUD>`）は、ファイルに触れずに、拡張子の種類のアイコンを出す**: 本物のアイコンを引くとき、OS がファイルの中身（カスタムアイコンなど）を読んで、ダウンロードを起こすかもしれないため（確かめていない）。UTF-8 として不正な名前のパスも、種類のアイコンになる
+- アイコンは、フォルダを移ると引き直す。**同じフォルダの中でアイコンが変わっても**（カスタムアイコンを付けた、など）、フォルダを移るまで反映されない。再読み込み（自動リロードも）では、引き直さない
+- **`.app` の実物のアイコンを、そのサイズで初めて描くとき**（`/Applications` を初めて開いたときなど）は、OS が絵を作るのに、見えている行の分、0.3〜0.6 秒かかることがあり、その間、Miata が止まって見える（実測: 60 個で 0.26〜0.6 秒）。OS が作った絵を覚えているので、2 回目以降は速い（次の起動で、60 個が 12〜15ms）。書類のアイコンは、初めてでも、60 行で 20ms ほど
+- 名前の左に列を空けるので、**名前を出せる幅が、アイコンの列（大きさ + 5pt）だけ狭くなる**（長い名前は、その分、早く切れる）。ヘッダーのパスと入力バーの左端は、そのまま（名前とは、アイコンの列の分、ずれる）
+- ドラッグするときの画像は、これまでどおり（先頭の 16 件まで）
 
 ## マウス操作
 
@@ -293,7 +306,7 @@ vim の `/` のような、ファイル名の**インクリメンタル検索**�
 何が上書きされるか:
 
 - **キーバインド**（`Miata.command.bind(mode, keys, fn)`）：同じモード・同じキーの割り当ては、後から登録したもので置き換わる。既定のキーを外すには `Miata.command.unbind(mode, keys)`
-- **色・フォント・履歴の件数**（`Miata.config.*`）：後から代入・設定した値になる
+- **色・フォント・履歴の件数・アイコンの表示**（`Miata.config.*`）：後から代入・設定した値になる
 
 エラーが起きたとき:
 
@@ -899,6 +912,7 @@ Miata.config.color.cloud          = "#7ec8ffff"  -- 一覧の右側の札 <CLOUD
 Miata.config.set_font("フォント名")   -- 未指定時はシステムデフォルトフォント
 Miata.config.set_font_size(14)        -- ファイル一覧の行の高さも連動して変わる
 Miata.config.set_history_limit(300)   -- フォルダの履歴の件数（左右のペイン合わせて）。0〜10000 の整数、既定は 100。0 なら記録しない
+Miata.config.set_show_icons(false)    -- ファイル名の頭のアイコンを出すか。true / false だけ（0 や "true" はエラー）。既定は出す
 ```
 
 色は `"#rrggbb"` か `"#rrggbbaa"`（16 進）で書く。
@@ -908,4 +922,12 @@ Miata.config.set_history_limit(300)   -- フォルダの履歴の件数（左右
 - **タイトルバーと、ダイアログ（`dialog_*`）は、これまでどおり OS のテーマに従う**（`Miata.config.color` は効かない）。
 - 既定の設定（`resources/test.lua`）は、暗い背景に明るい文字の配色。背景を明るくするときは、`normal_text` と `normal_file` も暗い色にする（検索の一致部分の背景 `search_match` / `search_current` と、絞り込みの `filter_match` も、既定は暗い背景用の暗い色なので、明るい色に変える。札の文字 `symlink` / `alias` は、既定が暗い背景用の明るい色なので、暗い色に変える）。
 
-これらは、[`~/.config/miata/init.lua`](#設定ファイルinitlua) に書いて、組み込みの既定の設定を上書きできる。設定は起動時にだけ読み込む（変えたら、起動し直す）。
+これらは、[`~/.config/miata/init.lua`](#設定ファイルinitlua) に書いて、組み込みの既定の設定を上書きできる。設定は起動時にだけ読み込む（変えたら、起動し直す）。**例外は、アイコンの表示**で、実行中に `Miata.command.toggle_icons()`（既定では `.` キー）で切り替えられる（下記）。
+
+#### `toggle_icons`
+
+```lua
+Miata.command.toggle_icons()   -- ファイル名の頭のアイコンの表示を入り切りする。切り替えた後の状態を返す（出していれば true）
+```
+
+[ファイル名の頭のアイコン](#ファイル名の頭のアイコン)を、両ペインで入り切りする。`Miata.config.set_show_icons` で決めた値を書き換えるだけで、保存はしない（起動し直すと、設定の値になる）。画面を操作するコマンドなので、設定の読み込み中（ファイルの最上位）に呼ぶと、落ちずにエラーになる（起動時の状態は `set_show_icons` で決める）。フォーカスのあるペインは、カーソルの行へスクロールする（マークの変更などと同じ）。
