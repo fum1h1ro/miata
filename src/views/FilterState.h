@@ -15,8 +15,8 @@ namespace miata::views {
         MatchKind kind = MatchKind::Substring; // 一致のしかた。Idleは部分一致
         std::string query;     // 語。入力中は入力中の語、確定後は確定した語。Idleは空
         int shown = 0;         // 見えている行の数(語が空なら、全行)
-        int total = 0;         // 絞り込む前の全行の数
-        int hidden_marks = 0;  // 絞り込みで隠れている行の、マーク済みの数
+        int total = 0;         // 絞り込む前の全行の数(隠しファイルを隠しているときは、それを除いた数)
+        int hidden_marks = 0;  // 隠れている行(絞り込みで外れた行、隠しファイルを隠しているときの隠しファイル)の、マーク済みの数
         bool fuzzy_fallback = false; // あいまい一致のはずが、fzfを使えず、部分一致で絞り込んでいる
     };
 

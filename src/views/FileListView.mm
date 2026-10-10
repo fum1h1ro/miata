@@ -505,11 +505,27 @@ void FileListView::ApplyFilter()
     list_.clear();
     std::vector<std::vector<MatchRange>> ranges;
 
+    // 隠しファイルを隠しているとき(既定)は、絞り込みの前に、それを除く。除いた行は、絞り込みで隠れた行と同じく、
+    // row_of_sorted_ が -1 で、list_ に入らない(検索・マークの一括操作・ファイル操作・ドラッグの対象から外れる)。
+    // 判定(FileEntryModel::IsHidden)は、エントリごとに保持される(再スキャンまで、lstat は 1 回)
+    const bool hide_hidden = !Config::ShowHidden();
+    std::vector<bool> eligible(sorted_.size(), true);
+    eligible_count_ = (int)sorted_.size();
+    if (hide_hidden) {
+        for (size_t i = 0; i < sorted_.size(); ++i) {
+            if (sorted_[i]->Model().IsHidden()) {
+                eligible[i] = false;
+                --eligible_count_;
+            }
+        }
+    }
+
     if (filter_.Kind() == MatchKind::Fuzzy && !filter_.Query().empty()) {
         // あいまい一致: fzfの出力の順(得点順)。fzfには、sorted_の順に候補を渡すので、同じ得点の行は、ソートの順になる。
-        // 一致した位置は分からないので、一致箇所(ranges)は空のまま(強調しない)
+        // 一致した位置は分からないので、一致箇所(ranges)は空のまま(強調しない)。隠しファイルも候補には入っている
+        // (候補は、Fetch()ごとに作る。入り切りの切り替えでは作り直さない)ので、ここで外す
         for (size_t index : FuzzySource().FilterIndices(filter_.Query())) {
-            if (index >= sorted_.size()) continue;
+            if (index >= sorted_.size() || !eligible[index]) continue;
             row_of_sorted_[index] = (int)list_.size();
             list_.push_back(sorted_[index]);
         }
@@ -517,12 +533,22 @@ void FileListView::ApplyFilter()
     else {
         NameMatcher matcher(filter_.Query()); // Idleの語は、常に空(FilterState::Query)
         if (matcher.Empty()) {
-            // 絞り込みなし(語が空、または不正なUTF-8): 全行
-            list_ = sorted_;
-            std::iota(row_of_sorted_.begin(), row_of_sorted_.end(), 0);
+            // 絞り込みなし(語が空、または不正なUTF-8): 出してよい行を全部
+            if (eligible_count_ == (int)sorted_.size()) {
+                list_ = sorted_;
+                std::iota(row_of_sorted_.begin(), row_of_sorted_.end(), 0);
+            }
+            else {
+                for (size_t i = 0; i < sorted_.size(); ++i) {
+                    if (!eligible[i]) continue;
+                    row_of_sorted_[i] = (int)list_.size();
+                    list_.push_back(sorted_[i]);
+                }
+            }
         }
         else {
             for (size_t i = 0; i < sorted_.size(); ++i) {
+                if (!eligible[i]) continue;
                 if (auto match = matcher.Match(sorted_[i]->Model().Name())) {
                     row_of_sorted_[i] = (int)list_.size();
                     list_.push_back(sorted_[i]);
@@ -930,8 +956,9 @@ FilterStatus FileListView::SetFilter(const std::string& query, MatchKind kind)
 
 int FileListView::HiddenMarkCount() const
 {
-    // 絞り込んでいなければ(語が空なら全行が出ている)、隠れた行は無い
-    if (!filter_.Active() || filter_.Query().empty()) return 0;
+    // 全行が出ていれば(絞り込んでいない、または全行に一致する。隠しファイルを隠しているときは、隠しファイルが無い)、
+    // 隠れた行は無い。バーの更新のたびに呼ばれるので、全エントリを数えるのは、隠れた行があるときだけにする
+    if (list_.size() == sorted_.size()) return 0;
 
     int count = 0;
     for (size_t i = 0; i < sorted_.size(); ++i) {
@@ -949,9 +976,17 @@ FilterStatus FileListView::GetFilterStatus() const
     // あいまい一致で絞り込んでいる(語がある)のに、fzfを使えていない。fuzzy_source_は、ApplyFilter()が作っている
     status.fuzzy_fallback = filter_.Kind() == MatchKind::Fuzzy && !filter_.Query().empty() && fuzzy_source_ && !fuzzy_source_->UsesFzf();
     status.shown = (int)list_.size();
-    status.total = (int)sorted_.size();
+    // 全行数は、出してよい行(隠しファイルを隠しているときは、それを除く)。「3/10」の 10 が、絞り込む前に見えている行の数になる
+    status.total = eligible_count_;
     status.hidden_marks = HiddenMarkCount();
     return status;
+}
+
+void FileListView::RefreshHidden()
+{
+    // 隠れる行にカーソルがあれば、近くの見える行へ寄る(RefilterAround が、全体の並びでの位置から、ShownRowNear で寄せる)。
+    // 隠れていた行が出るときは、同じファイルに留まる。絞り込みの語・検索の語は、そのまま(ApplyFilter が、それぞれ作り直す)
+    RefilterAround(CursorOrAnchor());
 }
 
 void FileListView::SetBottomInset(double height)

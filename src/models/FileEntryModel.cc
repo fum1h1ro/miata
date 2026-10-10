@@ -38,6 +38,19 @@ namespace miata::models {
         return pl_is_dataless_file(raw_.path());
     }
 
+    bool FileEntryModel::IsHidden() const
+    {
+        if (hidden_ < 0) {
+            // 名前は、元のバイト列(NFCにしたName()ではなく、ファイルシステムの名前)の頭を見る。"." だけの名前は無い。
+            // **値で持つ**: filename() は一時の path を返し、native() が返す参照は、その中を指す。参照で受けると、
+            // 文の終わりで寿命が切れる(AddressSanitizer の stack-use-after-scope で見つかった。通常のビルドでは、たまたま読めていた)
+            const std::string filename = raw_.path().filename().native();
+            const bool dotted = !filename.empty() && filename.front() == '.';
+            hidden_ = (dotted || pl_is_hidden_file(raw_.path())) ? 1 : 0;
+        }
+        return hidden_ != 0;
+    }
+
     std::string FileEntryModel::format_time(const std::filesystem::file_time_type& time)
     {
         auto sys_time = std::chrono::file_clock::to_sys(time);

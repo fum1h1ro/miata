@@ -117,6 +117,19 @@ namespace miata {
             Instance().show_icons_ = show;
         }
 
+        // 隠しファイル(名前の頭が "." のものと、Finderの「隠す」フラグが付いたもの。FileEntryModel::IsHidden)を一覧に出すか。
+        // 既定は隠す(Finderと同じ)。Miata.config.set_show_hidden(bool)で指定する。実行中に切り替えられる
+        // (Miata.command.toggle_hidden)ので、一覧を作るたびに読むこと(構築時にキャッシュしない)。切り替えた後の
+        // 一覧の作り直しは、呼ぶ側がする(Configはビューを知らない)。
+        static inline bool ShowHidden()
+        {
+            return Instance().show_hidden_;
+        }
+        static inline void SetShowHidden(bool show)
+        {
+            Instance().show_hidden_ = show;
+        }
+
         // 背景色(Miata.config.color.background)。alphaは使わず、常に不透明にして返す。半透明で塗ると、
         // 後ろのOSのテーマの色(Lightなら白)が混ざって、OSの設定しだいで見た目が変わってしまうため。
         // 背景を塗る箇所は、Color().Get(...)ではなく必ずこれを使う(alphaの扱いをここに揃える)。
@@ -144,6 +157,8 @@ namespace miata {
         static int lua_set_font_size(lua_State* L);
         static int lua_set_history_limit(lua_State* L);
         static int lua_set_show_icons(lua_State* L);
+        static int lua_set_show_hidden(lua_State* L);
+        static int lua_get_show_hidden(lua_State* L);
 
         static Config* _instance;
         class Color color_;
@@ -151,6 +166,7 @@ namespace miata {
         float font_size_ = 12.0f;
         size_t history_limit_ = 100;
         bool show_icons_ = true;
+        bool show_hidden_ = false;
     };
 }
 

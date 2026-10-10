@@ -247,8 +247,16 @@ namespace miata::views {
         const std::string& FilterQuery() const { return filter_.Query(); }
         // 絞り込みバーに出す内容(語、見えている行数と全行数、隠れているマークの数)
         FilterStatus GetFilterStatus() const;
-        // 絞り込みで隠れている行の、マーク済みの数(絞り込んでいなければ0)
+        // 隠れている行(絞り込みで外れた行と、隠しファイルを隠しているときの隠しファイル)の、マーク済みの数
+        // (隠れた行が無ければ0)。ファイル操作の対象は、見えているマークだけなので、これは「対象外のマーク」の数
         int HiddenMarkCount() const;
+
+        // --- 隠しファイル(Config::ShowHidden が偽のとき、隠しファイルを一覧に出さない) ---
+        // 隠しファイル(FileEntryModel::IsHidden)の表示の入り切りが変わった後に呼ぶ(Luaのtoggle_hidden。View::RefreshHiddenFiles
+        // 経由)。一覧を作り直して、カーソルを、同じファイル(隠れたら、近くの見える行)へ寄せる。隠れた行は、絞り込みで外れた行と
+        // 同じ扱い(list_に入らないので、検索・マークの一括操作・ファイル操作・ドラッグ・Luaのcursor_entry / marked_entriesの
+        // 対象から外れる)。絞り込みの語と検索の語は、そのまま。Config::ShowHidden() は、一覧を作るとき(ApplyFilter)に読む
+        void RefreshHidden();
 
         // 一覧の下端に空ける高さ(pt)。一覧(スクロール部分)がこの分だけ縮む。空いた帯には、親(BrowserView)が
         // このペインの入力バー(検索・絞り込み)を重ねる(反対側のペインは縮まない)。0で空けない。縮んでカーソルが
@@ -321,8 +329,12 @@ namespace miata::views {
         std::vector<FileEntryView> entries_;
         // 絞り込む前の全エントリ(ソート済み)。entries_の要素を指す。Fetch()で作り、語が変わるたびに、ここから選び直す
         std::vector<FileEntryView*> sorted_;
-        // sorted_[i]がlist_の何行目か(絞り込みで隠れていれば-1)。sorted_と同じ長さ
+        // sorted_[i]がlist_の何行目か(絞り込みで隠れていれば-1。隠しファイルを隠しているときの、隠しファイルも-1)。
+        // sorted_と同じ長さ
         std::vector<int> row_of_sorted_;
+        // 絞り込む前の、出してよいエントリの数(隠しファイルを隠しているときは、それを除いた数。出しているときは、
+        // sorted_.size())。絞り込みバーの「見えている行数/全行数」の、全行数。ApplyFilter()が作る
+        int eligible_count_ = 0;
         // あいまい一致のfzfの窓口。sorted_の名前を候補にする(sorted_と同じ並びの添字を返す)。Fetch()で捨てて、必要になったら作る
         std::unique_ptr<FzfFilter> fuzzy_source_;
         // 絞り込みと検索の状態。一致箇所とヒットは、list_(の添字)を使うので、list_を作り直すApplyFilter()のたびに作り直す。
