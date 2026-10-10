@@ -157,6 +157,7 @@ namespace miata {
         static int lua_set_font_size(lua_State* L);
         static int lua_set_history_limit(lua_State* L);
         static int lua_set_show_icons(lua_State* L);
+        static int lua_get_show_icons(lua_State* L);
         static int lua_set_show_hidden(lua_State* L);
         static int lua_get_show_hidden(lua_State* L);
 
