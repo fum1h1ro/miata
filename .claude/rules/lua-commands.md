@@ -1,7 +1,6 @@
 ---
 paths:
   - "resources/base.lua"
-  - "resources/test.lua"
 ---
 
 # Lua のコマンド（状況の取得・ファイルを開く・まとめてマーク・ファイルの操作）

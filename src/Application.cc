@@ -564,10 +564,12 @@ namespace miata {
         return !name.empty() && name != "." && name != "..";
     }
 
-    static TransferCheck CheckTransfer(FileOpType type, const std::vector<std::filesystem::path>& sources, const std::filesystem::path& dest_dir)
+    static TransferCheck CheckTransfer(FileOpType type, const std::vector<std::filesystem::path>& sources, const std::filesystem::path& dest_arg)
     {
         TransferCheck check;
         const char* label = FileOpLabel(type);
+        // 宛先も、末尾の "/" を落とす(ペインの表示しているパス(末尾に "/" が無い)と比べて、更新するペインを引くため)
+        const auto dest_dir = WithoutTrailingSlash(dest_arg);
 
         // 先が、存在するフォルダであること(でなければ、どの項目も置けない)
         std::error_code ec;
@@ -611,12 +613,12 @@ namespace miata {
         return check;
     }
 
-    bool Application::StartTransfer(FileOpType type, std::vector<std::filesystem::path> sources, const std::filesystem::path& dest_dir, bool overwrite)
+    bool Application::StartTransfer(FileOpType type, std::vector<std::filesystem::path> sources, const std::filesystem::path& dest_arg, bool overwrite)
     {
         if (sources.empty()) return false;
 
         // 断るなら、ダイアログで知らせる(check_transfer を通さずに呼ばれたときも、データは失われない)
-        auto check = CheckTransfer(type, sources, dest_dir);
+        auto check = CheckTransfer(type, sources, dest_arg);
         if (!check.what.empty()) {
             view_->ReportFileError(check.what, FileError{.message = check.reason});
             return false;
@@ -624,7 +626,7 @@ namespace miata {
 
         // 末尾の "/" を落としたパスで始める(確認も、このパスで通っている)
         for (auto& src : sources) src = WithoutTrailingSlash(std::move(src));
-        file_operations_.Start(type, std::move(sources), dest_dir, overwrite);
+        file_operations_.Start(type, std::move(sources), WithoutTrailingSlash(dest_arg), overwrite);
         return true;
     }
 

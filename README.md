@@ -339,10 +339,10 @@ Miata.command.bind("n", "<C-d>", function()
     Miata.command.navigate_down(10)        -- Ctrl+d
 end)
 Miata.command.bind("n", "<S-k>", function()
-    Miata.command.reload()                 -- Shift+k
+    Miata.command.navigate_up(5)           -- Shift+k
 end)
-Miata.command.bind("n", "dd", function()
-    Miata.command.trash(Miata.command.marked_entries())   -- d を 2 回（確認なしで、マーク済みをゴミ箱へ）
+Miata.command.bind("n", "gs", function()
+    Miata.command.sort("size", false)      -- g のあとに s（キー列。サイズ順に並べる）
 end)
 Miata.command.bind("nd", "<enter>", function()
     Miata.command.navigate_ok()            -- Enter（一覧でもダイアログでも）
