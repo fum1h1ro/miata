@@ -80,6 +80,24 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 
 C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の `config_commands[]`/`view_commands[]`）と `Miata._private.*`（同 `privates[]`）の名前空間で Lua 関数を登録し、スクリプト側から呼び出す。ダイアログはコルーチンで非同期制御される（後述）。
 
+## 横断的な約束事（どの機能にも効く）
+
+複数の機能が同居するファイル（`Application.cc`・`osx.mm`・`FileListView.mm` ほか）を触るときも効く規則。根拠と細部は、括弧内のルール（食い違ったら、ルールが正）。
+
+- **`luaL_error` は longjmp**（Lua は C としてビルドされている）：デストラクタを持つオブジェクト（`std::string` など）を作った後に呼ばない。引数を検証して `luaL_error` を呼んでから、オブジェクトを作る。（`lua-commands.md`・`history-panes.md`）
+- **ユーザー操作の移動は `TryJumpTo` / `NavigateToParent`**：`JumpTo` は、読めないと例外を投げる（コードベースに `catch` は無い）ので、起動時（ホーム）とテスト専用。同じディレクトリを再スキャンするだけなら `View::ReloadList(model, cursor_to)`（`JumpTo(Path())` ではない。カーソルとマークが消える）。（`permissions-signing.md`・`file-list.md`）
+- **ファイル操作・移動の失敗は、必ず `View::ReportFileError` に通す**（権限の失敗に、許可のしかたの案内が付く）。例外は、起動時のペインの復元（案内を出さず、黙ってホームのまま。直さない）。（`permissions-signing.md`・`history-panes.md`）
+- **マークを外して画面にも反映するなら `UnmarkPaths`**（モデルの `Mark()` はビューに通知しない）。コピー・移動・ゴミ箱・リネームの対象は「見えているマーク」（`FileListView::MarkedEntries()`）で、完了後に外すのは、操作したファイルのマークだけ。（`file-list.md`・`search-filter.md`）
+- **エントリ（`FileEntryModel*`）のポインタを持ち越さない**：再スキャンで旧エントリは、通知より前に破棄される。持つのはパス。Lua に渡すのも、呼んだ時点の値の写し。（`file-list.md`・`lua-commands.md`）
+- **名前は `Name()`、パスは `Path()`**：`Name()` は NFC で、UTF-8 として不正なバイトは修復済み（表示・並べ替え・検索用）。`Path()` は元のバイト列（コピー・移動・ゴミ箱・OS の呼び出し用）。外から来た文字列を NSString にするときは、`RepairUtf8` に通す（不正だと nil になり、`labelWithString:nil` などで落ちる）。（`file-list.md`）
+- **空の一覧に備える**：カーソル下は `CurrentOrNull()`（空なら nullptr）か `CurrentPath()`。範囲外を読む入口を作らない（絞り込みで 0 行になるのは、日常の状態）。（`file-list.md`）
+- **`std::filesystem` は、外部で変更されうる処理ではエラーコード版を使う**（例外版は、消えたディレクトリなどで落ちる）。失敗は `std::expected` / `FileError` で返す。（`file-list.md`・`permissions-signing.md`）
+- **新しいビューは、`acceptsFirstResponder` を YES にしない**：クリックで first responder を奪うと、キー入力（`MiataRootView::keyDown:`）が届かなくなる。入力欄（`NSTextField`）が first responder の間は `keyDown:` が呼ばれないので、Enter / Esc / ↑↓ は delegate の `doCommandBySelector:` で横取りする。（`dialog.md`・`search-filter.md`・`quicklook.md`）
+- **ダイアログは `NSAlert` / `runModal` を使わない**（非モーダルな `NSView`。`DialogPanel`）。Lua からは、コルーチンの中で `dialog_*` を呼び、結果を待つ。（`dialog.md`）
+- **色の名前（`Config::Color`）を足したら、描く側と `resources/test.lua` の既定値を同時に直す**（既定値が無いと、不透明な黒で描かれる。古いアプリが新しい `test.lua` を読むと、未知の色名のエラーで、後ろの設定が実行されない）。背景は `Config::Background()`（alpha 1）で、OS の色は使わない（ダイアログだけ OS の色のまま）。（`config.md`・`file-list.md`）
+- **新しい `resources/` のファイルは、cmake の再生成が要る**（`GLOB_RECURSE` は構成時にしか評価されない。`rake build:*` は再生成する。`make` を直接使うときだけ注意）。（`permissions-signing.md`）
+- **テストは、リポジトリの外（スクラッチ）に作る**：実物の `Application::Initialize()` を模擬 `.app` から起動し、合成した `NSEvent` を送る。実装を 1 か所ずつ壊して、検出できることも確かめる（変異テスト）。各機能の検証の記録とハーネスの罠は、`.claude/notes/`。
+
 ## C++ から Lua へ関数を登録する手順
 
 1. `Application.h` の `Application` クラスに `static int lua_command_XXX(lua_State* L)`（`Miata.command.*` 用）または `static int lua_private_XXX(lua_State* L)`（`Miata._private.*` 用）を追加
@@ -108,6 +126,6 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 
 - Lua に公開するコマンドやダイアログ種別を追加・変更した場合は、その都度 `README.md` の「Lua スクリプト API」セクション（引数・戻り値・注意点）も更新すること。
 - アーキテクチャに影響する変更（新しいダイアログ種別の追加、`pl_*` の新設、ディレクトリ構成の変更など）があれば、関係する `.claude/rules/*.md` を更新する。ファイルの構成や、上の「アーキテクチャ概要」の表が変わるときは、この CLAUDE.md の表も直す。
-- **この CLAUDE.md は増やさない**（200 行以内を目安にする）。新しい機能の設計メモ（決定・罠・限界）は、`.claude/rules/<機能>.md` に書き（`paths:` には、その機能に固有のファイルを挙げる）、この CLAUDE.md には索引の 1 行だけ足す。`Application.cc` など複数の機能が同居するファイルを `paths:` に入れない（触るたびに大半が載る）。
+- **この CLAUDE.md は増やさない**（200 行以内を目安にする）。新しい機能の設計メモ（決定・罠・限界）は、`.claude/rules/<機能>.md` に書き（`paths:` には、その機能に固有のファイルを挙げる）、この CLAUDE.md には索引の 1 行だけ足す（どの機能にも効く規則だけは、「横断的な約束事」に 1 行足す）。`Application.cc` など複数の機能が同居するファイルを `paths:` に入れない（触るたびに大半が載る）。
 - テストの件数・変異テストの統計・実測のログ・実機未確認の一覧は、`.claude/notes/` に書く（CLAUDE.md と rules には書かない）。経緯（「以前は…」）も、PR とコミットメッセージに任せる。
 - `.claude/rules/` の下に、`paths:` の無いファイルや、記録用のサブフォルダを作らない（`.md` は再帰的に探され、`paths:` が無ければ起動時に全部読み込まれる）。`paths:` の YAML を壊したときも同じ（黙って「`paths` なし」として扱われる）。
