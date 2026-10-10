@@ -129,8 +129,21 @@ end)
 Miata.command.bind("n", "r", function()
     Miata.command.rename()
 end)
+-- dd: マーク済み(見えている行のマークだけ)をゴミ箱へ。確認する。マークが無ければ何もしない(カーソル下の1件にはしない)。
+-- 確認の前に対象を決める(marked_entries)。確認の後の trash は、そのパスに対して動く(ダイアログの間に一覧が変わっても、
+-- 確認したファイルが対象)。trash は配列を渡せる(1回で、再読み込みも失敗のダイアログも1回にまとまる)
 Miata.command.bind("n", "dd", function()
-    Miata.command.delete_marked()
+    local list = Miata.command.marked_entries()
+    if #list == 0 then return end
+    local message = #list .. "件をゴミ箱に移動しますか？"
+    -- 絞り込みで隠れているマークは、対象にならない(見えていないものを、うっかり消さないため)。件数を知らせる
+    local hidden = Miata.command.hidden_mark_count()
+    if hidden > 0 then
+        message = message .. "\n(絞り込みで隠れているマーク " .. hidden .. " 件は対象外です)"
+    end
+    if Miata.command.dialog_yes_no(message, false, "ゴミ箱へ", "キャンセル") then
+        Miata.command.trash(list)
+    end
 end)
 Miata.command.bind("n", "<C-r>", function()
     Miata.command.reload()

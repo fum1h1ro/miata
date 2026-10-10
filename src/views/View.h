@@ -61,6 +61,10 @@ namespace miata::views {
         // (FileListView::Reload参照。cursor_toの意味も同じ)。ファイル操作の後始末用で、
         // 失敗(ディレクトリが読めない等)しても一覧が変わらないだけなので呼び出し側には返さない。
         void ReloadList(const models::FileListModel& list, std::optional<std::filesystem::path> cursor_to = std::nullopt);
+        // dirを表示しているペイン(左右の両方でありうる)を、ReloadListと同じように再スキャンして最新にする。どのペインもdirを
+        // 表示していなければ、何もしない。ファイル操作(ゴミ箱・リネームなど)の後始末用: 操作の対象は、Luaから渡されたパスで
+        // 決まるので、どのペインが関係するかは、モデルではなく、表示しているパスで引く。
+        void ReloadDirectory(const std::filesystem::path& dir, std::optional<std::filesystem::path> cursor_to = std::nullopt);
         // listを表示しているペインの、pathsのファイルのマークを外して、再描画する(FileListView::UnmarkPaths参照)。
         void UnmarkPaths(const models::FileListModel& list, const std::vector<std::filesystem::path>& paths);
 

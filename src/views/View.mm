@@ -324,6 +324,15 @@ namespace miata::views {
         }
     }
 
+    void View::ReloadDirectory(const std::filesystem::path& dir, std::optional<std::filesystem::path> cursor_to)
+    {
+        for (auto pane : {constants::Pane::Left, constants::Pane::Right}) {
+            if (GetList(pane).Path() == dir) {
+                (void)GetFileListView(pane).Reload(cursor_to);
+            }
+        }
+    }
+
     void View::UnmarkPaths(const models::FileListModel& list, const std::vector<std::filesystem::path>& paths)
     {
         if (auto* view = FindFileListView(list)) {

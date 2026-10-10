@@ -41,7 +41,9 @@ namespace miata {
         void Resize(int width, int height);
         std::expected<KeyBindingMap, std::string> GetKeyBinding(const char map_c);
         void StartFileOperation(FileOpType type);
-        void DeleteMarked();
+        // pathsを、ゴミ箱へ移す(同期。確認は出さない)。移した後に、そのフォルダを表示しているペインを再スキャンして、
+        // 失敗は、まとめて1回のダイアログで知らせる。全部移せたらtrue(pathsが空ならfalse)
+        bool TrashPaths(const std::vector<std::filesystem::path>& paths);
         void OnFileOperationCompleted(FileOperationCompleted& event);
 
 
@@ -67,11 +69,12 @@ namespace miata {
         static int lua_command_copy_marked(lua_State* L);
         static int lua_command_move_marked(lua_State* L);
         static int lua_command_make_directory(lua_State* L);
-        static int lua_command_delete_marked(lua_State* L);
+        static int lua_command_trash(lua_State* L);
         static int lua_command_current_pane(lua_State* L);
         static int lua_command_pane_path(lua_State* L);
         static int lua_command_cursor_entry(lua_State* L);
         static int lua_command_marked_entries(lua_State* L);
+        static int lua_command_hidden_mark_count(lua_State* L);
         static int lua_command_current_sort(lua_State* L);
         static int lua_command_reload(lua_State* L);
         static int lua_command_quick_look(lua_State* L);

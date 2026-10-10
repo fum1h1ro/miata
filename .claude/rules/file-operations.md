@@ -12,7 +12,7 @@ paths:
 
 ## ファイル操作（コピー・移動）
 
-`Miata.command.copy_marked()` / `move_marked()` → `Application::StartFileOperation`（`Application.cc`）→ `FileOperationManager::Start`（`FileOperation.h/.cc`）→ 裏スレッドの `Run`。完了は、毎ティックの `FileOperationManager::Update()` が拾って、メインスレッドでコールバック（`Application::OnFileOperationCompleted`）を呼ぶ。そこで、進捗パネルへの完了の通知（`View::FinishProgress`）・一覧の再スキャン・マークの解除・失敗の通知（`View::ReportFileError`）をする。**成功したときのダイアログ（以前は「完了しました」）は出さない**：進捗パネルが「完了」を見せる。上書きかスキップかは、スレッドを始める前に、操作全体で 1 つ決まる（`bool overwrite`。実行中に画面の返事は待たない）。ゴミ箱（`DeleteMarked`）はメインスレッドで同期、他アプリへのドラッグ（`BeginDrag`）は相手が処理するので、どちらもここを通らない。
+`Miata.command.copy_marked()` / `move_marked()` → `Application::StartFileOperation`（`Application.cc`）→ `FileOperationManager::Start`（`FileOperation.h/.cc`）→ 裏スレッドの `Run`。完了は、毎ティックの `FileOperationManager::Update()` が拾って、メインスレッドでコールバック（`Application::OnFileOperationCompleted`）を呼ぶ。そこで、進捗パネルへの完了の通知（`View::FinishProgress`）・一覧の再スキャン・マークの解除・失敗の通知（`View::ReportFileError`）をする。**成功したときのダイアログ（以前は「完了しました」）は出さない**：進捗パネルが「完了」を見せる。上書きかスキップかは、スレッドを始める前に、操作全体で 1 つ決まる（`bool overwrite`。実行中に画面の返事は待たない）。ゴミ箱（Lua の `trash` → `Application::TrashPaths`）はメインスレッドで同期、他アプリへのドラッグ（`BeginDrag`）は相手が処理するので、どちらもここを通らない。
 
 ### 始める前に断る（`FileOperationGuard`）
 

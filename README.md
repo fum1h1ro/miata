@@ -342,7 +342,7 @@ Miata.command.bind("n", "<S-k>", function()
     Miata.command.make_folder()            -- Shift+k
 end)
 Miata.command.bind("n", "dd", function()
-    Miata.command.delete_marked()          -- d を 2 回
+    Miata.command.trash(Miata.command.marked_entries())   -- d を 2 回（確認なしで、マーク済みをゴミ箱へ）
 end)
 Miata.command.bind("nd", "<enter>", function()
     Miata.command.navigate_ok()            -- Enter（一覧でもダイアログでも）
@@ -412,6 +412,7 @@ Miata.command.current_pane()     -- カーソルのあるペイン: "left" ま�
 Miata.command.pane_path([pane])       -- ペインのいるフォルダの絶対パス（文字列）
 Miata.command.cursor_entry([pane])    -- カーソル下のエントリ（テーブル）。一覧が空なら nil
 Miata.command.marked_entries([pane])  -- マーク済みのエントリの配列（画面の並び順。絞り込み中は、見えている行のマークだけ）。無ければ空の配列
+Miata.command.hidden_mark_count([pane]) -- 絞り込みで隠れている行のマークの数（絞り込んでいなければ 0）
 Miata.command.current_sort([pane])    -- ソートの状態: 基準, 降順か（2つの値）
 ```
 
@@ -427,7 +428,8 @@ Miata.command.current_sort([pane])    -- ソートの状態: 基準, 降順か�
 
 - `pane_path`: 末尾に `/` は付かない（ルートだけ `"/"`）。`jump_to` にそのまま渡せる
 - `cursor_entry`: 一覧が空（ファイルもフォルダも 1 つも無いフォルダ、または[絞り込み](#絞り込み)で 0 件）のときは `nil`
-- `marked_entries`: 絞り込み中は、**見えている行のマークだけ**（隠れた行のマークは含まない）。**マークが無ければ、カーソル下の 1 件にはならず、空の配列**（`copy_marked` `move_marked` は、マークが無ければカーソル下の 1 件を対象にするが、それとは違う。`delete_marked` は、マークが無ければ何もしない）。同じ対象にしたいときは、`cursor_entry` と組み合わせる（[ファイルを開く](#ファイルを開く)の例の `targets()`）。並びは、ソートに従った画面の並び順で、マークした順ではない
+- `marked_entries`: 絞り込み中は、**見えている行のマークだけ**（隠れた行のマークは含まない）。**マークが無ければ、カーソル下の 1 件にはならず、空の配列**（既定のキーの `c` `m` は、マークが無ければカーソル下の 1 件を対象にするが、それは `resources/test.lua` が `cursor_entry` と組み合わせているため。`dd` は、マークが無ければ何もしない）。同じ対象にしたいときは、`cursor_entry` と組み合わせる（[ファイルを開く](#ファイルを開く)の例の `targets()`）。並びは、ソートに従った画面の並び順で、マークした順ではない
+- `hidden_mark_count`: `marked_entries` に入らない、隠れた行のマークの数。ゴミ箱の確認に「絞り込みで隠れているマーク N 件は対象外です」と添えるときに使う（`resources/test.lua` の `dd`）
 - `current_sort`: `key, reverse` の 2 つの値を返す（`key` は `"name"` / `"size"` / `"mtime"` / `"ext"`、`reverse` は降順なら `true`）。`sort(key, reverse)` にそのまま渡せる（`Miata.command.sort(Miata.command.current_sort())` は何も変えない）。ただし `sort` は、カーソルのあるペインだけに効く
 
 これらを使った例は、[ファイルを開く](#ファイルを開く)を参照。
@@ -616,14 +618,46 @@ Miata.command.unmark()              -- マーク解除
 Miata.command.toggle_mark()         -- マークのトグル
 Miata.command.copy_marked()         -- マーク済み(無ければカーソル位置)を反対側のペインへコピー。絞り込み中は、見えているマークだけが対象
 Miata.command.move_marked()         -- 同、移動。コピー/移動とも、名前が衝突する場合は上書き確認ダイアログを出す。同じフォルダへの操作などは、始める前に断る(下記)
-Miata.command.delete_marked()       -- マーク済みをゴミ箱へ移動(確認ダイアログあり)。絞り込み中は、見えているマークだけが対象
+Miata.command.trash(target)         -- target(パス・エントリ・それらの配列)をゴミ箱へ移動(確認は出さない。下記)
 Miata.command.reload(pane)          -- ペインのディレクトリを再読み込み(カーソルとマークは維持)。pane省略で現在のペイン
 Miata.command.make_directory(name)  -- 現在のペインに新規フォルダを作成
 Miata.command.make_folder()         -- 名前を入力ダイアログで聞いてから make_directory を呼ぶ
 Miata.command.sort(key, reverse)    -- key: "name"/"size"/"mtime"/"ext"。カーソルのあるペインのソート。ペインごとに保存され、次回の起動で戻る。今の状態は current_sort で取れる（状況の取得）
 ```
 
-ファイルを追加・削除・改名するこれらの操作（`copy_marked` / `move_marked` / `delete_marked` / `make_directory` / `rename`）の後も、一覧はカーソル位置とマークを維持したまま最新になる（`reload` と同じ仕組み）。カーソルのファイルが移動・削除で消えた場合は、次に残っているファイルへ寄る。`rename` のカーソルは新しい名前に付いていく。移動・削除に失敗したファイルはマークが残るので、そのまま再実行できる。`copy_marked` の後に解除されるのは、コピーしたファイルのマークだけ（操作の最中に付けたマークや、[絞り込み](#絞り込み)で隠れているマークは残る）。コピー・移動・ゴミ箱・リネームの対象は、絞り込み中は、見えているマークだけ。
+ファイルを追加・削除・改名するこれらの操作（`copy_marked` / `move_marked` / `trash` / `make_directory` / `rename`）の後も、一覧はカーソル位置とマークを維持したまま最新になる（`reload` と同じ仕組み）。カーソルのファイルが移動・削除で消えた場合は、次に残っているファイルへ寄る。`rename` のカーソルは新しい名前に付いていく。移動・削除に失敗したファイルはマークが残るので、そのまま再実行できる。`copy_marked` の後に解除されるのは、コピーしたファイルのマークだけ（操作の最中に付けたマークや、[絞り込み](#絞り込み)で隠れているマークは残る）。コピー・移動・ゴミ箱・リネームの対象は、既定のキーでは、絞り込み中は、見えているマークだけ（`marked_entries` が、見えているマークだけを返すため）。
+
+#### `trash`
+
+`target` をゴミ箱へ移す。**確認は出さない**（確認は、呼ぶ側で `dialog_yes_no` を使って組む。既定の `dd` は、`resources/test.lua` にそう書いてある）。`target` は、[ファイルを開く](#ファイルを開く)と同じ形: パスの文字列、エントリ（`{ path = ... }`。`cursor_entry` の戻り値など）、またはそれらの配列（`marked_entries` の戻り値など）。
+
+- 対象は、呼んだ時点のパスで決まる。確認のダイアログを待っている間に、一覧が変わっても（別のフォルダへ移っても）、確認したファイルが対象になる
+- **配列で渡せる**。1 件ずつ呼ぶより、1 回にまとめる方がよい（再読み込みも、失敗のダイアログも、1 回になる。1 件ずつ呼ぶと、そのたびに一覧を再スキャンして、失敗のダイアログもそのたびに出る）
+- 戻り値: 全部移せたら `true`。対象が空の配列なら、何もせず `false`。1 件でも移せなければ `false`（失敗は、まとめて 1 回のダイアログで知らせる。権限が無い失敗には、[許可のしかた](#権限のエラーmacos-の保護)も案内する。移せた分は移っている）
+- 移した後は、その親フォルダを表示しているペイン（左右が同じフォルダなら両方）が再スキャンされる。**確認は組んだ側の責任**: `trash(Miata.command.pane_path())` のようにフォルダごと渡せば、確認なしで、そのフォルダがゴミ箱へ移る（ゴミ箱なので、Finder の「元に戻す」で戻せる）
+- 対象が正しくない（`nil`・相対パス・NUL を含む文字列・入れ子の配列など）と、Lua のエラー（何も移さない。配列は、全部の要素を検証してから動く）。設定ファイルの読み込み中に呼んでも、エラー
+
+```lua
+-- 既定の dd と同じ: マーク済み（見えている行のマークだけ）を、確認してからゴミ箱へ。マークが無ければ何もしない
+Miata.command.bind("n", "dd", function()
+    local list = Miata.command.marked_entries()
+    if #list == 0 then return end
+    local message = #list .. "件をゴミ箱に移動しますか？"
+    local hidden = Miata.command.hidden_mark_count()
+    if hidden > 0 then
+        message = message .. "\n(絞り込みで隠れているマーク " .. hidden .. " 件は対象外です)"
+    end
+    if Miata.command.dialog_yes_no(message, false, "ゴミ箱へ", "キャンセル") then
+        Miata.command.trash(list)
+    end
+end)
+
+-- 確認なしで、カーソル下の 1 件を（例: D）
+Miata.command.bind("n", "<S-d>", function()
+    local e = Miata.command.cursor_entry()
+    if e then Miata.command.trash(e) end
+end)
+```
 
 **`copy_marked` / `move_marked` は、次の場合には、始める前に断る**（理由をダイアログで知らせる。上書きの確認には進まない）。どれも、そのまま進めると、ファイルを失う・コピーが増え続ける組み合わせになる。
 

@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cstring>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -242,11 +243,12 @@ namespace miata {
             { "copy_marked", lua_command_copy_marked },
             { "move_marked", lua_command_move_marked },
             { "make_directory", lua_command_make_directory },
-            { "delete_marked", lua_command_delete_marked },
+            { "trash", lua_command_trash },
             { "current_pane", lua_command_current_pane },
             { "pane_path", lua_command_pane_path },
             { "cursor_entry", lua_command_cursor_entry },
             { "marked_entries", lua_command_marked_entries },
+            { "hidden_mark_count", lua_command_hidden_mark_count },
             { "current_sort", lua_command_current_sort },
             { "reload", lua_command_reload },
             { "quick_look", lua_command_quick_look },
@@ -398,6 +400,142 @@ namespace miata {
         }
     }
 
+    // ---- ファイルを扱うコマンドの対象(target) ----
+    // 開く・Finderで表示する・ゴミ箱へ、などのコマンドの、対象のパスの検証と取り出し。対象(target)は、パスの文字列、
+    // エントリ({ path = 文字列 }。cursor_entry の戻り値など)、またはそれらの配列(marked_entries の戻り値など)。
+    // どれも、Luaの C API だけを使う(エラーは longjmp なので、luaL_errorの前に、デストラクタを持つオブジェクトを作らない)。
+
+    // 対象のパスとして使えるか(Luaの文字列のバイト列で判定する): 空でなく、"/" で始まる絶対パスで、NULを含まない。
+    // 相対パスは起動した場所で意味が変わるので受け付けない("~" も展開しない)。".." や "//" は、そのまま通す
+    // (jump_to と違い、ペインの場所にはしない)
+    static bool IsOpenablePath(const char* s, size_t length)
+    {
+        return length > 0 && s[0] == '/' && std::memchr(s, '\0', length) == nullptr;
+    }
+
+    // スタックのidxの値が、1件の対象(パスの文字列、またはパスを持つエントリ { path = 文字列 })なら、そのパスの文字列を
+    // スタックに積んでtrue。そうでなければ、何も積まずにfalse
+    static bool PushTargetPath(lua_State* L, int idx)
+    {
+        idx = lua_absindex(L, idx);
+        if (lua_type(L, idx) == LUA_TSTRING) {
+            lua_pushvalue(L, idx);
+            return true;
+        }
+        if (lua_type(L, idx) == LUA_TTABLE) {
+            lua_getfield(L, idx, "path");
+            if (lua_type(L, -1) == LUA_TSTRING) return true;
+            lua_pop(L, 1);
+        }
+        return false;
+    }
+
+    // スタックのidxの対象(パスの文字列・エントリ・それらの配列)を検証して、絶対パスの文字列の配列(Luaの表)を、
+    // スタックの一番上に積む。空の配列は、空の表になる。それ以外(nil・数値・入れ子の配列・path が文字列でないエントリ・
+    // 絶対パスでない文字列・NULを含む文字列)は、Luaのエラー。呼ぶ側は、これより後で、C++のオブジェクトを作る
+    static void PushTargetPaths(lua_State* L, int idx)
+    {
+        idx = lua_absindex(L, idx);
+        if (lua_isnoneornil(L, idx)) {
+            luaL_error(L, "expected a path (string), an entry ({ path = ... }) or an array of them, got nil");
+            return;
+        }
+
+        // pathを持つ表はエントリ(1件)、持たない表は配列
+        bool single = false;
+        if (lua_type(L, idx) == LUA_TSTRING) {
+            single = true;
+        }
+        else if (lua_type(L, idx) == LUA_TTABLE) {
+            lua_getfield(L, idx, "path");
+            single = !lua_isnil(L, -1);
+            lua_pop(L, 1);
+        }
+        else {
+            luaL_error(L, "expected a path (string), an entry ({ path = ... }) or an array of them, got %s", luaL_typename(L, idx));
+            return;
+        }
+
+        lua_newtable(L);
+        const int result = lua_gettop(L);
+        if (single) {
+            if (!PushTargetPath(L, idx)) {
+                luaL_error(L, "entry.path must be a string");
+                return;
+            }
+            size_t length = 0;
+            const char* s = lua_tolstring(L, -1, &length);
+            if (!IsOpenablePath(s, length)) {
+                luaL_error(L, "the path must be an absolute path (starting with \"/\") and must not contain NUL");
+                return;
+            }
+            lua_rawseti(L, result, 1);
+        }
+        else {
+            const lua_Integer count = (lua_Integer)lua_rawlen(L, idx);
+            for (lua_Integer i = 1; i <= count; ++i) {
+                lua_rawgeti(L, idx, i);
+                if (!PushTargetPath(L, -1)) {
+                    luaL_error(L, "element %d: expected a path (string) or an entry ({ path = string })", (int)i);
+                    return;
+                }
+                size_t length = 0;
+                const char* s = lua_tolstring(L, -1, &length);
+                if (!IsOpenablePath(s, length)) {
+                    luaL_error(L, "element %d: the path must be an absolute path (starting with \"/\") and must not contain NUL", (int)i);
+                    return;
+                }
+                lua_rawseti(L, result, i); // パスの文字列を積み込む(積んだ分は減る)
+                lua_pop(L, 1);             // 取り出した要素
+            }
+        }
+        // 結果の表が、スタックの一番上
+    }
+
+    // Luaの値(idx)が、絶対パスの文字列の配列(PushTargetPaths の結果)かを調べる。違えばLuaのエラー(luaL_errorの前に、
+    // デストラクタを持つオブジェクトを作らない)。空でもよい
+    static void CheckPathArray(lua_State* L, int idx, const char* function)
+    {
+        idx = lua_absindex(L, idx);
+        Script::CheckArgType(L, idx, LUA_TTABLE);
+        const lua_Integer count = (lua_Integer)lua_rawlen(L, idx);
+        for (lua_Integer i = 1; i <= count; ++i) {
+            lua_rawgeti(L, idx, i);
+            size_t length = 0;
+            const char* s = lua_type(L, -1) == LUA_TSTRING ? lua_tolstring(L, -1, &length) : nullptr;
+            if (!s || !IsOpenablePath(s, length)) {
+                luaL_error(L, "%s: element %d is not an absolute path string", function, (int)i);
+                return;
+            }
+            lua_pop(L, 1);
+        }
+    }
+
+    // CheckPathArray か PushTargetPaths を通った配列から、パスを取り出す(エラーを起こさない)
+    static std::vector<std::filesystem::path> ReadPathArray(lua_State* L, int idx)
+    {
+        idx = lua_absindex(L, idx);
+        std::vector<std::filesystem::path> paths;
+        const lua_Integer count = (lua_Integer)lua_rawlen(L, idx);
+        paths.reserve((size_t)count);
+        for (lua_Integer i = 1; i <= count; ++i) {
+            lua_rawgeti(L, idx, i);
+            size_t length = 0;
+            const char* s = lua_tolstring(L, -1, &length);
+            paths.emplace_back(std::string(s, length));
+            lua_pop(L, 1);
+        }
+        return paths;
+    }
+
+    // pathを含むフォルダ(親)。末尾に "/" があるパス("/a/b/")は、"/a/b" を指すものとして、その親("/a")を返す。
+    // ファイル操作の後に、どのペインを再スキャンするかを、表示しているパスとの一致で引くときに使う
+    static std::filesystem::path ParentDirOf(std::filesystem::path path)
+    {
+        if (!path.has_filename()) path = path.parent_path(); // 末尾の "/" を落とす
+        return path.parent_path();
+    }
+
     // paneのビューの、見えている(画面に出ている行の)マーク済みのファイルのパス(画面の並び順)。絞り込みで隠れている行の
     // マークは含まない。コピー・移動・ゴミ箱・リネームの「操作の対象」は、すべてこれで決める
     static std::vector<std::filesystem::path> MarkedPaths(views::FileListView& view)
@@ -499,48 +637,27 @@ namespace miata {
         // 成功したときは、何も出さない(進捗パネルが「完了」を見せる。0.3 秒より早く終わった操作は、一覧の更新が、完了の合図になる)
     }
 
-    void Application::DeleteMarked()
+    bool Application::TrashPaths(const std::vector<std::filesystem::path>& paths)
     {
-        auto& list = view_->CurrentList();
+        if (paths.empty()) return false;
 
-        auto targets = MarkedPaths(view_->CurrentFileListView());
-        if (targets.empty()) return; // 見えているマークが無ければ何もしない
-
-        auto dir = list.Path();
-        auto message = std::format("{}件をゴミ箱に移動しますか？", targets.size());
-        // 絞り込みで隠れているマークは、対象にならない(見えていないものを、うっかり消さないため)。件数を知らせる
-        if (auto hidden = view_->CurrentFileListView().HiddenMarkCount(); hidden > 0) {
-            message += std::format("\n(絞り込みで隠れているマーク {} 件は対象外です)", hidden);
+        FileErrorSummary failures;
+        for (auto& path : paths) {
+            auto result = pl_trash_file(path);
+            if (!result) failures.Add(result.error());
         }
 
-        view_->RequestDialog(std::make_shared<views::YesNoDialog>(
-            [this, targets, dir, &list](views::IDialog& dialog) {
-                auto& yes_no_dialog = dynamic_cast<views::YesNoDialog&>(dialog);
-                if (!yes_no_dialog.Result()) return;
+        // 親フォルダを表示しているペインを再スキャンする(両方のペインが同じフォルダなら、両方)。ゴミ箱に移せなかった
+        // ファイルのマークは残る。失敗が全部でも、再スキャンする(一部が移っているかもしれない)
+        std::set<std::filesystem::path> dirs;
+        for (auto& path : paths) dirs.insert(ParentDirOf(path));
+        for (auto& dir : dirs) view_->ReloadDirectory(dir);
 
-                FileErrorSummary failures;
-                for (auto& target : targets) {
-                    auto result = pl_trash_file(target);
-                    if (!result) failures.Add(result.error());
-                }
-
-                // 確認ダイアログはモーダルで開いている間ペイン移動できないため、
-                // ここでは常に操作対象だったディレクトリのままのはずだが、念のため確認する。
-                if (list.Path() == dir) {
-                    view_->ReloadList(list); // ゴミ箱に移せなかったファイルのマークは残る
-                }
-
-                if (failures.count > 0) {
-                    view_->ReportFileError(std::format("エラーが発生しました（{}件失敗）", failures.count), failures.shown);
-                }
-            },
-            views::YesNoDialog::arguments{
-                .message_ = message,
-                .default_select_ = false,
-                .yes_text_ = "ゴミ箱へ",
-                .no_text_ = "キャンセル",
-            }
-        ));
+        if (failures.count > 0) {
+            view_->ReportFileError(std::format("エラーが発生しました（{}件失敗）", failures.count), failures.shown);
+            return false;
+        }
+        return true;
     }
 
     // Miata.command.bind(mode, keys, fn)
@@ -803,11 +920,21 @@ namespace miata {
         return 1;
     }
 
-    int Application::lua_command_delete_marked(lua_State* L)
+    // Miata.command.trash(target) -> boolean
+    // target(パスの文字列・エントリ・それらの配列。open などと同じ)を、ゴミ箱へ移す。確認は出さない(確認が要るなら、
+    // 呼ぶ側で dialog_yes_no を使う)。メインスレッドで、1件ずつ同期に移す。全部移せたらtrue。対象が空(空の配列)なら、何もせずfalse。
+    // 1件でも移せなければfalse(失敗は、まとめて1回のダイアログで知らせる。権限が無い失敗には、許可のしかたも案内する)。
+    // 移した後は、親フォルダを表示しているペインを再スキャンする(カーソルは次に残っているファイルへ寄り、移せなかった
+    // ファイルのマークは残る)。対象が正しくない(nil・相対パスなど)ときは、Luaのエラー(何もしない)。
+    int Application::lua_command_trash(lua_State* L)
     {
         auto& app = Application::Instance();
-        app.DeleteMarked();
-        return 0;
+        PushTargetPaths(L, 1); // luaL_error を呼びうるのは、ここまで
+        const int paths_index = lua_gettop(L);
+
+        // ここから先はluaL_errorを呼ばない(vectorを作るため)
+        lua_pushboolean(L, app.TrashPaths(ReadPathArray(L, paths_index)));
+        return 1;
     }
 
     // Luaに公開するペイン名。current_pane()の戻り値とreload(pane)の引数で同じ表記を使うよう、
@@ -934,6 +1061,18 @@ namespace miata {
             PushEntryTable(L, *marked[i]);
             lua_rawseti(L, -2, (lua_Integer)i + 1);
         }
+        return 1;
+    }
+
+    // Miata.command.hidden_mark_count([pane]) -> integer
+    // paneの、絞り込みで隠れている行のマークの数(絞り込んでいなければ0)。marked_entries は、見えている行のマークだけを
+    // 返すので、隠れているマークは、対象にならない。ゴミ箱の確認に「隠れているマーク N 件は対象外です」と添えるときなどに使う。
+    // 読むだけで、状態は変えない
+    int Application::lua_command_hidden_mark_count(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        auto pane = OptionalPaneArg(L, 1, app.view_->CurrentPane());
+        lua_pushinteger(L, app.view_->GetFileListView(pane).HiddenMarkCount());
         return 1;
     }
 
@@ -1417,126 +1556,15 @@ namespace miata {
         return 1;
     }
 
-    // 開く・Finderで表示するコマンドの対象のパスとして使えるか(Luaの文字列のバイト列で判定する): 空でなく、"/" で始まる
-    // 絶対パスで、NULを含まない。相対パスは起動した場所で意味が変わるので受け付けない("~" も展開しない)。
-    // ".." や "//" は、開くだけなので、そのまま通す(jump_to と違い、ペインの場所にはしない)
-    static bool IsOpenablePath(const char* s, size_t length)
-    {
-        return length > 0 && s[0] == '/' && std::memchr(s, '\0', length) == nullptr;
-    }
-
-    // スタックのidxの値が、1件の対象(パスの文字列、またはパスを持つエントリ { path = 文字列 })なら、そのパスの文字列を
-    // スタックに積んでtrue。そうでなければ、何も積まずにfalse。Luaの C API だけを使う(luaL_errorの前に呼んでよい)
-    static bool PushTargetPath(lua_State* L, int idx)
-    {
-        idx = lua_absindex(L, idx);
-        if (lua_type(L, idx) == LUA_TSTRING) {
-            lua_pushvalue(L, idx);
-            return true;
-        }
-        if (lua_type(L, idx) == LUA_TTABLE) {
-            lua_getfield(L, idx, "path");
-            if (lua_type(L, -1) == LUA_TSTRING) return true;
-            lua_pop(L, 1);
-        }
-        return false;
-    }
-
     // Miata._private.paths_of(target) -> string[]
     // open などのコマンドの対象を、絶対パスの文字列の配列にする。targetは、パスの文字列、エントリ({ path = 文字列 }。
     // cursor_entry の戻り値など)、またはそれらの配列(marked_entries の戻り値など)。空の配列は、空の配列になる。
     // それ以外(nil・数値・入れ子の配列・path が文字列でないエントリ・絶対パスでない文字列・NULを含む文字列)はエラー。
-    // Luaの C API だけを使うので、デストラクタを持つオブジェクトは無い(エラーは longjmp)。
+    // 検証は PushTargetPaths(ファイルを扱うコマンドの対象。ゴミ箱などの公開のコマンドも、同じものを通る)。
     int Application::lua_private_paths_of(lua_State* L)
     {
-        if (lua_gettop(L) < 1 || lua_isnil(L, 1)) {
-            luaL_error(L, "expected a path (string), an entry ({ path = ... }) or an array of them, got nil");
-            return 0;
-        }
-        lua_settop(L, 1); // 余分な引数は無視する
-
-        // pathを持つ表はエントリ(1件)、持たない表は配列
-        bool single = false;
-        if (lua_type(L, 1) == LUA_TSTRING) {
-            single = true;
-        }
-        else if (lua_type(L, 1) == LUA_TTABLE) {
-            lua_getfield(L, 1, "path");
-            single = !lua_isnil(L, -1);
-            lua_pop(L, 1);
-        }
-        else {
-            luaL_error(L, "expected a path (string), an entry ({ path = ... }) or an array of them, got %s", luaL_typename(L, 1));
-            return 0;
-        }
-
-        lua_newtable(L); // 結果(index 2)
-        if (single) {
-            if (!PushTargetPath(L, 1)) {
-                luaL_error(L, "entry.path must be a string");
-                return 0;
-            }
-            size_t length = 0;
-            const char* s = lua_tolstring(L, -1, &length);
-            if (!IsOpenablePath(s, length)) {
-                luaL_error(L, "the path must be an absolute path (starting with \"/\") and must not contain NUL");
-                return 0;
-            }
-            lua_rawseti(L, 2, 1);
-        }
-        else {
-            const lua_Integer count = (lua_Integer)lua_rawlen(L, 1);
-            for (lua_Integer i = 1; i <= count; ++i) {
-                lua_rawgeti(L, 1, i);
-                if (!PushTargetPath(L, -1)) {
-                    luaL_error(L, "element %d: expected a path (string) or an entry ({ path = string })", (int)i);
-                    return 0;
-                }
-                size_t length = 0;
-                const char* s = lua_tolstring(L, -1, &length);
-                if (!IsOpenablePath(s, length)) {
-                    luaL_error(L, "element %d: the path must be an absolute path (starting with \"/\") and must not contain NUL", (int)i);
-                    return 0;
-                }
-                lua_rawseti(L, 2, i); // パスの文字列を積み込む(積んだ分は減る)
-                lua_pop(L, 1);        // 取り出した要素
-            }
-        }
-        return 1; // 結果の表が、スタックの一番上
-    }
-
-    // Luaの値(idx)が、絶対パスの文字列の配列(paths_of の結果)かを調べる。違えばLuaのエラー(luaL_errorの前に、
-    // デストラクタを持つオブジェクトを作らない)。空でもよい
-    static void CheckPathArray(lua_State* L, int idx, const char* function)
-    {
-        Script::CheckArgType(L, idx, LUA_TTABLE);
-        const lua_Integer count = (lua_Integer)lua_rawlen(L, idx);
-        for (lua_Integer i = 1; i <= count; ++i) {
-            lua_rawgeti(L, idx, i);
-            size_t length = 0;
-            const char* s = lua_type(L, -1) == LUA_TSTRING ? lua_tolstring(L, -1, &length) : nullptr;
-            if (!s || !IsOpenablePath(s, length)) {
-                luaL_error(L, "%s: element %d is not an absolute path string", function, (int)i);
-                return;
-            }
-            lua_pop(L, 1);
-        }
-    }
-
-    // CheckPathArray を通った配列から、パスを取り出す(エラーを起こさない)
-    static std::vector<std::filesystem::path> ReadPathArray(lua_State* L, int idx)
-    {
-        std::vector<std::filesystem::path> paths;
-        const lua_Integer count = (lua_Integer)lua_rawlen(L, idx);
-        paths.reserve((size_t)count);
-        for (lua_Integer i = 1; i <= count; ++i) {
-            lua_rawgeti(L, idx, i);
-            size_t length = 0;
-            const char* s = lua_tolstring(L, -1, &length);
-            paths.emplace_back(std::string(s, length));
-            lua_pop(L, 1);
-        }
-        return paths;
+        PushTargetPaths(L, 1); // 余分な引数は無視する。結果の表が、スタックの一番上
+        return 1;
     }
 
     // Miata._private.open_paths(paths, [app]) -> boolean
