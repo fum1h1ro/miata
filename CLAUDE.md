@@ -76,7 +76,7 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 
 **Lua スクリプト:**
 - `resources/base.lua` — コアユーティリティとダイアログヘルパー定義
-- `resources/test.lua` — **組み込みの既定の設定**（キーバインドとコマンド定義）。`.app` の `Contents/Resources/` に入る
+- `resources/test.lua` — **組み込みの既定の設定**（キーバインドと、ファイル操作の確認などの組み立て）。`.app` の `Contents/Resources/` に入る
 - `~/.config/miata/init.lua` — **ユーザーの設定**。無くてよい。あれば、既定の設定の後に読み込まれて上書きする（後述「設定の読み込み」）
 
 C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の `config_commands[]`/`view_commands[]`）と `Miata._private.*`（同 `privates[]`）の名前空間で Lua 関数を登録し、スクリプト側から呼び出す。ダイアログはコルーチンで非同期制御される（後述）。
@@ -86,9 +86,10 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 複数の機能が同居するファイル（`Application.cc`・`osx.mm`・`FileListView.mm` ほか）を触るときも効く規則。根拠と細部は、括弧内のルール（食い違ったら、ルールが正）。
 
 - **`luaL_error` は longjmp**（Lua は C としてビルドされている）：デストラクタを持つオブジェクト（`std::string` など）を作った後に呼ばない。引数を検証して `luaL_error` を呼んでから、オブジェクトを作る。（`lua-commands.md`・`history-panes.md`）
-- **ユーザー操作の移動は `TryJumpTo` / `NavigateToParent`**：`JumpTo` は、読めないと例外を投げる（コードベースに `catch` は無い）ので、起動時（ホーム）とテスト専用。同じディレクトリを再スキャンするだけなら `View::ReloadList(model, cursor_to)`（`JumpTo(Path())` ではない。カーソルとマークが消える）。（`permissions-signing.md`・`file-list.md`）
+- **ユーザー操作の移動は `TryJumpTo` / `NavigateToParent`**：`JumpTo` は、読めないと例外を投げる（コードベースに `catch` は無い）ので、起動時（ホーム）とテスト専用。同じディレクトリを再スキャンするだけなら `View::ReloadDirectory(dir)`（`JumpTo(Path())` ではない。カーソルとマークが消える。パスで、そのフォルダを表示しているペインを引く）。（`permissions-signing.md`・`file-list.md`）
 - **ファイル操作・移動の失敗は、必ず `View::ReportFileError` に通す**（権限の失敗に、許可のしかたの案内が付く）。例外は、起動時のペインの復元（案内を出さず、黙ってホームのまま。直さない）。（`permissions-signing.md`・`history-panes.md`）
-- **マークを外して画面にも反映するなら `UnmarkPaths`**（モデルの `Mark()` はビューに通知しない）。コピー・移動・ゴミ箱・リネームの対象は「見えているマーク」（`FileListView::MarkedEntries()`）で、完了後に外すのは、操作したファイルのマークだけ。（`file-list.md`・`search-filter.md`）
+- **マークを外して画面にも反映するなら `UnmarkPaths`**（モデルの `Mark()` はビューに通知しない）。コピー・移動・ゴミ箱・リネームの既定のキー（`resources/test.lua`）の対象は「見えているマーク」（`FileListView::MarkedEntries()` = Lua の `marked_entries`）で、完了後に外すのは、操作したファイルのマークだけ。（`file-list.md`・`search-filter.md`）
+- **ファイル操作は「部品（C++）+ 組み立て（Lua）」**：`trash` / `copy_to` / `move_to` / `rename_to` / `make_directory` は、明示した絶対パスへの、確認なしの操作（失敗は `ReportFileError`、操作の後は、関係するフォルダを**表示しているパスで引いた**ペインを更新）。対象の選び方・確認・流れは `resources/test.lua`。コマンドの先頭で `lua_settop(L, 引数の数)` を忘れない（`PushTargetPaths` が積む表が、省略された引数の位置に来る）。（`lua-commands.md`）
 - **エントリ（`FileEntryModel*`）のポインタを持ち越さない**：再スキャンで旧エントリは、通知より前に破棄される。持つのはパス。Lua に渡すのも、呼んだ時点の値の写し。（`file-list.md`・`lua-commands.md`）
 - **名前は `Name()`、パスは `Path()`**：`Name()` は NFC で、UTF-8 として不正なバイトは修復済み（表示・並べ替え・検索用）。`Path()` は元のバイト列（コピー・移動・ゴミ箱・OS の呼び出し用）。外から来た文字列を NSString にするときは、`RepairUtf8` に通す（不正だと nil になり、`labelWithString:nil` などで落ちる）。（`file-list.md`）
 - **空の一覧に備える**：カーソル下は `CurrentOrNull()`（空なら nullptr）か `CurrentPath()`。範囲外を読む入口を作らない（絞り込みで 0 行になるのは、日常の状態）。（`file-list.md`）
@@ -105,7 +106,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 2. `Application.cc` の `InitializeScript()` の `view_commands[]`（`Miata.command` 用）または `privates[]`（`Miata._private` 用）に `{ "name", lua_command_XXX }` を追加。Viewに触らず、設定ファイルの読み込み中にも使えるべきもの(`bind`/`unbind` のような)だけ `config_commands[]` に入れる（後述「設定の読み込み」のトランポリン）。**設定の関数 `Miata.config.set_*` は、これらではなく `Config.cc` の `config_funcs[]`**（`.claude/rules/config.md`「その他の設定」）
 3. OS 依存の実装が必要な場合は `platform.h` に `pl_*` 関数を宣言し、`platforms/osx.mm` に実装を追加（AppKit 型はここか `views/*.mm` にのみ閉じ込め、`.h` には持ち込まない。例外は、`.mm` からだけ include する AppKit 依存のヘッダ: `views/ViewMetrics.h`・`NSColorUtil.h`・`FileIconCache.h`）
 
-**注意**：`Miata.command.*` と `Miata._private.*` は同じ実装が入り得る別の名前空間ではあるが、`Miata.command` テーブル自身の中で Lua 側（`base.lua`）の関数と C++ 側の関数に同じキー名を使ってはいけない。`Application::InitializeScript()` は `script.Initialize()`（`base.lua` 読み込み）の後に `RegisterFunctions("Miata.command", ...)` を実行するため、同名なら C++ 側が Lua 側を**無言で上書きする**（コンパイルエラーにも起動時エラーにもならず、該当キーを実際に呼び出した時だけ引数不一致などで失敗する）。Lua ラッパー＋その内部で使う生の C++ 実行関数、という組み合わせを作る場合は、`dialog_input`（`Miata.command`）/ `dialog_open`（`Miata._private`）や `make_folder`（`Miata.command`）/ `make_directory`（`Miata.command`だが別名）のように、公開する名前と内部実装の名前を必ず分ける（内部実装は `Miata._private.*` に置くのが基本）。
+**注意**：`Miata.command.*` と `Miata._private.*` は同じ実装が入り得る別の名前空間ではあるが、`Miata.command` テーブル自身の中で Lua 側（`base.lua`）の関数と C++ 側の関数に同じキー名を使ってはいけない。`Application::InitializeScript()` は `script.Initialize()`（`base.lua` 読み込み）の後に `RegisterFunctions("Miata.command", ...)` を実行するため、同名なら C++ 側が Lua 側を**無言で上書きする**（コンパイルエラーにも起動時エラーにもならず、該当キーを実際に呼び出した時だけ引数不一致などで失敗する）。Lua ラッパー＋その内部で使う生の C++ 実行関数、という組み合わせを作る場合は、`dialog_input`（`Miata.command`）/ `dialog_open`（`Miata._private`）や `open`（`Miata.command`。Lua）/ `open_paths`（`Miata._private`。C++）のように、公開する名前と内部実装の名前を必ず分ける（内部実装は `Miata._private.*` に置くのが基本）。
 
 ## 設計メモの索引（`.claude/rules/`）
 
@@ -114,13 +115,13 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 | ルール（`.claude/rules/`） | 扱う節 | 主な実装（複数の機能が同居するファイルを含む） |
 |---|---|---|
 | `dialog.md` | ダイアログの仕組み／選択リスト（`dialog_custom` の `select`）／ダイアログ項目のショートカット（`&x`） | `views/Dialog.*`・`views/FilterListDialog.*`・`views/Mnemonic.*`、`Application.cc`（`lua_private_dialog_*`）、`resources/base.lua`（`dialog_*`） |
-| `file-operations.md` | ファイル操作（始める前の断り・コピーの中身・進捗パネル） | `FileOperation.*`・`FileOperationProgress.h`・`views/Progress*`、`Application.cc`（`StartFileOperation`）、`osx.mm`（`pl_copy_file`） |
+| `file-operations.md` | ファイル操作（始める前の断り・コピーの中身・進捗パネル） | `FileOperation.*`・`FileOperationProgress.h`・`views/Progress*`、`Application.cc`（`StartTransfer` / `CheckTransfer`）、`osx.mm`（`pl_copy_file`） |
 | `permissions-signing.md` | 権限エラーの案内（TCC・Finder 経由のゴミ箱・署名）／アプリアイコン | `FileError.h`、`View::ReportFileError`、`osx.mm`（`pl_trash_file*`）、`Rakefile`（`sign_app` / `icon`）、`cmake/Info.plist.in` |
 | `search-filter.md` | ファイル名の検索／絞り込み（部分一致・あいまい一致）／外部コマンドの起動（`pl_run_process`） | `views/SearchState.*`・`FilterState.*`・`NameMatcher.*`・`QueryBar.*`、`FzfFilter.*`、`FileListView.mm`・`BrowserView.mm`、`Application.cc`（`lua_command_search*` / `lua_command_filter*`） |
 | `quicklook.md` | プレビュー（Quick Look。倍率・ピンチ・スクロール） | `views/QuickLookView.*`、`BrowserView.mm`（覆いの配置）、`Application.cc`（`lua_command_quick_look*`） |
 | `history-panes.md` | フォルダの履歴／ペインの状態の保存／ウィンドウ位置・サイズの保存 | `models/PathHistory.*`・`PaneState.*`・`BrowserModel.*`、`View.mm`（`RestorePanes` ほか）、`osx.mm`（`pl_create_main_window`） |
 | `file-list.md` | 一覧の右側の札（`<DIR>` ほか）／ファイル名の頭のアイコン／ドラッグ&ドロップ／再読み込み／ディレクトリ監視／空のディレクトリ／UTF-8 として不正な名前 | `models/FileListModel.*`・`FileEntryModel.*`、`Utf8.*`、`views/FileIconCache.h`、`FileListView.mm`、`osx.mm`（`pl_watch_directory` / `pl_is_alias_file` / `pl_is_dataless_file` ほか） |
-| `lua-commands.md` | Lua から状況を取る／ファイルを開く／まとめてマークする | `Application.cc`（`lua_command_*`）、`FileListView.mm`、`osx.mm`（`pl_open_paths` ほか）、`resources/base.lua` |
+| `lua-commands.md` | Lua から状況を取る／ファイルを開く／まとめてマークする／ファイルの操作（部品と組み立て） | `Application.cc`（`lua_command_*`）、`FileListView.mm`、`osx.mm`（`pl_open_paths` ほか）、`resources/base.lua`・`resources/test.lua` |
 | `config.md` | 設定の読み込み／キーバインド（`bind` / `unbind`）／色の設定（`Miata.config.color.*`）／その他の設定（`Miata.config.set_*`。実行中に切り替える `show_icons` の例外） | `Script.*`・`Config.*`・`KeyBinding.*`、`resources/test.lua`、`Application.cc`（`InitializeScript` / `lua_command_bind` / `lua_command_toggle_icons`） |
 
 ## ドキュメントの同期

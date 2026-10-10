@@ -93,6 +93,17 @@ std::string pl_normalize_string(const std::string& input)
     }
 }
 
+std::string pl_name_collation_key(const std::string& name)
+{
+    @autoreleasepool {
+        // NFC にしてから(不正なバイトの置き換えも、pl_normalize_string がやる)、小文字にする
+        const std::string nfc = pl_normalize_string(name);
+        NSString* s = [[NSString alloc] initWithBytes:nfc.data() length:nfc.size() encoding:NSUTF8StringEncoding];
+        const char* utf8 = s.lowercaseString.UTF8String;
+        return utf8 ? std::string(utf8) : nfc;
+    }
+}
+
 void pl_play_beep()
 {
     @autoreleasepool {

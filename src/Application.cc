@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cstring>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -239,14 +240,18 @@ namespace miata {
             { "mark_search_hits", lua_command_mark_search_hits },
             { "next_mark", lua_command_next_mark },
             { "prev_mark", lua_command_prev_mark },
-            { "copy_marked", lua_command_copy_marked },
-            { "move_marked", lua_command_move_marked },
+            { "check_transfer", lua_command_check_transfer },
+            { "copy_to", lua_command_copy_to },
+            { "move_to", lua_command_move_to },
             { "make_directory", lua_command_make_directory },
-            { "delete_marked", lua_command_delete_marked },
+            { "rename_to", lua_command_rename_to },
+            { "exists", lua_command_exists },
+            { "trash", lua_command_trash },
             { "current_pane", lua_command_current_pane },
             { "pane_path", lua_command_pane_path },
             { "cursor_entry", lua_command_cursor_entry },
             { "marked_entries", lua_command_marked_entries },
+            { "hidden_mark_count", lua_command_hidden_mark_count },
             { "current_sort", lua_command_current_sort },
             { "reload", lua_command_reload },
             { "quick_look", lua_command_quick_look },
@@ -274,9 +279,6 @@ namespace miata {
             { "dialog_open", lua_private_dialog_open },
             { "dialog_is_open", lua_private_dialog_is_open },
             { "dialog_result", lua_private_dialog_result },
-            { "rename_target", lua_private_rename_target },
-            { "rename_conflict", lua_private_rename_conflict },
-            { "rename_execute", lua_private_rename_execute },
             { "paths_of", lua_private_paths_of },
             { "open_paths", lua_private_open_paths },
             { "reveal_paths", lua_private_reveal_paths },
@@ -399,76 +401,234 @@ namespace miata {
         }
     }
 
-    // paneのビューの、見えている(画面に出ている行の)マーク済みのファイルのパス(画面の並び順)。絞り込みで隠れている行の
-    // マークは含まない。コピー・移動・ゴミ箱・リネームの「操作の対象」は、すべてこれで決める
-    static std::vector<std::filesystem::path> MarkedPaths(views::FileListView& view)
+    // ---- ファイルを扱うコマンドの対象(target) ----
+    // 開く・Finderで表示する・ゴミ箱へ、などのコマンドの、対象のパスの検証と取り出し。対象(target)は、パスの文字列、
+    // エントリ({ path = 文字列 }。cursor_entry の戻り値など)、またはそれらの配列(marked_entries の戻り値など)。
+    // どれも、Luaの C API だけを使う(エラーは longjmp なので、luaL_errorの前に、デストラクタを持つオブジェクトを作らない)。
+
+    // 対象のパスとして使えるか(Luaの文字列のバイト列で判定する): 空でなく、"/" で始まる絶対パスで、NULを含まない。
+    // 相対パスは起動した場所で意味が変わるので受け付けない("~" も展開しない)。".." や "//" は、そのまま通す
+    // (jump_to と違い、ペインの場所にはしない)
+    static bool IsOpenablePath(const char* s, size_t length)
     {
+        return length > 0 && s[0] == '/' && std::memchr(s, '\0', length) == nullptr;
+    }
+
+    // スタックのidxの値が、1件の対象(パスの文字列、またはパスを持つエントリ { path = 文字列 })なら、そのパスの文字列を
+    // スタックに積んでtrue。そうでなければ、何も積まずにfalse
+    static bool PushTargetPath(lua_State* L, int idx)
+    {
+        idx = lua_absindex(L, idx);
+        if (lua_type(L, idx) == LUA_TSTRING) {
+            lua_pushvalue(L, idx);
+            return true;
+        }
+        if (lua_type(L, idx) == LUA_TTABLE) {
+            lua_getfield(L, idx, "path");
+            if (lua_type(L, -1) == LUA_TSTRING) return true;
+            lua_pop(L, 1);
+        }
+        return false;
+    }
+
+    // スタックのidxの対象(パスの文字列・エントリ・それらの配列)を検証して、絶対パスの文字列の配列(Luaの表)を、
+    // スタックの一番上に積む。空の配列は、空の表になる。それ以外(nil・数値・入れ子の配列・path が文字列でないエントリ・
+    // 絶対パスでない文字列・NULを含む文字列)は、Luaのエラー。呼ぶ側は、これより後で、C++のオブジェクトを作る
+    static void PushTargetPaths(lua_State* L, int idx)
+    {
+        idx = lua_absindex(L, idx);
+        if (lua_isnoneornil(L, idx)) {
+            luaL_error(L, "expected a path (string), an entry ({ path = ... }) or an array of them, got nil");
+            return;
+        }
+
+        // pathを持つ表はエントリ(1件)、持たない表は配列
+        bool single = false;
+        if (lua_type(L, idx) == LUA_TSTRING) {
+            single = true;
+        }
+        else if (lua_type(L, idx) == LUA_TTABLE) {
+            lua_getfield(L, idx, "path");
+            single = !lua_isnil(L, -1);
+            lua_pop(L, 1);
+        }
+        else {
+            luaL_error(L, "expected a path (string), an entry ({ path = ... }) or an array of them, got %s", luaL_typename(L, idx));
+            return;
+        }
+
+        lua_newtable(L);
+        const int result = lua_gettop(L);
+        if (single) {
+            if (!PushTargetPath(L, idx)) {
+                luaL_error(L, "entry.path must be a string");
+                return;
+            }
+            size_t length = 0;
+            const char* s = lua_tolstring(L, -1, &length);
+            if (!IsOpenablePath(s, length)) {
+                luaL_error(L, "the path must be an absolute path (starting with \"/\") and must not contain NUL");
+                return;
+            }
+            lua_rawseti(L, result, 1);
+        }
+        else {
+            const lua_Integer count = (lua_Integer)lua_rawlen(L, idx);
+            for (lua_Integer i = 1; i <= count; ++i) {
+                lua_rawgeti(L, idx, i);
+                if (!PushTargetPath(L, -1)) {
+                    luaL_error(L, "element %d: expected a path (string) or an entry ({ path = string })", (int)i);
+                    return;
+                }
+                size_t length = 0;
+                const char* s = lua_tolstring(L, -1, &length);
+                if (!IsOpenablePath(s, length)) {
+                    luaL_error(L, "element %d: the path must be an absolute path (starting with \"/\") and must not contain NUL", (int)i);
+                    return;
+                }
+                lua_rawseti(L, result, i); // パスの文字列を積み込む(積んだ分は減る)
+                lua_pop(L, 1);             // 取り出した要素
+            }
+        }
+        // 結果の表が、スタックの一番上
+    }
+
+    // Luaの値(idx)が、絶対パスの文字列の配列(PushTargetPaths の結果)かを調べる。違えばLuaのエラー(luaL_errorの前に、
+    // デストラクタを持つオブジェクトを作らない)。空でもよい
+    static void CheckPathArray(lua_State* L, int idx, const char* function)
+    {
+        idx = lua_absindex(L, idx);
+        Script::CheckArgType(L, idx, LUA_TTABLE);
+        const lua_Integer count = (lua_Integer)lua_rawlen(L, idx);
+        for (lua_Integer i = 1; i <= count; ++i) {
+            lua_rawgeti(L, idx, i);
+            size_t length = 0;
+            const char* s = lua_type(L, -1) == LUA_TSTRING ? lua_tolstring(L, -1, &length) : nullptr;
+            if (!s || !IsOpenablePath(s, length)) {
+                luaL_error(L, "%s: element %d is not an absolute path string", function, (int)i);
+                return;
+            }
+            lua_pop(L, 1);
+        }
+    }
+
+    // CheckPathArray か PushTargetPaths を通った配列から、パスを取り出す(エラーを起こさない)
+    static std::vector<std::filesystem::path> ReadPathArray(lua_State* L, int idx)
+    {
+        idx = lua_absindex(L, idx);
         std::vector<std::filesystem::path> paths;
-        for (auto* entry : view.MarkedEntries()) paths.push_back(entry->Path());
+        const lua_Integer count = (lua_Integer)lua_rawlen(L, idx);
+        paths.reserve((size_t)count);
+        for (lua_Integer i = 1; i <= count; ++i) {
+            lua_rawgeti(L, idx, i);
+            size_t length = 0;
+            const char* s = lua_tolstring(L, -1, &length);
+            paths.emplace_back(std::string(s, length));
+            lua_pop(L, 1);
+        }
         return paths;
     }
 
-    void Application::StartFileOperation(FileOpType type)
+    // pathを含むフォルダ(親)。末尾に "/" があるパス("/a/b/")は、"/a/b" を指すものとして、その親("/a")を返す。
+    // ファイル操作の後に、どのペインを再スキャンするかを、表示しているパスとの一致で引くときに使う
+    static std::filesystem::path ParentDirOf(std::filesystem::path path)
     {
-        auto& src_model = view_->CurrentList();
-        auto& dest_model = view_->OtherList();
+        if (!path.has_filename()) path = path.parent_path(); // 末尾の "/" を落とす
+        return path.parent_path();
+    }
 
-        auto sources = MarkedPaths(view_->CurrentFileListView());
-        if (sources.empty()) {
-            // マークが無ければ、カーソル下の1件(一覧が空なら、対象が無い)
-            if (auto* current = view_->CurrentEntry()) sources.push_back(current->Path());
+    // コピー・移動を始める前の確認。check_transfer(Lua)と、始めるとき(StartTransfer)の、両方が使う(同じ確認を、
+    // 確認してから始めるまでの間に状況が変わったときのためにも、始めるときにやり直す)。
+    //  - 元と先の関係が、データを失う・暴走する組み合わせなら、断る(同じフォルダ・フォルダを自分の中へ・先の同名のフォルダが
+    //    元の祖先)。調べられなかったとき(元が外部で消えた、権限が無いなど)は断らず、項目の失敗として知らせる
+    //  - 断らなければ、先に同名があるもの(の先のパス)を、元の並び順で返す。壊れたシンボリックリンクも、同名として数える
+    //    (コピー・移動が、リンクをたどらずに、同名があるかを見るのと合わせる。数えないと、確認が出ないまま、黙ってスキップされる)
+    struct TransferCheck {
+        std::string what;   // 空でなければ、断る。何ができなかったか(「コピーできませんでした (名前)」。ReportFileError の what)
+        std::string reason; // 断る理由(「コピー先が、コピー元と同じフォルダです」など)
+        std::vector<std::filesystem::path> conflicts;
+    };
+
+    // 末尾の "/" を落とす("/a/b/" → "/a/b")。コピー・移動は、先を dest_dir / 元.filename() で決める: 末尾に "/" があると
+    // filename() が空になり、先が dest_dir そのものになる(移動の「上書き」が、dest_dir を丸ごと消す)。以前は、対象が、
+    // 一覧のエントリのパスだけだったので起きなかったが、Lua から任意のパスを渡せるので、ここで正規化する。ルートは、そのまま
+    static std::filesystem::path WithoutTrailingSlash(std::filesystem::path path)
+    {
+        while (path.has_relative_path() && !path.has_filename()) path = path.parent_path();
+        return path;
+    }
+
+    // コピー・移動の対象として、名前を持つか(最後の要素が、名前であること。ルート "/"・"." ・".." は、先の名前にならない)
+    static bool HasTransferName(const std::filesystem::path& path)
+    {
+        const auto name = path.filename();
+        return !name.empty() && name != "." && name != "..";
+    }
+
+    static TransferCheck CheckTransfer(FileOpType type, const std::vector<std::filesystem::path>& sources, const std::filesystem::path& dest_arg)
+    {
+        TransferCheck check;
+        const char* label = FileOpLabel(type);
+        // 宛先も、末尾の "/" を落とす(ペインの表示しているパス(末尾に "/" が無い)と比べて、更新するペインを引くため)
+        const auto dest_dir = WithoutTrailingSlash(dest_arg);
+
+        // 先が、存在するフォルダであること(でなければ、どの項目も置けない)
+        std::error_code ec;
+        if (!std::filesystem::is_directory(dest_dir, ec)) {
+            check.what = std::format("{}できませんでした", label);
+            check.reason = std::format("{}先が、存在するフォルダではありません", label);
+            return check;
         }
-        if (sources.empty()) return;
 
-        auto src_dir = src_model.Path();
-        auto dest_dir = dest_model.Path();
-
-        // 元と先の関係が、データを失う・暴走する組み合わせなら、始める前に断る(同じフォルダ・フォルダを自分の中へ・
-        // 先の同名のフォルダが元の祖先)。上書きの確認より前に行う(確認に答えさせても、どちらを選んでも進められないため)。
-        // 調べられなかったとき(元が外部で消えた、権限が無いなど)は断らず、項目の失敗として知らせる
-        {
-            FileOperationGuard guard(dest_dir);
-            for (auto& src : sources) {
-                bool unknown = false;
-                if (auto reason = guard.Check(type, src, unknown)) {
-                    view_->ReportFileError(
-                        std::format("{}できませんでした ({})", FileOpLabel(type), src.filename().string()),
-                        FileError{.message = *reason}
-                    );
-                    return;
-                }
+        FileOperationGuard guard(dest_dir);
+        std::vector<std::filesystem::path> normalized;
+        normalized.reserve(sources.size());
+        for (auto& original : sources) {
+            const auto src = WithoutTrailingSlash(original);
+            if (!HasTransferName(src)) {
+                check.what = std::format("{}できませんでした ({})", label, original.string());
+                check.reason = "対象のパスの最後が、名前ではありません";
+                return check;
             }
+            bool unknown = false;
+            if (auto reason = guard.Check(type, src, unknown)) {
+                check.what = std::format("{}できませんでした ({})", label, src.filename().string());
+                check.reason = *reason;
+                return check;
+            }
+            normalized.push_back(src);
         }
 
-        // 壊れたシンボリックリンクも、同名として数える(コピー・移動が、リンクをたどらずに、同名があるかを見るのと合わせる。
-        // 数えないと、確認が出ないまま、黙ってスキップされる)
-        auto conflicts = 0;
-        for (auto& src : sources) {
-            if (ExistsNoFollow(dest_dir / src.filename())) ++conflicts;
+        // 対象の中に、先で同じ名前になるものがあれば、断る(別々のフォルダの同名のファイルなど。上書きで、先に移したものが
+        // 失われる・黙ってスキップされる)。「先に元からある同名」(下の conflicts)とは別
+        if (auto duplicate = FindDuplicateName(normalized)) {
+            check.what = std::format("{}できませんでした ({})", label, duplicate->filename().string());
+            check.reason = "同じ名前の対象が、ほかにもあります(先で重なります)";
+            return check;
         }
 
-        auto start = [this, type, sources, src_dir, dest_dir, &src_model, &dest_model](bool overwrite) {
-            file_operations_.Start(type, sources, src_dir, dest_dir, overwrite, &src_model, &dest_model);
-        };
+        for (auto& src : normalized) {
+            auto dst = dest_dir / src.filename();
+            if (ExistsNoFollow(dst)) check.conflicts.push_back(std::move(dst));
+        }
+        return check;
+    }
 
-        if (conflicts > 0) {
-            auto message = std::format("{}個のファイルが既に存在します。上書きしますか？", conflicts);
-            view_->RequestDialog(std::make_shared<views::YesNoDialog>(
-                [start](views::IDialog& dialog) {
-                    auto& yes_no_dialog = dynamic_cast<views::YesNoDialog&>(dialog);
-                    start(yes_no_dialog.Result());
-                },
-                views::YesNoDialog::arguments{
-                    .message_ = message,
-                    .default_select_ = false,
-                    .yes_text_ = "上書き",
-                    .no_text_ = "スキップ",
-                }
-            ));
+    bool Application::StartTransfer(FileOpType type, std::vector<std::filesystem::path> sources, const std::filesystem::path& dest_arg, bool overwrite)
+    {
+        if (sources.empty()) return false;
+
+        // 断るなら、ダイアログで知らせる(check_transfer を通さずに呼ばれたときも、データは失われない)
+        auto check = CheckTransfer(type, sources, dest_arg);
+        if (!check.what.empty()) {
+            view_->ReportFileError(check.what, FileError{.message = check.reason});
+            return false;
         }
-        else {
-            start(false);
-        }
+
+        // 末尾の "/" を落としたパスで始める(確認も、このパスで通っている)
+        for (auto& src : sources) src = WithoutTrailingSlash(std::move(src));
+        file_operations_.Start(type, std::move(sources), WithoutTrailingSlash(dest_arg), overwrite);
+        return true;
     }
 
     void Application::OnFileOperationCompleted(FileOperationCompleted& event)
@@ -476,18 +636,18 @@ namespace miata {
         // 進捗パネルに伝える。成功なら「完了」を見せてから消え、失敗なら、その場で消える(下で、ダイアログで知らせる)
         view_->FinishProgress(event.id, event.success, std::chrono::steady_clock::now());
 
-        // バックグラウンド実行中にペインが別ディレクトリへ移動されている場合があるため、
-        // 操作開始時点のパスを今も表示している場合に限って再スキャンする。
-        if (event.dest_model && event.dest_model->Path() == event.dest_dir) {
-            view_->ReloadList(*event.dest_model);
-        }
-        if (event.src_model && event.src_model->Path() == event.src_dir) {
+        // 関係するフォルダを、いま表示しているペイン(左右の両方でありうる)だけ更新する。バックグラウンド実行中に、ペインが
+        // 別のフォルダへ移っていれば、そのペインは触らない(表示しているパスで引く)。宛先は、置いたファイルを一覧に出す
+        view_->ReloadDirectory(event.dest_dir);
+        std::set<std::filesystem::path> src_dirs;
+        for (auto& src : event.sources) src_dirs.insert(ParentDirOf(src));
+        for (auto& dir : src_dirs) {
             if (event.type == FileOpType::Move) {
-                view_->ReloadList(*event.src_model); // 消えたファイルを一覧に反映（移せなかったファイルのマークは残る）
+                view_->ReloadDirectory(dir); // 消えたファイルを一覧に反映（移せなかったファイルのマークは残る）
             }
             else {
                 // 中身は変わらないので、操作したファイルのマークだけ解除する(画面にも反映する)
-                view_->UnmarkPaths(*event.src_model, event.sources);
+                view_->UnmarkPathsIn(dir, event.sources);
             }
         }
 
@@ -500,48 +660,27 @@ namespace miata {
         // 成功したときは、何も出さない(進捗パネルが「完了」を見せる。0.3 秒より早く終わった操作は、一覧の更新が、完了の合図になる)
     }
 
-    void Application::DeleteMarked()
+    bool Application::TrashPaths(const std::vector<std::filesystem::path>& paths)
     {
-        auto& list = view_->CurrentList();
+        if (paths.empty()) return false;
 
-        auto targets = MarkedPaths(view_->CurrentFileListView());
-        if (targets.empty()) return; // 見えているマークが無ければ何もしない
-
-        auto dir = list.Path();
-        auto message = std::format("{}件をゴミ箱に移動しますか？", targets.size());
-        // 絞り込みで隠れているマークは、対象にならない(見えていないものを、うっかり消さないため)。件数を知らせる
-        if (auto hidden = view_->CurrentFileListView().HiddenMarkCount(); hidden > 0) {
-            message += std::format("\n(絞り込みで隠れているマーク {} 件は対象外です)", hidden);
+        FileErrorSummary failures;
+        for (auto& path : paths) {
+            auto result = pl_trash_file(path);
+            if (!result) failures.Add(result.error());
         }
 
-        view_->RequestDialog(std::make_shared<views::YesNoDialog>(
-            [this, targets, dir, &list](views::IDialog& dialog) {
-                auto& yes_no_dialog = dynamic_cast<views::YesNoDialog&>(dialog);
-                if (!yes_no_dialog.Result()) return;
+        // 親フォルダを表示しているペインを再スキャンする(両方のペインが同じフォルダなら、両方)。ゴミ箱に移せなかった
+        // ファイルのマークは残る。失敗が全部でも、再スキャンする(一部が移っているかもしれない)
+        std::set<std::filesystem::path> dirs;
+        for (auto& path : paths) dirs.insert(ParentDirOf(path));
+        for (auto& dir : dirs) view_->ReloadDirectory(dir);
 
-                FileErrorSummary failures;
-                for (auto& target : targets) {
-                    auto result = pl_trash_file(target);
-                    if (!result) failures.Add(result.error());
-                }
-
-                // 確認ダイアログはモーダルで開いている間ペイン移動できないため、
-                // ここでは常に操作対象だったディレクトリのままのはずだが、念のため確認する。
-                if (list.Path() == dir) {
-                    view_->ReloadList(list); // ゴミ箱に移せなかったファイルのマークは残る
-                }
-
-                if (failures.count > 0) {
-                    view_->ReportFileError(std::format("エラーが発生しました（{}件失敗）", failures.count), failures.shown);
-                }
-            },
-            views::YesNoDialog::arguments{
-                .message_ = message,
-                .default_select_ = false,
-                .yes_text_ = "ゴミ箱へ",
-                .no_text_ = "キャンセル",
-            }
-        ));
+        if (failures.count > 0) {
+            view_->ReportFileError(std::format("エラーが発生しました（{}件失敗）", failures.count), failures.shown);
+            return false;
+        }
+        return true;
     }
 
     // Miata.command.bind(mode, keys, fn)
@@ -719,34 +858,42 @@ namespace miata {
         return 0;
     }
 
-    int Application::lua_command_copy_marked(lua_State* L)
+    // Luaの文字列(スタックのidx)を、絶対パスとして読む(IsOpenablePath: "/" で始まり、NULを含まない)。文字列でない、
+    // 絶対パスでないときは、Luaのエラー(何もしない)。luaL_errorの前に、デストラクタを持つオブジェクトを作らない
+    static void CheckAbsolutePathArg(lua_State* L, int idx)
     {
-        auto& app = Application::Instance();
-        app.StartFileOperation(FileOpType::Copy);
-        return 0;
+        Script::CheckArgType(L, idx, LUA_TSTRING);
+        size_t length = 0;
+        const char* s = lua_tolstring(L, idx, &length);
+        if (!IsOpenablePath(s, length)) {
+            luaL_error(L, "the path must be an absolute path (starting with \"/\") and must not contain NUL");
+        }
     }
 
-    int Application::lua_command_move_marked(lua_State* L)
+    // CheckAbsolutePathArg を通った引数から、パスを取り出す(エラーを起こさない)
+    static std::filesystem::path ReadAbsolutePathArg(lua_State* L, int idx)
     {
-        auto& app = Application::Instance();
-        app.StartFileOperation(FileOpType::Move);
-        return 0;
+        size_t length = 0;
+        const char* s = lua_tolstring(L, idx, &length);
+        return std::filesystem::path(std::string(s, length));
     }
 
+    // Miata.command.make_directory(path) -> boolean
+    // path(絶対パスの文字列)にフォルダを作る。親フォルダは、あること(無ければ失敗)。既に同じ場所にフォルダがあれば、
+    // 何もせずtrue(エラーにしない)。同名のファイルがある・権限が無いなど、作れなければ、ダイアログで知らせてfalse
+    // (権限が無い失敗には、許可のしかたも案内する)。作った後は、親フォルダを表示しているペイン(左右が同じなら両方)を
+    // 再スキャンする(カーソルとマークは維持される)。pathが絶対パスの文字列でなければ、Luaのエラー
     int Application::lua_command_make_directory(lua_State* L)
     {
         auto& app = Application::Instance();
-        Script::CheckArgType(L, 1, LUA_TSTRING);
-        const std::string name = lua_tostring(L, 1);
+        CheckAbsolutePathArg(L, 1); // luaL_error を呼びうるのは、ここまで
 
-        auto& list = app.view_->CurrentList();
-        auto dest = list.Path() / name;
-
+        const auto dest = ReadAbsolutePathArg(L, 1);
         std::error_code ec;
         std::filesystem::create_directory(dest, ec);
 
         if (!ec) {
-            app.view_->ReloadList(list);
+            app.view_->ReloadDirectory(ParentDirOf(dest));
             lua_pushboolean(L, true);
         }
         else {
@@ -756,74 +903,203 @@ namespace miata {
         return 1;
     }
 
-    // 見えている行に、マークが1件でもあれば true(rename系コマンドは単一ファイルのみ対応のため無効化する)。
-    // 絞り込みで隠れている行のマークは数えない(見えないマークのせいで、リネームできなくならないように)
-    static bool AnyVisibleMarked(views::View& view)
+    bool Application::RenamePath(const std::filesystem::path& from, const std::filesystem::path& to)
     {
-        return !view.CurrentFileListView().MarkedEntries().empty();
-    }
+        if (from == to) return true; // 同じパス: 何もしない
 
-    // 見えているマークがある、またはリストが空ならnil。それ以外はカーソル位置のエントリ名を返す。
-    int Application::lua_private_rename_target(lua_State* L)
-    {
-        auto& app = Application::Instance();
-
-        auto* current = app.view_->CurrentEntry();
-        if (!current || AnyVisibleMarked(*app.view_)) {
-            lua_pushnil(L);
-            return 1;
-        }
-        lua_pushstring(L, current->Name().c_str());
-        return 1;
-    }
-
-    // カレントディレクトリ内にnameと同名のエントリが既に存在するか
-    int Application::lua_private_rename_conflict(lua_State* L)
-    {
-        auto& app = Application::Instance();
-        Script::CheckArgType(L, 1, LUA_TSTRING);
-        const std::string name = lua_tostring(L, 1);
-
-        auto& list = app.view_->CurrentList();
-        std::error_code ec;
-        lua_pushboolean(L, std::filesystem::exists(list.Path() / name, ec));
-        return 1;
-    }
-
-    int Application::lua_private_rename_execute(lua_State* L)
-    {
-        auto& app = Application::Instance();
-        Script::CheckArgType(L, 1, LUA_TSTRING);
-        const std::string new_name = lua_tostring(L, 1);
-
-        auto& list = app.view_->CurrentList();
-        auto* entry = app.view_->CurrentEntry();
-        if (!entry || AnyVisibleMarked(*app.view_)) {
-            lua_pushboolean(L, false);
-            return 1;
+        // 先に何かあれば(壊れたシンボリックリンクも)、上書きしない。std::filesystem::rename は、先がファイルなら、
+        // 黙って置き換える(失ったファイルは戻せない)ので、ここで断る
+        if (ExistsNoFollow(to)) {
+            view_->ReportFileError("リネームできませんでした", FileError{.message = "同名のファイル/フォルダが既に存在します"});
+            return false;
         }
 
-        auto dest = list.Path() / new_name;
-
         std::error_code ec;
-        std::filesystem::rename(entry->Path(), dest, ec);
+        std::filesystem::rename(from, to, ec);
+        if (ec) {
+            view_->ReportFileError("リネームできませんでした", FileError::From(ec));
+            return false;
+        }
 
-        if (!ec) {
-            app.view_->ReloadList(list, dest); // 旧名は消えるので、カーソルは新しい名前に合わせる
-            lua_pushboolean(L, true);
+        // 親フォルダを表示しているペインを再スキャンする。同じフォルダの中での名前の変更なら、カーソルが旧パスにある
+        // ペインのカーソルを、新しい名前へ寄せる(旧名は消えるので、寄せないと、次のファイルに寄ってしまう)。別のフォルダへ
+        // 移したときは、移した先も再スキャンする(旧パスのあったフォルダのカーソルは、次に残っているファイルへ寄る)
+        const auto from_dir = ParentDirOf(from);
+        const auto to_dir = ParentDirOf(to);
+        if (from_dir == to_dir) {
+            view_->ReloadDirectory(from_dir, std::make_pair(from, to));
         }
         else {
-            app.view_->ReportFileError("リネームできませんでした", FileError::From(ec));
-            lua_pushboolean(L, false);
+            view_->ReloadDirectory(from_dir);
+            view_->ReloadDirectory(to_dir);
         }
+        return true;
+    }
+
+    // Miata.command.rename_to(target, new_path) -> boolean
+    // target(パスの文字列、またはエントリ。ちょうど1件)を、new_path(絶対パスの文字列)へ移す(名前の変更。rename(2)なので、
+    // 同じボリュームの中。別のボリュームへは動かせず、失敗になる: move_to を使う)。new_path に既に何かあれば(壊れた
+    // リンクも)、上書きせずに断る。new_path が target と同じなら、何もせずtrue。失敗(断った場合も)は、ダイアログで
+    // 知らせてfalse。成功したら、関係するフォルダを表示しているペインを再スキャンして(同じフォルダの中での変更なら、カーソルが
+    // 旧パスにあるペインは、カーソルが新しい名前に付いていく)、true。引数が正しくなければ、Luaのエラー(何もしない)
+    int Application::lua_command_rename_to(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        lua_settop(L, 2); // 引数は 2 つまで(PushTargetPaths が積む表が、省いた引数の位置に来ないように)
+        PushTargetPaths(L, 1);
+        const int paths_index = lua_gettop(L);
+        if (lua_rawlen(L, paths_index) != 1) {
+            luaL_error(L, "rename_to: expected exactly one target (a path or an entry), got %d", (int)lua_rawlen(L, paths_index));
+            return 0;
+        }
+        CheckAbsolutePathArg(L, 2); // luaL_error を呼びうるのは、ここまで
+
+        const auto from = ReadPathArray(L, paths_index).front();
+        const auto to = ReadAbsolutePathArg(L, 2);
+        lua_pushboolean(L, app.RenamePath(from, to));
         return 1;
     }
 
-    int Application::lua_command_delete_marked(lua_State* L)
+    // Miata.command.exists(path) -> boolean
+    // path(絶対パスの文字列)に、何かがあるか。シンボリックリンクはたどらない(壊れたリンクも「ある」。コピー・移動の
+    // 「同名があるか」と同じ見方)。読むだけ。pathが絶対パスの文字列でなければ、Luaのエラー
+    int Application::lua_command_exists(lua_State* L)
+    {
+        CheckAbsolutePathArg(L, 1);
+        lua_pushboolean(L, ExistsNoFollow(ReadAbsolutePathArg(L, 1)));
+        return 1;
+    }
+
+    // check_transfer / copy_to / move_to の、種類の引数("copy" / "move")を読む。それ以外は、Luaのエラー
+    // (luaL_errorの前に、デストラクタを持つオブジェクトを作らない)
+    static FileOpType ReadTransferKindArg(lua_State* L, int idx)
+    {
+        Script::CheckArgType(L, idx, LUA_TSTRING);
+        const char* s = lua_tostring(L, idx);
+        if (std::strcmp(s, "copy") == 0) return FileOpType::Copy;
+        if (std::strcmp(s, "move") == 0) return FileOpType::Move;
+        luaL_error(L, "unknown kind: %s (expected \"copy\" or \"move\")", s);
+        return FileOpType::Copy; // luaL_errorは戻らない
+    }
+
+    // Miata.command.check_transfer(kind, target, dest_dir) -> true, conflicts | false, message
+    // target(パスの文字列・エントリ・それらの配列)を、dest_dir(絶対パスのフォルダ)へ、kind("copy" か "move")で
+    // 操作してよいか調べる。画面には触らない(ダイアログを出さない。状態も変えない)。
+    //  - 断る組み合わせ(先が存在するフォルダでない・同じフォルダ・フォルダを自分の中へ・移動で、先の同名のフォルダが元の祖先)
+    //    なら、false と、断る理由の文(「コピーできませんでした (名前): コピー先が、コピー元と同じフォルダです」)。
+    //    ダイアログに出すなら、そのまま dialog_confirm に渡せる(UTF-8 として不正なバイトは、U+FFFD にしてある)
+    //  - 断らなければ、true と、先に同名があるものの、先のパスの配列(壊れたシンボリックリンクも、同名。無ければ空の配列)。
+    //    上書きの確認を出すかを、これで決める。copy_to / move_to は、始めるときに、同じ確認をやり直す(確認してから
+    //    始めるまでの間に、状況が変わっていても、ファイルは失われない)
+    // 引数が正しくなければ、Luaのエラー
+    int Application::lua_command_check_transfer(lua_State* L)
+    {
+        lua_settop(L, 3); // 引数は 3 つまで(PushTargetPaths が積む表が、省いた引数の位置に来ないように)
+        const FileOpType type = ReadTransferKindArg(L, 1);
+        PushTargetPaths(L, 2);
+        const int paths_index = lua_gettop(L);
+        CheckAbsolutePathArg(L, 3); // luaL_error を呼びうるのは、ここまで
+
+        const auto sources = ReadPathArray(L, paths_index);
+        const auto check = CheckTransfer(type, sources, ReadAbsolutePathArg(L, 3));
+        if (!check.what.empty()) {
+            const auto message = RepairUtf8(std::format("{}: {}", check.what, check.reason));
+            lua_pushboolean(L, false);
+            lua_pushlstring(L, message.data(), message.size());
+            return 2;
+        }
+        lua_pushboolean(L, true);
+        lua_createtable(L, (int)check.conflicts.size(), 0);
+        for (size_t i = 0; i < check.conflicts.size(); ++i) {
+            const auto& raw = check.conflicts[i].native(); // 元のバイト列のまま(エントリの path と同じ)
+            lua_pushlstring(L, raw.data(), raw.size());
+            lua_rawseti(L, -2, (lua_Integer)i + 1);
+        }
+        return 2;
+    }
+
+    // copy_to / move_to の opts(スタックのidx。省略か nil なら、既定)を読む: { overwrite = boolean }。戻り値は overwrite
+    // (既定は false = 先に同名があれば、スキップ)。知らない項目と、型違いは、Luaのエラー(間違いが、黙って無視されると、
+    // 上書きするつもりでスキップされる、またはその逆になるため)。luaL_errorの前に、デストラクタを持つオブジェクトを作らない。
+    // 文字列でない名前は、lua_tostring が数値のキーを文字列に変えて、lua_next を壊すので、型を先に見る
+    static bool ReadTransferOpts(lua_State* L, int idx)
+    {
+        bool overwrite = false;
+        if (lua_isnoneornil(L, idx)) return overwrite;
+        idx = lua_absindex(L, idx);
+        Script::CheckArgType(L, idx, LUA_TTABLE);
+        lua_pushnil(L);
+        while (lua_next(L, idx) != 0) {
+            if (lua_type(L, -2) != LUA_TSTRING) {
+                luaL_error(L, "unknown option (option names must be strings)");
+                return overwrite;
+            }
+            const char* name = lua_tostring(L, -2);
+            if (std::strcmp(name, "overwrite") != 0) {
+                luaL_error(L, "unknown option: %s (expected \"overwrite\")", name);
+                return overwrite;
+            }
+            if (lua_type(L, -1) != LUA_TBOOLEAN) {
+                luaL_error(L, "option overwrite must be a boolean");
+                return overwrite;
+            }
+            overwrite = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+        }
+        return overwrite;
+    }
+
+    int Application::TransferCommand(lua_State* L, FileOpType type)
     {
         auto& app = Application::Instance();
-        app.DeleteMarked();
-        return 0;
+        lua_settop(L, 3); // 引数は 3 つまで(省いた opts は nil)。PushTargetPaths が積む表が、省いた引数の位置に来ないように
+        PushTargetPaths(L, 1);
+        const int paths_index = lua_gettop(L);
+        CheckAbsolutePathArg(L, 2);
+        const bool overwrite = ReadTransferOpts(L, 3); // luaL_error を呼びうるのは、ここまで
+
+        auto sources = ReadPathArray(L, paths_index);
+        lua_pushboolean(L, app.StartTransfer(type, std::move(sources), ReadAbsolutePathArg(L, 2), overwrite));
+        return 1;
+    }
+
+    // Miata.command.copy_to(target, dest_dir, [opts]) -> boolean
+    // target(パスの文字列・エントリ・それらの配列)を、dest_dir(絶対パスのフォルダ)へコピーする。確認は出さない
+    // (上書きの確認は、呼ぶ側で check_transfer と dialog_yes_no を使って組む)。裏スレッドで実行する(進捗パネルが出る)。
+    // opts.overwrite: 先に同名があるとき、上書きするか(true)、スキップするか(false。既定)。操作全体で1つ。
+    // 始める前に、check_transfer と同じ確認をする: 断る組み合わせなら、始めずに、ダイアログで知らせてfalse。
+    // 始めたらtrue(終わったかは、あとで分かる: 失敗は、完了のときにダイアログで知らせる)。対象が空なら、何もせずfalse。
+    // 完了すると、先と元のフォルダを表示しているペインが更新され、コピーしたファイルのマークが外れる。引数が正しくなければ、
+    // Luaのエラー(何もしない)
+    int Application::lua_command_copy_to(lua_State* L)
+    {
+        return TransferCommand(L, FileOpType::Copy);
+    }
+
+    // Miata.command.move_to(target, dest_dir, [opts]) -> boolean
+    // copy_to と同じ。移動する(同じボリュームなら rename、別のボリュームなら、コピーして、成功したときだけ元を消す)。
+    // 先を上書きするとき(opts.overwrite = true)は、先を消してから移すので、移すのに失敗すると、先だけが失われる
+    int Application::lua_command_move_to(lua_State* L)
+    {
+        return TransferCommand(L, FileOpType::Move);
+    }
+
+    // Miata.command.trash(target) -> boolean
+    // target(パスの文字列・エントリ・それらの配列。open などと同じ)を、ゴミ箱へ移す。確認は出さない(確認が要るなら、
+    // 呼ぶ側で dialog_yes_no を使う)。メインスレッドで、1件ずつ同期に移す。全部移せたらtrue。対象が空(空の配列)なら、何もせずfalse。
+    // 1件でも移せなければfalse(失敗は、まとめて1回のダイアログで知らせる。権限が無い失敗には、許可のしかたも案内する)。
+    // 移した後は、親フォルダを表示しているペインを再スキャンする(カーソルは次に残っているファイルへ寄り、移せなかった
+    // ファイルのマークは残る)。対象が正しくない(nil・相対パスなど)ときは、Luaのエラー(何もしない)。
+    int Application::lua_command_trash(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        lua_settop(L, 1); // 余分な引数は無視する
+        PushTargetPaths(L, 1); // luaL_error を呼びうるのは、ここまで
+        const int paths_index = lua_gettop(L);
+
+        // ここから先はluaL_errorを呼ばない(vectorを作るため)
+        lua_pushboolean(L, app.TrashPaths(ReadPathArray(L, paths_index)));
+        return 1;
     }
 
     // Luaに公開するペイン名。current_pane()の戻り値とreload(pane)の引数で同じ表記を使うよう、
@@ -936,7 +1212,7 @@ namespace miata {
 
     // Miata.command.marked_entries([pane]) -> { {name, path, is_dir}, ... }
     // paneのペインの、マーク済みのエントリ(画面の並び順。絞り込み中は、見えている行のマークだけ)。マークが無ければ空の配列(カーソル下の1件には
-    // 置き換えない: copy_marked / move_marked の「マークが無ければカーソル下」は、呼ぶ側で cursor_entry と組み合わせる)。
+    // 置き換えない: コピー・移動(c / m)の「マークが無ければカーソル下」は、呼ぶ側(resources/test.lua)で cursor_entry と組み合わせる)。
     // 状態は変えない。
     int Application::lua_command_marked_entries(lua_State* L)
     {
@@ -950,6 +1226,18 @@ namespace miata {
             PushEntryTable(L, *marked[i]);
             lua_rawseti(L, -2, (lua_Integer)i + 1);
         }
+        return 1;
+    }
+
+    // Miata.command.hidden_mark_count([pane]) -> integer
+    // paneの、絞り込みで隠れている行のマークの数(絞り込んでいなければ0)。marked_entries は、見えている行のマークだけを
+    // 返すので、隠れているマークは、対象にならない。ゴミ箱の確認に「隠れているマーク N 件は対象外です」と添えるときなどに使う。
+    // 読むだけで、状態は変えない
+    int Application::lua_command_hidden_mark_count(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        auto pane = OptionalPaneArg(L, 1, app.view_->CurrentPane());
+        lua_pushinteger(L, app.view_->GetFileListView(pane).HiddenMarkCount());
         return 1;
     }
 
@@ -1433,126 +1721,15 @@ namespace miata {
         return 1;
     }
 
-    // 開く・Finderで表示するコマンドの対象のパスとして使えるか(Luaの文字列のバイト列で判定する): 空でなく、"/" で始まる
-    // 絶対パスで、NULを含まない。相対パスは起動した場所で意味が変わるので受け付けない("~" も展開しない)。
-    // ".." や "//" は、開くだけなので、そのまま通す(jump_to と違い、ペインの場所にはしない)
-    static bool IsOpenablePath(const char* s, size_t length)
-    {
-        return length > 0 && s[0] == '/' && std::memchr(s, '\0', length) == nullptr;
-    }
-
-    // スタックのidxの値が、1件の対象(パスの文字列、またはパスを持つエントリ { path = 文字列 })なら、そのパスの文字列を
-    // スタックに積んでtrue。そうでなければ、何も積まずにfalse。Luaの C API だけを使う(luaL_errorの前に呼んでよい)
-    static bool PushTargetPath(lua_State* L, int idx)
-    {
-        idx = lua_absindex(L, idx);
-        if (lua_type(L, idx) == LUA_TSTRING) {
-            lua_pushvalue(L, idx);
-            return true;
-        }
-        if (lua_type(L, idx) == LUA_TTABLE) {
-            lua_getfield(L, idx, "path");
-            if (lua_type(L, -1) == LUA_TSTRING) return true;
-            lua_pop(L, 1);
-        }
-        return false;
-    }
-
     // Miata._private.paths_of(target) -> string[]
     // open などのコマンドの対象を、絶対パスの文字列の配列にする。targetは、パスの文字列、エントリ({ path = 文字列 }。
     // cursor_entry の戻り値など)、またはそれらの配列(marked_entries の戻り値など)。空の配列は、空の配列になる。
     // それ以外(nil・数値・入れ子の配列・path が文字列でないエントリ・絶対パスでない文字列・NULを含む文字列)はエラー。
-    // Luaの C API だけを使うので、デストラクタを持つオブジェクトは無い(エラーは longjmp)。
+    // 検証は PushTargetPaths(ファイルを扱うコマンドの対象。ゴミ箱などの公開のコマンドも、同じものを通る)。
     int Application::lua_private_paths_of(lua_State* L)
     {
-        if (lua_gettop(L) < 1 || lua_isnil(L, 1)) {
-            luaL_error(L, "expected a path (string), an entry ({ path = ... }) or an array of them, got nil");
-            return 0;
-        }
-        lua_settop(L, 1); // 余分な引数は無視する
-
-        // pathを持つ表はエントリ(1件)、持たない表は配列
-        bool single = false;
-        if (lua_type(L, 1) == LUA_TSTRING) {
-            single = true;
-        }
-        else if (lua_type(L, 1) == LUA_TTABLE) {
-            lua_getfield(L, 1, "path");
-            single = !lua_isnil(L, -1);
-            lua_pop(L, 1);
-        }
-        else {
-            luaL_error(L, "expected a path (string), an entry ({ path = ... }) or an array of them, got %s", luaL_typename(L, 1));
-            return 0;
-        }
-
-        lua_newtable(L); // 結果(index 2)
-        if (single) {
-            if (!PushTargetPath(L, 1)) {
-                luaL_error(L, "entry.path must be a string");
-                return 0;
-            }
-            size_t length = 0;
-            const char* s = lua_tolstring(L, -1, &length);
-            if (!IsOpenablePath(s, length)) {
-                luaL_error(L, "the path must be an absolute path (starting with \"/\") and must not contain NUL");
-                return 0;
-            }
-            lua_rawseti(L, 2, 1);
-        }
-        else {
-            const lua_Integer count = (lua_Integer)lua_rawlen(L, 1);
-            for (lua_Integer i = 1; i <= count; ++i) {
-                lua_rawgeti(L, 1, i);
-                if (!PushTargetPath(L, -1)) {
-                    luaL_error(L, "element %d: expected a path (string) or an entry ({ path = string })", (int)i);
-                    return 0;
-                }
-                size_t length = 0;
-                const char* s = lua_tolstring(L, -1, &length);
-                if (!IsOpenablePath(s, length)) {
-                    luaL_error(L, "element %d: the path must be an absolute path (starting with \"/\") and must not contain NUL", (int)i);
-                    return 0;
-                }
-                lua_rawseti(L, 2, i); // パスの文字列を積み込む(積んだ分は減る)
-                lua_pop(L, 1);        // 取り出した要素
-            }
-        }
-        return 1; // 結果の表が、スタックの一番上
-    }
-
-    // Luaの値(idx)が、絶対パスの文字列の配列(paths_of の結果)かを調べる。違えばLuaのエラー(luaL_errorの前に、
-    // デストラクタを持つオブジェクトを作らない)。空でもよい
-    static void CheckPathArray(lua_State* L, int idx, const char* function)
-    {
-        Script::CheckArgType(L, idx, LUA_TTABLE);
-        const lua_Integer count = (lua_Integer)lua_rawlen(L, idx);
-        for (lua_Integer i = 1; i <= count; ++i) {
-            lua_rawgeti(L, idx, i);
-            size_t length = 0;
-            const char* s = lua_type(L, -1) == LUA_TSTRING ? lua_tolstring(L, -1, &length) : nullptr;
-            if (!s || !IsOpenablePath(s, length)) {
-                luaL_error(L, "%s: element %d is not an absolute path string", function, (int)i);
-                return;
-            }
-            lua_pop(L, 1);
-        }
-    }
-
-    // CheckPathArray を通った配列から、パスを取り出す(エラーを起こさない)
-    static std::vector<std::filesystem::path> ReadPathArray(lua_State* L, int idx)
-    {
-        std::vector<std::filesystem::path> paths;
-        const lua_Integer count = (lua_Integer)lua_rawlen(L, idx);
-        paths.reserve((size_t)count);
-        for (lua_Integer i = 1; i <= count; ++i) {
-            lua_rawgeti(L, idx, i);
-            size_t length = 0;
-            const char* s = lua_tolstring(L, -1, &length);
-            paths.emplace_back(std::string(s, length));
-            lua_pop(L, 1);
-        }
-        return paths;
+        PushTargetPaths(L, 1); // 余分な引数は無視する。結果の表が、スタックの一番上
+        return 1;
     }
 
     // Miata._private.open_paths(paths, [app]) -> boolean

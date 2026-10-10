@@ -21,7 +21,8 @@ Miata.config.color.cloud = "#7ec8ffff"
 
 local command <const> = Miata.command
 
--- 操作の対象: マーク済みのエントリ。無ければカーソル下の1件(copy_marked / move_marked と同じ)。一覧が空なら、空の配列
+-- 操作の対象: マーク済みのエントリ。無ければカーソル下の1件(コピー・移動の c / m と、開く o ・Finder で表示 O ・パスのコピー yy が使う)。
+-- 一覧が空なら、空の配列
 local function targets()
     local list = Miata.command.marked_entries()
     if #list == 0 then
@@ -118,20 +119,77 @@ Miata.command.bind("n", " ", function()
     Miata.command.toggle_mark()
     Miata.command.navigate_down()
 end)
+-- c: コピー / m: 移動。対象は、マーク済み(見えている行のマークだけ)。無ければカーソル下の1件。宛先は、反対側のペインのフォルダ。
+-- 1. 始める前に断る組み合わせ(同じフォルダ・フォルダを自分の中へ・移動で、先の同名のフォルダが元の祖先)は、check_transfer が
+--    調べて、理由を知らせて終わる。上書きの確認より前にやる(答えても進められない質問を、しないため)
+-- 2. 先に同名があれば、上書き(はい)かスキップ(いいえ。Esc も)かを聞く(操作全体で1つ。既定はスキップ)
+-- 3. copy_to / move_to が、裏スレッドで始める(進捗パネルが出る。完了で、一覧の更新と、コピーしたファイルのマーク解除)
+local function transfer(kind, run)
+    local list = targets()
+    if #list == 0 then return end
+    local other = Miata.command.current_pane() == "left" and "right" or "left"
+    local dest = Miata.command.pane_path(other)
+    local ok, info = Miata.command.check_transfer(kind, list, dest)
+    if not ok then
+        Miata.command.dialog_confirm(info) -- 断る理由
+        return
+    end
+    local overwrite = false
+    if #info > 0 then -- info は、先に同名があるものの、先のパスの配列
+        overwrite = Miata.command.dialog_yes_no(#info .. "個のファイルが既に存在します。上書きしますか？", false, "上書き", "スキップ")
+    end
+    run(list, dest, { overwrite = overwrite })
+end
 Miata.command.bind("n", "c", function()
-    Miata.command.copy_marked()
+    transfer("copy", Miata.command.copy_to)
 end)
 Miata.command.bind("n", "m", function()
-    Miata.command.move_marked()
+    transfer("move", Miata.command.move_to)
 end)
+-- K: 新しいフォルダを作る。名前を聞いて、カーソルのあるペインのフォルダの中に作る(名前に絶対パスを入れれば、その場所に作る)。
+-- 場所(ペインのフォルダ)は、ダイアログを開く前に決める
 Miata.command.bind("n", "<S-k>", function()
-    Miata.command.make_folder()
+    local dir = Miata.command.pane_path()
+    local name = Miata.command.dialog_input("新しいフォルダ名を入力してください", "")
+    if name and name ~= "" then
+        Miata.command.make_directory(Miata.util.path_join(dir, name))
+    end
 end)
+-- r: カーソルのファイルの名前を変える(入力欄の初めの値は、今の名前)。見えているマークがあれば何もしない(単一のファイルだけ。
+-- 絞り込みで隠れているマークは数えない)。同名のファイル/フォルダが既にあれば、上書きせず、同じ入力ダイアログを開き直す。
+-- 名前に絶対パスを入れれば、その場所へ移す(同じボリュームの中)
 Miata.command.bind("n", "r", function()
-    Miata.command.rename()
+    if #Miata.command.marked_entries() > 0 then return end
+    local entry = Miata.command.cursor_entry()
+    if not entry then return end
+    local dir = Miata.command.pane_path()
+    local message = "リネーム"
+    local new_name = entry.name
+    local new_path
+    while true do
+        new_name = Miata.command.dialog_input(message, new_name)
+        if not new_name or new_name == "" or new_name == entry.name then return end
+        new_path = Miata.util.path_join(dir, new_name)
+        if not Miata.command.exists(new_path) then break end
+        message = "リネーム（同名のファイル/フォルダが既に存在します）"
+    end
+    Miata.command.rename_to(entry, new_path)
 end)
+-- dd: マーク済み(見えている行のマークだけ)をゴミ箱へ。確認する。マークが無ければ何もしない(カーソル下の1件にはしない)。
+-- 確認の前に対象を決める(marked_entries)。確認の後の trash は、そのパスに対して動く(ダイアログの間に一覧が変わっても、
+-- 確認したファイルが対象)。trash は配列を渡せる(1回で、再読み込みも失敗のダイアログも1回にまとまる)
 Miata.command.bind("n", "dd", function()
-    Miata.command.delete_marked()
+    local list = Miata.command.marked_entries()
+    if #list == 0 then return end
+    local message = #list .. "件をゴミ箱に移動しますか？"
+    -- 絞り込みで隠れているマークは、対象にならない(見えていないものを、うっかり消さないため)。件数を知らせる
+    local hidden = Miata.command.hidden_mark_count()
+    if hidden > 0 then
+        message = message .. "\n(絞り込みで隠れているマーク " .. hidden .. " 件は対象外です)"
+    end
+    if Miata.command.dialog_yes_no(message, false, "ゴミ箱へ", "キャンセル") then
+        Miata.command.trash(list)
+    end
 end)
 Miata.command.bind("n", "<C-r>", function()
     Miata.command.reload()
