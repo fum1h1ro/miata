@@ -169,7 +169,7 @@ bool pl_is_in_file_provider_domain(const std::filesystem::path& path);
 
 // Finderに頼んで、ファイルをゴミ箱へ移す(Apple Events)。Finder自身の権限で行われる。pl_trash_fileのフォールバック
 // (クラウドストレージの中では、普段の起動のアプリからは、書き込みの許可があっても、ゴミ箱への移動だけが拒否される。
-// CLAUDE.mdの「権限エラーの案内」)。初回は、オートメーションの許可のダイアログが出て、答えるまで呼び出しが止まる
+// .claude/rules/permissions-signing.mdの「権限エラーの案内」)。初回は、オートメーションの許可のダイアログが出て、答えるまで呼び出しが止まる
 // (メインスレッドで呼ぶと、その間Miata全体が止まる)。失敗(許可が無い・Finderが応答しない・Finderが断った)はFileErrorで返す。
 // permission_deniedは常にfalse(フルディスクアクセスの案内は当てはまらない。メッセージが、オートメーションの許可を案内する)。
 // シンボリックリンクは頼まずに失敗にする(Finderにファイルのurlで頼むと、返事が来ない。実測)。

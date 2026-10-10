@@ -566,7 +566,7 @@ static NSURL* TrashTargetURL(const std::filesystem::path& path)
 // 置かれる(macOS 12.3 以降)。その中のファイルは、普段の起動(Dock・Finder・open)のアプリからは、書き込みの許可があっても、
 // ゴミ箱への移動だけが拒否される(実測、macOS 27.0、Dropbox。trashItemAtURL: も NSWorkspace の recycleURLs: も、
 // Cocoa 513 で、sandboxd が「kTCCServiceFileProviderDomain … would require prompt」と断る。作成・リネーム・unlink は通る)。
-// Finder は、自分の権限で移せるので、Apple Events で Finder に頼む。実測の詳細は CLAUDE.md の「権限エラーの案内」。
+// Finder は、自分の権限で移せるので、Apple Events で Finder に頼む。実測の詳細は .claude/rules/permissions-signing.md の「権限エラーの案内」。
 
 // parent が、ファイルプロバイダの領域の中か。領域は root(~/Library/CloudStorage の実パス)の直下のフォルダなので、
 // parent が root の下で(root と同じではない)あれば、その領域の中身。root 直下の項目(parent == root)は、領域の外
@@ -650,7 +650,7 @@ std::expected<void, miata::FileError> pl_trash_file_via_finder(const std::filesy
     // 呼んだスレッドで、そのまま行う。AEDeterminePermissionToAutomateTarget のヘッダーには「メインスレッドで呼ばない
     // (ユーザーの答えを待つので、いくらでも長くなりうる)」とあるが、別のスレッドに任せて、呼んだスレッドをセマフォで待たせる案は、
     // 実際の Apple Events では確かめられなかった(確かめようとしたとき、画面がロックされていて、許可のダイアログに答えられなかった)
-    // ので、採っていない。メインスレッドから呼ぶ版は、許可済みの状態で、ひととおり通った(CLAUDE.md の「権限エラーの案内」)。
+    // ので、採っていない。メインスレッドから呼ぶ版は、許可済みの状態で、ひととおり通った(.claude/rules/permissions-signing.md の「権限エラーの案内」)。
     // 初回の許可のダイアログに答えるまで、呼んだスレッドが止まる(ダイアログは別のプロセスが出す。メインスレッドなら Miata 全体が止まる)。
     // 待つ間も、実行ループは回らない(実測: 4.7 秒待つ間、5 ms のタイマーが 1 回も発火しなかった)ので、Application::Update は再入しない
     @autoreleasepool {
