@@ -336,6 +336,15 @@ namespace miata::views {
         }
     }
 
+    void View::RefreshHiddenFiles()
+    {
+        for (auto pane : {constants::Pane::Left, constants::Pane::Right}) {
+            GetFileListView(pane).RefreshHidden();
+        }
+        // 行数が変わるので、絞り込みバーの件数と、隠れたマークの数を、次のティックを待たずに更新する
+        browser_->UpdateQueryBars();
+    }
+
     bool View::ToggleQuickLook(constants::QuickLookArea area)
     {
         return browser_->ToggleQuickLook(area);

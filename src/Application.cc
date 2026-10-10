@@ -270,6 +270,7 @@ namespace miata {
             { "jump_to", lua_command_jump_to },
             { "set_clipboard", lua_command_set_clipboard },
             { "toggle_icons", lua_command_toggle_icons },
+            { "toggle_hidden", lua_command_toggle_hidden },
         };
         script.RegisterFunctions(
             "Miata.command",
@@ -852,6 +853,22 @@ namespace miata {
         Config::SetShowIcons(show);
         app.view_->GetFileListView(views::constants::Pane::Left).Redraw();
         app.view_->GetFileListView(views::constants::Pane::Right).Redraw();
+        lua_pushboolean(L, show);
+        return 1;
+    }
+
+    // Miata.command.toggle_hidden() -> boolean
+    // 隠しファイル(名前の頭が "." のものと、Finderの「隠す」フラグが付いたもの)の表示を、入り切りする。切り替えた後の
+    // 状態(出していればtrue)を返す。両ペインに効く。Miata.config.set_show_hidden で決めた値を書き換えるだけで、
+    // 保存はしない(起動し直すと、設定が決める)。両ペインの一覧を作り直す(カーソルは、同じファイルに留まる。隠れたら、近くの行)。
+    // 隠れた行は、検索・マークの一括操作・ファイル操作の対象から外れる(絞り込みで隠れた行と同じ)。
+    // 設定の読み込み中(view_ が無い)に呼ぶと、トランポリンが、落とさずにエラーにする。
+    int Application::lua_command_toggle_hidden(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        const bool show = !Config::ShowHidden();
+        Config::SetShowHidden(show);
+        app.view_->RefreshHiddenFiles();
         lua_pushboolean(L, show);
         return 1;
     }

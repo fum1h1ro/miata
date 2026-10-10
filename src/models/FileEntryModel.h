@@ -76,6 +76,11 @@ namespace miata::models {
         // ファイルにだけ使う。名前の頭のアイコン(FileIconCache)は、フォルダも含めて、この印が付いていれば、
         // ファイルの中身を読みかねない iconForFile: を呼ばない
         bool IsDataless() const;
+        // 隠しファイルか(Finderと同じ): 名前の頭が "." か、Finderの「隠す」フラグ(chflags hidden。~/Library や /usr など)
+        // が付いている。初めて聞かれたときに調べて(lstat 1回)、保持する(一覧を作るたびに、全エントリを調べないため)。
+        // エントリは再スキャンで作り直されるので、外でフラグを変えても、次の再スキャンまでは反映されない。
+        // 隠しているときの一覧(FileListView::ApplyFilter)が使う
+        bool IsHidden() const;
         inline bool IsMarked() const
         {
             return flags_.is(flags::marked);
@@ -94,6 +99,8 @@ namespace miata::models {
         std::string ext_;
         std::string mtime_;
         misc::Flags<flags> flags_;
+        // IsHidden()の結果の保持。-1は、まだ調べていない
+        mutable int8_t hidden_ = -1;
     };
 
 }

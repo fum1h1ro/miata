@@ -17,7 +17,9 @@ Miata.config.color.alias = "#ff8ad8ff"
 Miata.config.color.cloud = "#7ec8ffff"
 -- Miata.config.set_font("フォント名") / Miata.config.set_font_size(size) でファイル一覧のフォントを指定できる(未指定ならデフォルト)
 -- Miata.config.set_history_limit(n) でフォルダの履歴の件数(左右のペイン合わせて)を指定できる(0〜10000。未指定なら 100。0 なら記録しない)
--- Miata.config.set_show_icons(true/false) でファイル名の頭のアイコン(Finder と同じ)を出すかを指定できる(未指定なら出す。. で実行中に切り替えられる)
+-- Miata.config.set_show_icons(true/false) でファイル名の頭のアイコン(Finder と同じ)を出すかを指定できる(未指定なら出す。. で実行中に切り替えられる。いまの状態は Miata.config.get_show_icons() で読める)
+-- Miata.config.set_show_hidden(true/false) で隠しファイル(名前の頭が . のものと、Finder の「隠す」フラグが付いたもの。~/Library など)を
+-- 出すかを指定できる(未指定なら隠す。zh で実行中に切り替えられる。いまの状態は Miata.config.get_show_hidden() で読める)
 
 local command <const> = Miata.command
 
@@ -163,7 +165,7 @@ Miata.command.bind("n", "<S-k>", function()
     end
 end)
 -- r: カーソルのファイルの名前を変える(入力欄の初めの値は、今の名前)。見えているマークがあれば何もしない(単一のファイルだけ。
--- 絞り込みで隠れているマークは数えない)。同名のファイル/フォルダが既にあれば、上書きせず、同じ入力ダイアログを開き直す。
+-- 隠れているマーク(絞り込みで外れた行・隠しファイル)は数えない)。同名のファイル/フォルダが既にあれば、上書きせず、同じ入力ダイアログを開き直す。
 -- 名前に絶対パスを入れれば、その場所へ移す(同じボリュームの中)
 Miata.command.bind("n", "r", function()
     if #Miata.command.marked_entries() > 0 then return end
@@ -189,10 +191,11 @@ Miata.command.bind("n", "dd", function()
     local list = Miata.command.marked_entries()
     if #list == 0 then return end
     local message = #list .. "件をゴミ箱に移動しますか？"
-    -- 絞り込みで隠れているマークは、対象にならない(見えていないものを、うっかり消さないため)。件数を知らせる
+    -- 隠れているマーク(絞り込みで外れた行・隠しファイルを隠しているときの隠しファイル)は、対象にならない
+    -- (見えていないものを、うっかり消さないため)。件数を知らせる
     local hidden = Miata.command.hidden_mark_count()
     if hidden > 0 then
-        message = message .. "\n(絞り込みで隠れているマーク " .. hidden .. " 件は対象外です)"
+        message = message .. "\n(隠れているマーク " .. hidden .. " 件は対象外です)"
     end
     if Miata.command.dialog_yes_no(message, false, "ゴミ箱へ", "キャンセル") then
         Miata.command.trash(list)
@@ -205,6 +208,12 @@ end)
 -- set_show_icons が決める)
 Miata.command.bind("n", ".", function()
     Miata.command.toggle_icons()
+end)
+-- 隠しファイル(名前の頭が . のもの・Finder の「隠す」フラグが付いたもの。~/Library など)の表示を入り切りする(ranger / lf と同じ zh)。
+-- 隠しているあいだは、検索・絞り込み・まとめてマーク・コピー・移動・ゴミ箱の対象からも外れる(絞り込みで隠れた行と同じ)。
+-- 切り替えは保存しない(起動時の状態は、上の set_show_hidden が決める)
+Miata.command.bind("n", "zh", function()
+    Miata.command.toggle_hidden()
 end)
 -- プレビュー(Quick Look)。カーソル下のファイルを、引数なしなら両ペインに被せて表示する。もう一度押すか Esc で閉じる
 Miata.command.bind("n", "p", function()

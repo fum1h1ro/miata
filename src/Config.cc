@@ -107,6 +107,9 @@ namespace miata {
             { "set_font_size", lua_set_font_size },
             { "set_history_limit", lua_set_history_limit },
             { "set_show_icons", lua_set_show_icons },
+            { "get_show_icons", lua_get_show_icons },
+            { "set_show_hidden", lua_set_show_hidden },
+            { "get_show_hidden", lua_get_show_hidden },
         };
         script.RegisterFunctions("Miata.config", std::vector<luaL_Reg>(std::begin(config_funcs), std::end(config_funcs)));
     }
@@ -142,6 +145,37 @@ namespace miata {
         }
         Instance().show_icons_ = lua_toboolean(L, 1) != 0;
         return 0;
+    }
+
+    // Miata.config.get_show_icons() -> boolean: ファイル名の頭のアイコンを出している(出す設定になっている)か。
+    // set_show_icons で決めた値と、実行中の toggle_icons での切り替えの、どちらも反映した、いまの状態
+    // (どちらも同じ値 Config::ShowIcons() を書き換える)。読むだけで、状態は変えない。画面を触らないので、
+    // 設定の読み込み中(init.lua の最上位)からも呼べる。引数は見ない。
+    int Config::lua_get_show_icons(lua_State* L)
+    {
+        lua_pushboolean(L, Instance().show_icons_);
+        return 1;
+    }
+
+    // Miata.config.set_show_hidden(bool): 隠しファイルを一覧に出すか(起動したときの状態)。真偽値だけ受け付ける
+    // (set_show_iconsと同じ。型の違いは、設定を変えずにエラーにする)。
+    int Config::lua_set_show_hidden(lua_State* L)
+    {
+        if (lua_type(L, 1) != LUA_TBOOLEAN) {
+            return luaL_error(L, "set_show_hidden: expected a boolean (true or false)");
+        }
+        Instance().show_hidden_ = lua_toboolean(L, 1) != 0;
+        return 0;
+    }
+
+    // Miata.config.get_show_hidden() -> boolean: 隠しファイルを一覧に出している(出す設定になっている)か。
+    // set_show_hidden で決めた値と、実行中の toggle_hidden での切り替えの、どちらも反映した、いまの状態
+    // (どちらも同じ値 Config::ShowHidden() を書き換える)。読むだけで、状態は変えない。画面を触らないので、
+    // 設定の読み込み中(init.lua の最上位)からも呼べる。引数は見ない。
+    int Config::lua_get_show_hidden(lua_State* L)
+    {
+        lua_pushboolean(L, Instance().show_hidden_);
+        return 1;
     }
 
     int Config::lua_set_font(lua_State* L)

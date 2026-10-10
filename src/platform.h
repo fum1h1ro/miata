@@ -200,6 +200,11 @@ bool pl_is_alias_file(const std::filesystem::path& path);
 // 意味が違う(中身の一覧をまだ取っていない。一覧すると外れる)。調べられないとき(存在しない・権限が無い)は false。
 bool pl_is_dataless_file(const std::filesystem::path& path);
 
+// pathに、Finderの「隠す」フラグ(chflags hidden。st_flags の UF_HIDDEN)が付いているか。~/Library・/usr・/bin などに付いている。
+// 名前の頭の "." は見ない(それは FileEntryModel::IsHidden)。メタデータを読むだけ(lstat 1回)。シンボリックリンクは、
+// リンクそのもののフラグを見る。調べられないとき(存在しない・権限が無い)は false。
+bool pl_is_hidden_file(const std::filesystem::path& path);
+
 // ファイル1つをコピーする(copyfile(3))。Finderのコピーと同じく、中身に加えて、更新日時・権限・拡張属性・ACLも引き継ぐ。
 // srcがシンボリックリンクなら、たどらずに、リンクそのものを写す(壊れたリンクも写せる)。APFSの同じボリュームの中では、
 // クローン(中身を共有する、瞬間のコピー)になる(別のボリュームやAPFS以外では、普通のコピーに戻る)。
