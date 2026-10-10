@@ -62,7 +62,7 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 | `views/QueryTypes.h` | 検索と絞り込みが共有する値の型（`QueryMode`・`MatchKind`=部分一致/あいまい一致・`MatchRange`・`ListPosition`）。AppKit 非依存 |
 | `views/Mnemonic.h/.cc` | ダイアログ項目のラベルの `&x`（ショートカット）の解析。AppKit 非依存の純関数 `ParseMnemonicLabel`（後述「ダイアログ項目のショートカット」） |
 | `views/ViewMetrics.h` | 一覧・入力バー・進捗パネルが共有するフォント（`MakeFont`）・1 行の高さ（`LineHeight`）・ヘッダーの高さ（`HeaderHeight`）。`.mm` 専用 |
-| `views/FileIconCache.h` | ファイル名の頭のアイコン（Finder と同じ `iconForFile:`）を、パスごとに保持する（全ペインで共有。ディレクトリ移動と件数の上限で捨てる。クラウドストレージの中(`pl_is_in_cloud_storage`)・ダウンロード前の印が付いたもの・UTF-8 として不正なパスは、拡張子の種類のアイコン）。`FileListView::Draw` が使う。`.mm` 専用（後述「ファイル名の頭のアイコン」。入り切りは `Config::ShowIcons()` / `Miata.command.toggle_icons`） |
+| `views/FileIconCache.h` | ファイル名の頭のアイコン（Finder と同じ `iconForFile:`）を、パスごとに保持する（全ペインで共有。ディレクトリ移動と件数の上限で捨てる。クラウドストレージの中(`pl_is_in_cloud_storage`)・ダウンロード前の印が付いたもの・UTF-8 として不正なパスは、拡張子の種類のアイコン）。`FileListView::Draw` が使う。`.mm` 専用（後述「ファイル名の頭のアイコン」。入り切りは `Config::ShowIcons()` / 実行中の `Miata.config.set_show_icons`） |
 | `models/PaneState.h/.cc` | ペインの保存用の状態（いるフォルダ・ソートの名前・降順か）と、保存用の辞書との変換、保存してあった値の検査（`IsPlainAbsolutePath`）。AppKit・Lua・Config のどれも知らない純ロジック（`PathHistory` と同じ作り）。保存と復元は `View` が行う（後述「ペインの状態の保存」） |
 | `models/PathHistory.h/.cc` | フォルダの履歴（新しい順・重複なし・上限・現在地の除外・保存していない変更の有無）。AppKit・Lua・Config・Pane のどれも知らない純ロジック。左右のペインで 1 つを共有し、`BrowserModel` が持つ（左右の `FileListModel` は、そこへのポインタで記録する。後述「フォルダの履歴」） |
 | `FzfFilter.h/.cc` | 外部の fzf（`fzf --filter`）による文字列一覧の絞り込み。AppKit 非依存。候補を一時ファイルに書き出し、語ごとに fzf を起動する（`pl_run_process`）。`dialog_filter_list` と、絞り込みのあいまい一致（`FileListView::FuzzySource`）が使う。fzf が無いときは部分一致にフォールバック（後述「絞り込み（フィルタ）」「外部コマンドの起動」） |
@@ -122,7 +122,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 | `history-panes.md` | フォルダの履歴／ペインの状態の保存／ウィンドウ位置・サイズの保存 | `models/PathHistory.*`・`PaneState.*`・`BrowserModel.*`、`View.mm`（`RestorePanes` ほか）、`osx.mm`（`pl_create_main_window`） |
 | `file-list.md` | 一覧の右側の札（`<DIR>` ほか）／ファイル名の頭のアイコン／隠しファイル（表示の入り切り。`zh`）／ドラッグ&ドロップ／再読み込み／ディレクトリ監視／空のディレクトリ／UTF-8 として不正な名前 | `models/FileListModel.*`・`FileEntryModel.*`、`Utf8.*`、`views/FileIconCache.h`、`FileListView.mm`、`osx.mm`（`pl_watch_directory` / `pl_is_alias_file` / `pl_is_dataless_file` ほか） |
 | `lua-commands.md` | Lua から状況を取る／ファイルを開く／まとめてマークする／ファイルの操作（部品と組み立て）／先頭・末尾へ動く（`gg` / `G`） | `Application.cc`（`lua_command_*`）、`FileListView.mm`、`osx.mm`（`pl_open_paths` ほか）、`resources/base.lua`・`resources/test.lua` |
-| `config.md` | 設定の読み込み／キーバインド（`bind` / `unbind`）／色の設定（`Miata.config.color.*`）／その他の設定（`Miata.config.set_*` と、読み出しの `get_show_icons` / `get_show_hidden`。実行中に切り替える `show_icons` / `show_hidden` の例外） | `Script.*`・`Config.*`・`KeyBinding.*`、`resources/test.lua`、`Application.cc`（`InitializeScript` / `lua_command_bind` / `lua_command_toggle_icons`） |
+| `config.md` | 設定の読み込み／キーバインド（`bind` / `unbind`）／色の設定（`Miata.config.color.*`）／その他の設定（`Miata.config.set_*` と、読み出しの `get_show_icons` / `get_show_hidden`。実行中に切り替える `show_icons` / `show_hidden` の例外） | `Script.*`・`Config.*`・`KeyBinding.*`、`resources/test.lua`、`Application.cc`（`InitializeScript` / `lua_command_bind`。`Config::SetShow*Observer` の登録） |
 
 ## ドキュメントの同期
 

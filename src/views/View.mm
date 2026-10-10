@@ -336,6 +336,13 @@ namespace miata::views {
         }
     }
 
+    void View::RefreshShowIcons()
+    {
+        for (auto pane : {constants::Pane::Left, constants::Pane::Right}) {
+            GetFileListView(pane).Redraw();
+        }
+    }
+
     void View::RefreshHiddenFiles()
     {
         for (auto pane : {constants::Pane::Left, constants::Pane::Right}) {

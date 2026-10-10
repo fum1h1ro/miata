@@ -74,9 +74,12 @@ namespace miata::views {
         // どのペインもdirを表示していなければ、何もしない
         void UnmarkPathsIn(const std::filesystem::path& dir, const std::vector<std::filesystem::path>& paths);
         // 隠しファイルの表示の入り切り(Config::ShowHidden)が変わった後に、両ペインの一覧を作り直して、入力バーの
-        // 件数(見えている行数/全行数・隠れたマーク)を、次のティックを待たずに更新する(Luaのtoggle_hidden)。
+        // 件数(見えている行数/全行数・隠れたマーク)を、次のティックを待たずに更新する(実行中の set_show_hidden)。
         // カーソルは、同じファイル(隠れたら、近くの見える行)に留まる。ダイアログの表示中でも動く
         void RefreshHiddenFiles();
+        // ファイル名の頭のアイコンの表示の入り切り(Config::ShowIcons)が変わった後に、両ペインを描き直す(実行中の
+        // set_show_icons)。フォーカスのあるペインは、カーソルの行へスクロールする(Redraw と同じ)
+        void RefreshShowIcons();
 
         // paneのペインをpathのフォルダへ移す(Enterでフォルダに入るのと同じ移動。履歴にも記録される)。移れなければ、
         // 移さずにダイアログで知らせる(ReportFileError。権限の失敗には許可の案内が付く)。移れず、かつそのフォルダが

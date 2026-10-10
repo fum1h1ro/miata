@@ -3,6 +3,7 @@
 
 #include "platform.h"
 #include <format>
+#include <functional>
 #include <map>
 #include <vector>
 #include <expected>
@@ -106,28 +107,32 @@ namespace miata {
         static constexpr int kHistoryLimitMax = 10000;
 
         // ファイル名の頭に、ファイルのアイコン(Finderと同じ)を出すか。既定は出す。Miata.config.set_show_icons(bool)で
-        // 指定する。ほかの設定と違い、実行中に切り替えられる(Miata.command.toggle_icons)ので、描くたびに読むこと
-        // (構築時にキャッシュしない)。切り替えた後の再描画は、呼ぶ側がする(Configはビューを知らない)。
+        // 指定する。ほかの設定と違い、実行中にも変えられる(Miata.config.set_show_icons を、実行中に呼ぶ)ので、描くたびに読むこと
+        // (構築時にキャッシュしない)。値を書くのは、Luaの set_show_icons だけ(下の通知が、ビューを描き直す)。
         static inline bool ShowIcons()
         {
             return Instance().show_icons_;
         }
-        static inline void SetShowIcons(bool show)
+
+        // 実行中に、Luaの Miata.config.set_show_icons / set_show_hidden が、値を**変えた**ときに呼ぶ通知(同じ値を指定したときは、
+        // 呼ばない)。値を書いた後に呼ぶ。Configはビューを知らないので、Applicationが、Viewを作った後に登録する。
+        // 設定の読み込み中(登録前)の set_* は、値を書くだけ(ビューが無い。起動時の一覧は、その値で作られる)。
+        static void SetShowIconsObserver(std::function<void()> observer)
         {
-            Instance().show_icons_ = show;
+            Instance().show_icons_observer_ = std::move(observer);
+        }
+        static void SetShowHiddenObserver(std::function<void()> observer)
+        {
+            Instance().show_hidden_observer_ = std::move(observer);
         }
 
         // 隠しファイル(名前の頭が "." のものと、Finderの「隠す」フラグが付いたもの。FileEntryModel::IsHidden)を一覧に出すか。
-        // 既定は隠す(Finderと同じ)。Miata.config.set_show_hidden(bool)で指定する。実行中に切り替えられる
-        // (Miata.command.toggle_hidden)ので、一覧を作るたびに読むこと(構築時にキャッシュしない)。切り替えた後の
-        // 一覧の作り直しは、呼ぶ側がする(Configはビューを知らない)。
+        // 既定は隠す(Finderと同じ)。Miata.config.set_show_hidden(bool)で指定する。実行中にも変えられる
+        // (Miata.config.set_show_hidden を、実行中に呼ぶ)ので、一覧を作るたびに読むこと(構築時にキャッシュしない)。
+        // 値を書くのは、Luaの set_show_hidden だけ(上の通知が、一覧を作り直す)。
         static inline bool ShowHidden()
         {
             return Instance().show_hidden_;
-        }
-        static inline void SetShowHidden(bool show)
-        {
-            Instance().show_hidden_ = show;
         }
 
         // 背景色(Miata.config.color.background)。alphaは使わず、常に不透明にして返す。半透明で塗ると、
@@ -168,6 +173,8 @@ namespace miata {
         size_t history_limit_ = 100;
         bool show_icons_ = true;
         bool show_hidden_ = false;
+        std::function<void()> show_icons_observer_;
+        std::function<void()> show_hidden_observer_;
     };
 }
 
