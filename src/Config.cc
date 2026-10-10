@@ -134,8 +134,7 @@ namespace miata {
 
     // Miata.config.set_show_icons(bool): ファイル名の頭のアイコンを出すか。真偽値だけ受け付ける
     // (lua_tobooleanは何でも受けて、0 や "" を真にしてしまうので、型を見る)。違う型は、設定を変えずにエラーにする
-    // (設定の読み込みのエラーとして、起動時のダイアログに出る)。luaL_errorはlongjmpなので、C++のオブジェクトを
-    // 作る前に検証する。
+    // (設定の読み込みのエラーとして、起動時のダイアログに出る)。
     int Config::lua_set_show_icons(lua_State* L)
     {
         if (lua_type(L, 1) != LUA_TBOOLEAN) {

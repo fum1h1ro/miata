@@ -136,8 +136,8 @@ end)
 Miata.command.bind("n", "<C-r>", function()
     Miata.command.reload()
 end)
--- ファイル名の頭のアイコンの表示を入り切りする(AFXW の . と同じ)。切り替えは保存しない。起動時に出すかは、
--- Miata.config.set_show_icons(true/false) で決める(既定は出す)
+-- ファイル名の頭のアイコンの表示を入り切りする(AFXW の . と同じ)。切り替えは保存しない(起動時の状態は、上の
+-- set_show_icons が決める)
 Miata.command.bind("n", ".", function()
     Miata.command.toggle_icons()
 end)

@@ -11,13 +11,15 @@
 // includeする(ViewMetrics.hと同じ規約)。メインスレッドからだけ使う。
 //
 // アイコンは、Finderと同じもの(NSWorkspaceのiconForFile:の結果。拡張子の種類のアイコン・.appの実物のアイコン・
-// カスタムアイコン・リンクの矢印バッジ)。引くのは、描くとき(見えている行だけ)に、保持していないパスだけ:
-// 1回は、ふつうのファイルで50µs、.appで0.1〜0.2msほど(実測)。保持していれば、パスの文字列の検索だけ。
+// カスタムアイコン・リンクの矢印バッジ)。ただし、ダウンロード前のファイル(クラウドストレージのプレースホルダ。
+// IsDataless())と、UTF-8として不正なパスは、ファイルに触れず、拡張子の種類のアイコンにする(Resolve参照)。
+// 引くのは、描くとき(見えている行だけ)に、保持していないパスだけ。保持していれば、パスの文字列の検索だけ。
+// 実測値と、設計の決定・罠は .claude/rules/file-list.md。
 namespace miata::views {
     class FileIconCache {
     public:
         // 全ペインで1つ。同じフォルダを左右に出すことが多いので、共有する
-        static FileIconCache& Shared()
+        static FileIconCache& Instance()
         {
             static FileIconCache cache;
             return cache;
@@ -59,16 +61,16 @@ namespace miata::views {
             return icons_.size();
         }
 
-        // 保持する件数の上限。1件は、描いた後でおよそ10KB(実測: 2000件で20MB)なので、上限でも20MBほど
+        // 保持する件数の上限。1件は、描いた後でおよそ10KBなので、上限でも20MBほど
         static constexpr size_t kMaxIcons = 2048;
 
     private:
         FileIconCache() = default;
 
         // 描く大きさの、1枚の画像にする。NSWorkspaceが返す画像は、いくつもの大きさの絵を持っていて、描くたびに、
-        // 合う絵を選んで縮める。保持した後でも、1つ描くのに、書類で50µs、.appの実物で150µsかかる(実測: 60行で、
-        // 書類3ms・.app 8〜12ms)。描く大きさ(と、倍率・外観)ごとに、1回だけ描いて、画像として保持させれば、
-        // 以降は、60行で1.1msで済む。倍率や外観が変われば、AppKitが描き直す
+        // 合う絵を選んで縮める(保持した後でも、書類で数十µs、.appの実物で百数十µsかかる)。描く大きさごとに、
+        // 1回だけ描いて、画像として保持させれば、以降の描画は、その数分の1で済む。倍率(画素密度)や色空間が
+        // 変われば、AppKitが描き直す
         static NSImage* Fit(NSImage* source, CGFloat points)
         {
             if (!source) return nil;
@@ -81,43 +83,33 @@ namespace miata::views {
                            }];
         }
 
-        NSImage* Resolve(const models::FileEntryModel& entry) const
+        static NSImage* Resolve(const models::FileEntryModel& entry)
         {
             NSWorkspace* workspace = [NSWorkspace sharedWorkspace];
 
             // ダウンロード前のファイル(クラウドストレージのプレースホルダ)には、iconForFile:を呼ばない。カスタムアイコンや、
             // .appの中のInfo.plistを読みに行って、ダウンロードを起こすかもしれない(未検証)。一覧は、メタデータだけを読む
-            // (<CLOUD>の札と同じ)。このときは、拡張子の種類のアイコンにする(ファイルには触れない)
-            if (!entry.IsDataless()) {
-                // 元のバイト列のパスで引く(RepairUtf8を通すと、別のファイルを指す)。UTF-8として不正なパスは、
-                // NSStringにならない(nil)ので、種類のアイコンにする
-                NSString* path = @(entry.Path().c_str());
-                if (path) {
-                    if (NSImage* icon = [workspace iconForFile:path]) return icon;
-                }
-            }
-            return [workspace iconForContentType:TypeOf(entry)];
+            // (<CLOUD>の札と同じ)。印は、フォルダやエイリアスにも付くことがあり、そのときも同じ。
+            // パスは、元のバイト列で引く(RepairUtf8を通すと、別のファイルを指す)。UTF-8として不正なパスは、
+            // NSStringにならない(nil)ので、iconForFile:に渡さない
+            NSString* path = entry.IsDataless() ? nil : @(entry.Path().c_str());
+            NSImage* icon = path ? [workspace iconForFile:path] : nil;
+            return icon ? icon : [workspace iconForContentType:TypeOf(entry)];
         }
 
-        // 名前の、最後の「.」より後ろ。「.gitignore」は gitignore(LaunchServicesの数え方に合わせる)。無ければnil
-        static NSString* ExtensionOf(const std::string& name)
-        {
-            auto dot = name.rfind('.');
-            if (dot == std::string::npos || dot + 1 >= name.size()) return nil;
-            // Name()はUTF-8として正しく、「.」はASCIIなので、後ろも正しい(nilにならない)
-            return [[NSString alloc] initWithBytes:name.data() + dot + 1
-                                            length:name.size() - dot - 1
-                                          encoding:NSUTF8StringEncoding];
-        }
-
-        // ファイルに触れずに(名前と、種類の判定だけで)決める、種類のアイコンの型
+        // ファイルに触れずに(名前と、種類の判定だけで)決める、種類のアイコンの型。順は、フォルダ → エイリアス → 拡張子
+        // → シンボリックリンク。フォルダは、リンク先がフォルダのリンクも(IsDirectory()はリンクをたどる)。右の欄の札
+        // (SizeColumn)は、リンクを先に見る(リンクは、札で <LNK> と分かるので、アイコンは、リンク先の種類に合わせる)
         static UTType* TypeOf(const models::FileEntryModel& entry)
         {
-            NSString* ext = ExtensionOf(entry.Name());
+            // Ext()は、先頭の「.」を含む(「.txt」)。「.gitignore」のような、先頭だけがドットの名前では空(拡張子なし)。
+            // UTF-8として正しい(@()がnilにならない)
+            const std::string& dotted = entry.Ext();
+            NSString* ext = dotted.size() > 1 ? @(dotted.c_str() + 1) : nil;
             UTType* type = nil;
 
             if (entry.IsDirectory()) {
-                // フォルダ。.app・.framework のような、パッケージとして知られている拡張子だけ使う。
+                // .app・.framework のような、パッケージとして知られている拡張子だけ使う。
                 // 「foo.zip」というフォルダに、zipのアイコンは付けない(動的な型になる)
                 if (ext) type = [UTType typeWithFilenameExtension:ext conformingToType:UTTypeDirectory];
                 return (type && !type.isDynamic) ? type : UTTypeFolder;

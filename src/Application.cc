@@ -684,7 +684,7 @@ namespace miata {
     }
 
     // Miata.command.toggle_icons() -> boolean
-    // ファイル名の頭のアイコンの表示を、入り切りする(AFXWの . と同じ)。切り替えた後の状態(出していればtrue)を返す。
+    // ファイル名の頭のアイコンの表示を、入り切りする。切り替えた後の状態(出していればtrue)を返す。
     // Miata.config.set_show_icons で決めた値を書き換えるだけで、保存はしない(起動し直すと、設定が決める)。
     // 両ペインを描き直す(フォーカスのあるペインは、カーソルの行へスクロールする。マークの変更などと同じ)。
     int Application::lua_command_toggle_icons(lua_State* L)
