@@ -15,13 +15,12 @@
 #include <vector>
 #include "FileError.h"
 #include "FileOperationProgress.h"
-#include "models/FileListModel.h"
 
 namespace miata {
     // FileOperationManager からコールバックで通知される完了イベント。
-    // src_dir / dest_dir は操作開始時点でのペインの表示パスのスナップショット。
-    // 完了時、該当ペインが今もこのパスを表示している場合のみ再スキャンするために使う
-    // （バックグラウンド実行中に別ディレクトリへ移動された場合に誤って再スキャンしないため）。
+    // 完了後に、どのペインを再スキャン・マーク解除するかは、ペインのポインタではなく、パス(dest_dir と sources の親フォルダ)で
+    // 引く(Application::OnFileOperationCompleted): 操作の対象と宛先は、Lua から渡された任意のパスで、バックグラウンド実行中に、
+    // ペインが別のフォルダへ移っていても、いま、そのフォルダを表示しているペインだけを更新するため。
     struct FileOperationCompleted {
         FileOperationId id; // Start() が返した ID
         FileOpType type;
@@ -31,18 +30,15 @@ namespace miata {
         std::string error_message;
         // 失敗の中に、権限が無いもの(OSの保護など)があった。画面で、許可のしかたを案内する
         bool permission_denied;
-        models::FileListModel* src_model;
-        models::FileListModel* dest_model;
-        std::filesystem::path src_dir;
+        // 宛先のフォルダ(開始時)
         std::filesystem::path dest_dir;
-        // 操作の対象にしたパス(開始時の、見えているマーク済みのファイル。無ければカーソル下の1件)。完了後に
-        // 解除するマークを、そのペインの全マークではなく、これだけにするため(絞り込みで隠れているマークや、
-        // 操作の最中に付けたマークは、解除しない)
+        // 操作の対象にしたパス(開始時)。完了後に解除するマークを、そのペインの全マークではなく、これだけにするため
+        // (絞り込みで隠れているマークや、操作の最中に付けたマークは、解除しない)。元のフォルダは、これの親
         std::vector<std::filesystem::path> sources;
     };
 
     // 操作(コピー・移動)を始めてよいかの確認。元(src)と、先(dest_dir / src.filename())の関係が、データを失う・暴走する
-    // 組み合わせのとき、断る理由を返す。画面で始める前(Application::StartFileOperation)と、裏スレッドが項目を処理する直前
+    // 組み合わせのとき、断る理由を返す。画面で始める前(Application::CheckTransfer)と、裏スレッドが項目を処理する直前
     // (FileOperationManager::Run。外部の変更や、確認してから開始するまでの状況の変化に備える、多重の防御)の、両方で使う。
     // 断る組み合わせは、次の3つ:
     //   (1) 先が、元と同じ実体(同じフォルダへの操作)。Moveの「上書き」が、先 = 元を remove_all で消してしまう
@@ -75,8 +71,16 @@ namespace miata {
     };
 
     // リンクそのもの(たどらない)で、path があるか。壊れたシンボリックリンクも「ある」(std::filesystem::exists は、リンクをたどるので「無い」)。
-    // 開始前の上書きの確認(Application::StartFileOperation)と、移動の「先が既にあるか」が使う。コピー(CopyEntry)は、lstat で同じ見方をする
+    // 開始前の同名の数え上げ(Application::CheckTransfer)と、移動の「先が既にあるか」が使う。コピー(CopyEntry)は、lstat で同じ見方をする
     bool ExistsNoFollow(const std::filesystem::path& path);
+
+    // 対象(sources)の中に、先で同じ名前になるものがあるか。名前(filename())を pl_name_collation_key で比べる: 同じ名前
+    // (別々のフォルダの README.md など)・大文字小文字だけが違う名前・正規化(NFC/NFD)だけが違う名前は、大文字小文字や正規化を
+    // 区別しないボリューム(APFSの既定)では、先で同じ名前になる。コピーでは、2つ目が、1つ目を上書きする(上書きのとき)か、黙って
+    // スキップされ、移動では、上書きで、1つ目が失われる。あれば、重なっている2つ目以降のパスを返す(無ければ nullopt)。
+    // Lua から、別々のフォルダの対象をまとめて渡せるので、始める前の確認(Application::CheckTransfer)で断る。Run も、項目ごとに
+    // 同じ見方で、2つ目以降を失敗にする(多重の防御)
+    std::optional<std::filesystem::path> FindDuplicateName(const std::vector<std::filesystem::path>& sources);
 
     // コピーするバイト数の見積り(進捗の割合の分母にする、事前の走査。テストも直接呼ぶ)。path が普通のファイルなら、その大きさ。フォルダなら、中にある
     // 普通のファイルの大きさの合計(再帰)。リンク(たどらない)と、特殊ファイル(FIFO・ソケット・デバイス)は 0。調べられないもの
@@ -97,11 +101,8 @@ namespace miata {
         FileOperationId Start(
             FileOpType type,
             std::vector<std::filesystem::path> sources,
-            std::filesystem::path src_dir,
             std::filesystem::path dest_dir,
-            bool overwrite,
-            models::FileListModel* src_model,
-            models::FileListModel* dest_model
+            bool overwrite
         );
 
         // Application::Update から毎ティック呼ぶ。完了した操作を拾って、jobs_ から外し、それから、コールバックで通知する。
@@ -148,11 +149,8 @@ namespace miata {
         static void Run(
             std::shared_ptr<Job> job,
             std::vector<std::filesystem::path> sources,
-            std::filesystem::path src_dir,
             std::filesystem::path dest_dir,
-            bool overwrite,
-            models::FileListModel* src_model,
-            models::FileListModel* dest_model
+            bool overwrite
         );
 
         std::function<void(FileOperationCompleted&)> callback_;

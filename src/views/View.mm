@@ -338,10 +338,10 @@ namespace miata::views {
         }
     }
 
-    void View::UnmarkPaths(const models::FileListModel& list, const std::vector<std::filesystem::path>& paths)
+    void View::UnmarkPathsIn(const std::filesystem::path& dir, const std::vector<std::filesystem::path>& paths)
     {
-        if (auto* view = FindFileListView(list)) {
-            view->UnmarkPaths(paths);
+        for (auto pane : {constants::Pane::Left, constants::Pane::Right}) {
+            if (GetList(pane).Path() == dir) GetFileListView(pane).UnmarkPaths(paths);
         }
     }
 

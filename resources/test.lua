@@ -20,7 +20,8 @@ Miata.config.color.cloud = "#7ec8ffff"
 
 local command <const> = Miata.command
 
--- 操作の対象: マーク済みのエントリ。無ければカーソル下の1件(copy_marked / move_marked と同じ)。一覧が空なら、空の配列
+-- 操作の対象: マーク済みのエントリ。無ければカーソル下の1件(コピー・移動の c / m と、開く o ・Finder で表示 O ・パスのコピー yy が使う)。
+-- 一覧が空なら、空の配列
 local function targets()
     local list = Miata.command.marked_entries()
     if #list == 0 then
@@ -117,11 +118,32 @@ Miata.command.bind("n", " ", function()
     Miata.command.toggle_mark()
     Miata.command.navigate_down()
 end)
+-- c: コピー / m: 移動。対象は、マーク済み(見えている行のマークだけ)。無ければカーソル下の1件。宛先は、反対側のペインのフォルダ。
+-- 1. 始める前に断る組み合わせ(同じフォルダ・フォルダを自分の中へ・移動で、先の同名のフォルダが元の祖先)は、check_transfer が
+--    調べて、理由を知らせて終わる。上書きの確認より前にやる(答えても進められない質問を、しないため)
+-- 2. 先に同名があれば、上書き(はい)かスキップ(いいえ。Esc も)かを聞く(操作全体で1つ。既定はスキップ)
+-- 3. copy_to / move_to が、裏スレッドで始める(進捗パネルが出る。完了で、一覧の更新と、コピーしたファイルのマーク解除)
+local function transfer(kind, run)
+    local list = targets()
+    if #list == 0 then return end
+    local other = Miata.command.current_pane() == "left" and "right" or "left"
+    local dest = Miata.command.pane_path(other)
+    local ok, info = Miata.command.check_transfer(kind, list, dest)
+    if not ok then
+        Miata.command.dialog_confirm(info) -- 断る理由
+        return
+    end
+    local overwrite = false
+    if #info > 0 then -- info は、先に同名があるものの、先のパスの配列
+        overwrite = Miata.command.dialog_yes_no(#info .. "個のファイルが既に存在します。上書きしますか？", false, "上書き", "スキップ")
+    end
+    run(list, dest, { overwrite = overwrite })
+end
 Miata.command.bind("n", "c", function()
-    Miata.command.copy_marked()
+    transfer("copy", Miata.command.copy_to)
 end)
 Miata.command.bind("n", "m", function()
-    Miata.command.move_marked()
+    transfer("move", Miata.command.move_to)
 end)
 -- K: 新しいフォルダを作る。名前を聞いて、カーソルのあるペインのフォルダの中に作る(名前に絶対パスを入れれば、その場所に作る)。
 -- 場所(ペインのフォルダ)は、ダイアログを開く前に決める

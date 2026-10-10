@@ -72,8 +72,10 @@ namespace miata::views {
             const std::filesystem::path& dir,
             std::optional<std::pair<std::filesystem::path, std::filesystem::path>> renamed = std::nullopt
         );
-        // listを表示しているペインの、pathsのファイルのマークを外して、再描画する(FileListView::UnmarkPaths参照)。
-        void UnmarkPaths(const models::FileListModel& list, const std::vector<std::filesystem::path>& paths);
+        // dirを表示しているペイン(左右の両方でありうる)の、pathsのファイルのマークを外して、再描画する
+        // (FileListView::UnmarkPaths参照。pathsに、dirの外のファイルが混ざっていても、dirの中に無いものは何もしない)。
+        // どのペインもdirを表示していなければ、何もしない
+        void UnmarkPathsIn(const std::filesystem::path& dir, const std::vector<std::filesystem::path>& paths);
 
         // paneのペインをpathのフォルダへ移す(Enterでフォルダに入るのと同じ移動。履歴にも記録される)。移れなければ、
         // 移さずにダイアログで知らせる(ReportFileError。権限の失敗には許可の案内が付く)。移れず、かつそのフォルダが

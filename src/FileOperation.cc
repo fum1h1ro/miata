@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <format>
 #include <system_error>
+#include <unordered_set>
 #include "FileOperation.h"
 #include "platform.h"
 
@@ -186,6 +187,15 @@ namespace miata {
         return std::filesystem::exists(std::filesystem::symlink_status(path, ec));
     }
 
+    std::optional<std::filesystem::path> FindDuplicateName(const std::vector<std::filesystem::path>& sources)
+    {
+        std::unordered_set<std::string> seen;
+        for (auto& src : sources) {
+            if (!seen.insert(pl_name_collation_key(src.filename().string())).second) return src;
+        }
+        return std::nullopt;
+    }
+
     std::int64_t MeasureCopyBytes(const std::filesystem::path& path)
     {
         struct stat st;
@@ -342,15 +352,12 @@ namespace miata {
     FileOperationId FileOperationManager::Start(
         FileOpType type,
         std::vector<std::filesystem::path> sources,
-        std::filesystem::path src_dir,
         std::filesystem::path dest_dir,
-        bool overwrite,
-        models::FileListModel* src_model,
-        models::FileListModel* dest_model
+        bool overwrite
     )
     {
         auto job = std::make_shared<Job>(next_id_++, type, static_cast<std::int64_t>(sources.size()));
-        std::thread thread(Run, job, std::move(sources), std::move(src_dir), std::move(dest_dir), overwrite, src_model, dest_model);
+        std::thread thread(Run, job, std::move(sources), std::move(dest_dir), overwrite);
         jobs_.push_back(Entry{job, std::move(thread)});
         return job->id;
     }
@@ -395,11 +402,8 @@ namespace miata {
     void FileOperationManager::Run(
         std::shared_ptr<Job> job,
         std::vector<std::filesystem::path> sources,
-        std::filesystem::path src_dir,
         std::filesystem::path dest_dir,
-        bool overwrite,
-        models::FileListModel* src_model,
-        models::FileListModel* dest_model
+        bool overwrite
     )
     {
         const FileOpType type = job->type;
@@ -422,13 +426,22 @@ namespace miata {
             .bytes_done = [&job](std::int64_t bytes) { job->AddBytes(bytes); },
         };
 
+        // 先で同じ名前になる項目が、前にあれば、失敗にする(別々のフォルダの同名のファイルなど。上書きで前の項目を失う・
+        // 黙ってスキップする、を避ける。始める前の確認(Application::CheckTransfer)で断っているが、多重の防御)
+        std::unordered_set<std::string> placed;
+
         for (std::size_t index = 0; index < sources.size(); ++index) {
             auto& src = sources[index];
             auto dst = dest_dir / src.filename();
             // いま処理する項目(これより前の項目は、スキップや失敗も含めて、終えたものとして数える)
             job->BeginItem(index, src.filename().string());
 
-            // 始める前の確認(Application::StartFileOperation)と同じ確認を、コピー・消す直前にもやる(多重の防御)。
+            if (!placed.insert(pl_name_collation_key(src.filename().string())).second) {
+                failures.Add(FileError{.message = "同じ名前の対象が、先にあります(先で重なります)"});
+                continue;
+            }
+
+            // 始める前の確認(Application::CheckTransfer)と同じ確認を、コピー・消す直前にもやる(多重の防御)。
             // 確認してから、ここに順番が来るまでに、状況が変わっていることがある
             bool unknown = false;
             if (auto reason = guard.Check(type, src, unknown)) {
@@ -451,9 +464,6 @@ namespace miata {
             .failed_count = failures.count,
             .error_message = failures.shown.message,
             .permission_denied = failures.shown.permission_denied,
-            .src_model = src_model,
-            .dest_model = dest_model,
-            .src_dir = src_dir,
             .dest_dir = dest_dir,
             .sources = std::move(sources),
         };

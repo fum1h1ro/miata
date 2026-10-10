@@ -76,6 +76,10 @@ namespace pl_modifier {
 
 // NFCに正規化する。UTF-8として不正なバイトは、U+FFFDに置き換える(結果は常にUTF-8として正しい)。
 std::string pl_normalize_string(const std::string& input);
+// ファイル名の比較用の鍵: NFCに正規化して、大文字小文字を畳む。大文字小文字・正規化を区別しないボリューム(APFSの既定)で、
+// 同じ場所に置くと同じ名前になる2つの名前は、同じ鍵になる。区別するボリュームでは、別の名前でも同じ鍵になりうる(安全側:
+// 名前の重なりを断る検査に使う)。UTF-8として不正なバイトはU+FFFDになる(不正な名前どうしも、同じ鍵になりうる)。
+std::string pl_name_collation_key(const std::string& name);
 void pl_play_beep();
 
 // AppKitのcontentView(NSView*)を(__bridge void*)で返す。

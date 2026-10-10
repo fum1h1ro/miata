@@ -40,7 +40,10 @@ namespace miata {
         void KeyUp(uint16_t key_code, uint16_t mods);
         void Resize(int width, int height);
         std::expected<KeyBindingMap, std::string> GetKeyBinding(const char map_c);
-        void StartFileOperation(FileOpType type);
+        // sourcesを、dest_dirへコピー・移動する(裏スレッド。確認は出さない)。始める前の確認(CheckTransfer)で断るなら、
+        // ダイアログで知らせてfalse。始めたらtrue(sourcesが空ならfalse)。overwriteは、先に同名があるとき、上書きするか、
+        // スキップするか(操作全体で1つ)
+        bool StartTransfer(FileOpType type, std::vector<std::filesystem::path> sources, const std::filesystem::path& dest_dir, bool overwrite);
         // pathsを、ゴミ箱へ移す(同期。確認は出さない)。移した後に、そのフォルダを表示しているペインを再スキャンして、
         // 失敗は、まとめて1回のダイアログで知らせる。全部移せたらtrue(pathsが空ならfalse)
         bool TrashPaths(const std::vector<std::filesystem::path>& paths);
@@ -69,8 +72,11 @@ namespace miata {
         static int lua_command_mark_search_hits(lua_State* L);
         static int lua_command_next_mark(lua_State* L);
         static int lua_command_prev_mark(lua_State* L);
-        static int lua_command_copy_marked(lua_State* L);
-        static int lua_command_move_marked(lua_State* L);
+        // copy_to と move_to の共通の本体(kind だけが違う)
+        static int TransferCommand(lua_State* L, FileOpType type);
+        static int lua_command_check_transfer(lua_State* L);
+        static int lua_command_copy_to(lua_State* L);
+        static int lua_command_move_to(lua_State* L);
         static int lua_command_make_directory(lua_State* L);
         static int lua_command_rename_to(lua_State* L);
         static int lua_command_exists(lua_State* L);

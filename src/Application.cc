@@ -240,8 +240,9 @@ namespace miata {
             { "mark_search_hits", lua_command_mark_search_hits },
             { "next_mark", lua_command_next_mark },
             { "prev_mark", lua_command_prev_mark },
-            { "copy_marked", lua_command_copy_marked },
-            { "move_marked", lua_command_move_marked },
+            { "check_transfer", lua_command_check_transfer },
+            { "copy_to", lua_command_copy_to },
+            { "move_to", lua_command_move_to },
             { "make_directory", lua_command_make_directory },
             { "rename_to", lua_command_rename_to },
             { "exists", lua_command_exists },
@@ -535,76 +536,96 @@ namespace miata {
         return path.parent_path();
     }
 
-    // paneのビューの、見えている(画面に出ている行の)マーク済みのファイルのパス(画面の並び順)。絞り込みで隠れている行の
-    // マークは含まない。コピー・移動・ゴミ箱・リネームの「操作の対象」は、すべてこれで決める
-    static std::vector<std::filesystem::path> MarkedPaths(views::FileListView& view)
+    // コピー・移動を始める前の確認。check_transfer(Lua)と、始めるとき(StartTransfer)の、両方が使う(同じ確認を、
+    // 確認してから始めるまでの間に状況が変わったときのためにも、始めるときにやり直す)。
+    //  - 元と先の関係が、データを失う・暴走する組み合わせなら、断る(同じフォルダ・フォルダを自分の中へ・先の同名のフォルダが
+    //    元の祖先)。調べられなかったとき(元が外部で消えた、権限が無いなど)は断らず、項目の失敗として知らせる
+    //  - 断らなければ、先に同名があるもの(の先のパス)を、元の並び順で返す。壊れたシンボリックリンクも、同名として数える
+    //    (コピー・移動が、リンクをたどらずに、同名があるかを見るのと合わせる。数えないと、確認が出ないまま、黙ってスキップされる)
+    struct TransferCheck {
+        std::string what;   // 空でなければ、断る。何ができなかったか(「コピーできませんでした (名前)」。ReportFileError の what)
+        std::string reason; // 断る理由(「コピー先が、コピー元と同じフォルダです」など)
+        std::vector<std::filesystem::path> conflicts;
+    };
+
+    // 末尾の "/" を落とす("/a/b/" → "/a/b")。コピー・移動は、先を dest_dir / 元.filename() で決める: 末尾に "/" があると
+    // filename() が空になり、先が dest_dir そのものになる(移動の「上書き」が、dest_dir を丸ごと消す)。以前は、対象が、
+    // 一覧のエントリのパスだけだったので起きなかったが、Lua から任意のパスを渡せるので、ここで正規化する。ルートは、そのまま
+    static std::filesystem::path WithoutTrailingSlash(std::filesystem::path path)
     {
-        std::vector<std::filesystem::path> paths;
-        for (auto* entry : view.MarkedEntries()) paths.push_back(entry->Path());
-        return paths;
+        while (path.has_relative_path() && !path.has_filename()) path = path.parent_path();
+        return path;
     }
 
-    void Application::StartFileOperation(FileOpType type)
+    // コピー・移動の対象として、名前を持つか(最後の要素が、名前であること。ルート "/"・"." ・".." は、先の名前にならない)
+    static bool HasTransferName(const std::filesystem::path& path)
     {
-        auto& src_model = view_->CurrentList();
-        auto& dest_model = view_->OtherList();
+        const auto name = path.filename();
+        return !name.empty() && name != "." && name != "..";
+    }
 
-        auto sources = MarkedPaths(view_->CurrentFileListView());
-        if (sources.empty()) {
-            // マークが無ければ、カーソル下の1件(一覧が空なら、対象が無い)
-            if (auto* current = view_->CurrentEntry()) sources.push_back(current->Path());
+    static TransferCheck CheckTransfer(FileOpType type, const std::vector<std::filesystem::path>& sources, const std::filesystem::path& dest_dir)
+    {
+        TransferCheck check;
+        const char* label = FileOpLabel(type);
+
+        // 先が、存在するフォルダであること(でなければ、どの項目も置けない)
+        std::error_code ec;
+        if (!std::filesystem::is_directory(dest_dir, ec)) {
+            check.what = std::format("{}できませんでした", label);
+            check.reason = std::format("{}先が、存在するフォルダではありません", label);
+            return check;
         }
-        if (sources.empty()) return;
 
-        auto src_dir = src_model.Path();
-        auto dest_dir = dest_model.Path();
-
-        // 元と先の関係が、データを失う・暴走する組み合わせなら、始める前に断る(同じフォルダ・フォルダを自分の中へ・
-        // 先の同名のフォルダが元の祖先)。上書きの確認より前に行う(確認に答えさせても、どちらを選んでも進められないため)。
-        // 調べられなかったとき(元が外部で消えた、権限が無いなど)は断らず、項目の失敗として知らせる
-        {
-            FileOperationGuard guard(dest_dir);
-            for (auto& src : sources) {
-                bool unknown = false;
-                if (auto reason = guard.Check(type, src, unknown)) {
-                    view_->ReportFileError(
-                        std::format("{}できませんでした ({})", FileOpLabel(type), src.filename().string()),
-                        FileError{.message = *reason}
-                    );
-                    return;
-                }
+        FileOperationGuard guard(dest_dir);
+        std::vector<std::filesystem::path> normalized;
+        normalized.reserve(sources.size());
+        for (auto& original : sources) {
+            const auto src = WithoutTrailingSlash(original);
+            if (!HasTransferName(src)) {
+                check.what = std::format("{}できませんでした ({})", label, original.string());
+                check.reason = "対象のパスの最後が、名前ではありません";
+                return check;
             }
+            bool unknown = false;
+            if (auto reason = guard.Check(type, src, unknown)) {
+                check.what = std::format("{}できませんでした ({})", label, src.filename().string());
+                check.reason = *reason;
+                return check;
+            }
+            normalized.push_back(src);
         }
 
-        // 壊れたシンボリックリンクも、同名として数える(コピー・移動が、リンクをたどらずに、同名があるかを見るのと合わせる。
-        // 数えないと、確認が出ないまま、黙ってスキップされる)
-        auto conflicts = 0;
-        for (auto& src : sources) {
-            if (ExistsNoFollow(dest_dir / src.filename())) ++conflicts;
+        // 対象の中に、先で同じ名前になるものがあれば、断る(別々のフォルダの同名のファイルなど。上書きで、先に移したものが
+        // 失われる・黙ってスキップされる)。「先に元からある同名」(下の conflicts)とは別
+        if (auto duplicate = FindDuplicateName(normalized)) {
+            check.what = std::format("{}できませんでした ({})", label, duplicate->filename().string());
+            check.reason = "同じ名前の対象が、ほかにもあります(先で重なります)";
+            return check;
         }
 
-        auto start = [this, type, sources, src_dir, dest_dir, &src_model, &dest_model](bool overwrite) {
-            file_operations_.Start(type, sources, src_dir, dest_dir, overwrite, &src_model, &dest_model);
-        };
+        for (auto& src : normalized) {
+            auto dst = dest_dir / src.filename();
+            if (ExistsNoFollow(dst)) check.conflicts.push_back(std::move(dst));
+        }
+        return check;
+    }
 
-        if (conflicts > 0) {
-            auto message = std::format("{}個のファイルが既に存在します。上書きしますか？", conflicts);
-            view_->RequestDialog(std::make_shared<views::YesNoDialog>(
-                [start](views::IDialog& dialog) {
-                    auto& yes_no_dialog = dynamic_cast<views::YesNoDialog&>(dialog);
-                    start(yes_no_dialog.Result());
-                },
-                views::YesNoDialog::arguments{
-                    .message_ = message,
-                    .default_select_ = false,
-                    .yes_text_ = "上書き",
-                    .no_text_ = "スキップ",
-                }
-            ));
+    bool Application::StartTransfer(FileOpType type, std::vector<std::filesystem::path> sources, const std::filesystem::path& dest_dir, bool overwrite)
+    {
+        if (sources.empty()) return false;
+
+        // 断るなら、ダイアログで知らせる(check_transfer を通さずに呼ばれたときも、データは失われない)
+        auto check = CheckTransfer(type, sources, dest_dir);
+        if (!check.what.empty()) {
+            view_->ReportFileError(check.what, FileError{.message = check.reason});
+            return false;
         }
-        else {
-            start(false);
-        }
+
+        // 末尾の "/" を落としたパスで始める(確認も、このパスで通っている)
+        for (auto& src : sources) src = WithoutTrailingSlash(std::move(src));
+        file_operations_.Start(type, std::move(sources), dest_dir, overwrite);
+        return true;
     }
 
     void Application::OnFileOperationCompleted(FileOperationCompleted& event)
@@ -612,18 +633,18 @@ namespace miata {
         // 進捗パネルに伝える。成功なら「完了」を見せてから消え、失敗なら、その場で消える(下で、ダイアログで知らせる)
         view_->FinishProgress(event.id, event.success, std::chrono::steady_clock::now());
 
-        // バックグラウンド実行中にペインが別ディレクトリへ移動されている場合があるため、
-        // 操作開始時点のパスを今も表示している場合に限って再スキャンする。
-        if (event.dest_model && event.dest_model->Path() == event.dest_dir) {
-            view_->ReloadList(*event.dest_model);
-        }
-        if (event.src_model && event.src_model->Path() == event.src_dir) {
+        // 関係するフォルダを、いま表示しているペイン(左右の両方でありうる)だけ更新する。バックグラウンド実行中に、ペインが
+        // 別のフォルダへ移っていれば、そのペインは触らない(表示しているパスで引く)。宛先は、置いたファイルを一覧に出す
+        view_->ReloadDirectory(event.dest_dir);
+        std::set<std::filesystem::path> src_dirs;
+        for (auto& src : event.sources) src_dirs.insert(ParentDirOf(src));
+        for (auto& dir : src_dirs) {
             if (event.type == FileOpType::Move) {
-                view_->ReloadList(*event.src_model); // 消えたファイルを一覧に反映（移せなかったファイルのマークは残る）
+                view_->ReloadDirectory(dir); // 消えたファイルを一覧に反映（移せなかったファイルのマークは残る）
             }
             else {
                 // 中身は変わらないので、操作したファイルのマークだけ解除する(画面にも反映する)
-                view_->UnmarkPaths(*event.src_model, event.sources);
+                view_->UnmarkPathsIn(dir, event.sources);
             }
         }
 
@@ -819,20 +840,6 @@ namespace miata {
         return 0;
     }
 
-    int Application::lua_command_copy_marked(lua_State* L)
-    {
-        auto& app = Application::Instance();
-        app.StartFileOperation(FileOpType::Copy);
-        return 0;
-    }
-
-    int Application::lua_command_move_marked(lua_State* L)
-    {
-        auto& app = Application::Instance();
-        app.StartFileOperation(FileOpType::Move);
-        return 0;
-    }
-
     // Luaの文字列(スタックのidx)を、絶対パスとして読む(IsOpenablePath: "/" で始まり、NULを含まない)。文字列でない、
     // 絶対パスでないときは、Luaのエラー(何もしない)。luaL_errorの前に、デストラクタを持つオブジェクトを作らない
     static void CheckAbsolutePathArg(lua_State* L, int idx)
@@ -913,7 +920,7 @@ namespace miata {
 
     // Miata.command.rename_to(target, new_path) -> boolean
     // target(パスの文字列、またはエントリ。ちょうど1件)を、new_path(絶対パスの文字列)へ移す(名前の変更。rename(2)なので、
-    // 同じボリュームの中。別のボリュームへは動かせず、失敗になる: 移動(move_marked)を使う)。new_path に既に何かあれば(壊れた
+    // 同じボリュームの中。別のボリュームへは動かせず、失敗になる: move_to を使う)。new_path に既に何かあれば(壊れた
     // リンクも)、上書きせずに断る。new_path が target と同じなら、何もせずtrue。失敗(断った場合も)は、ダイアログで
     // 知らせてfalse。成功したら、関係するフォルダを表示しているペインを再スキャンして(同じフォルダの中での変更なら、カーソルが
     // 旧パスにあるペインは、カーソルが新しい名前に付いていく)、true。引数が正しくなければ、Luaのエラー(何もしない)
@@ -943,6 +950,120 @@ namespace miata {
         CheckAbsolutePathArg(L, 1);
         lua_pushboolean(L, ExistsNoFollow(ReadAbsolutePathArg(L, 1)));
         return 1;
+    }
+
+    // check_transfer / copy_to / move_to の、種類の引数("copy" / "move")を読む。それ以外は、Luaのエラー
+    // (luaL_errorの前に、デストラクタを持つオブジェクトを作らない)
+    static FileOpType ReadTransferKindArg(lua_State* L, int idx)
+    {
+        Script::CheckArgType(L, idx, LUA_TSTRING);
+        const char* s = lua_tostring(L, idx);
+        if (std::strcmp(s, "copy") == 0) return FileOpType::Copy;
+        if (std::strcmp(s, "move") == 0) return FileOpType::Move;
+        luaL_error(L, "unknown kind: %s (expected \"copy\" or \"move\")", s);
+        return FileOpType::Copy; // luaL_errorは戻らない
+    }
+
+    // Miata.command.check_transfer(kind, target, dest_dir) -> true, conflicts | false, message
+    // target(パスの文字列・エントリ・それらの配列)を、dest_dir(絶対パスのフォルダ)へ、kind("copy" か "move")で
+    // 操作してよいか調べる。画面には触らない(ダイアログを出さない。状態も変えない)。
+    //  - 断る組み合わせ(先が存在するフォルダでない・同じフォルダ・フォルダを自分の中へ・移動で、先の同名のフォルダが元の祖先)
+    //    なら、false と、断る理由の文(「コピーできませんでした (名前): コピー先が、コピー元と同じフォルダです」)。
+    //    ダイアログに出すなら、そのまま dialog_confirm に渡せる(UTF-8 として不正なバイトは、U+FFFD にしてある)
+    //  - 断らなければ、true と、先に同名があるものの、先のパスの配列(壊れたシンボリックリンクも、同名。無ければ空の配列)。
+    //    上書きの確認を出すかを、これで決める。copy_to / move_to は、始めるときに、同じ確認をやり直す(確認してから
+    //    始めるまでの間に、状況が変わっていても、ファイルは失われない)
+    // 引数が正しくなければ、Luaのエラー
+    int Application::lua_command_check_transfer(lua_State* L)
+    {
+        lua_settop(L, 3); // 引数は 3 つまで(PushTargetPaths が積む表が、省いた引数の位置に来ないように)
+        const FileOpType type = ReadTransferKindArg(L, 1);
+        PushTargetPaths(L, 2);
+        const int paths_index = lua_gettop(L);
+        CheckAbsolutePathArg(L, 3); // luaL_error を呼びうるのは、ここまで
+
+        const auto sources = ReadPathArray(L, paths_index);
+        const auto check = CheckTransfer(type, sources, ReadAbsolutePathArg(L, 3));
+        if (!check.what.empty()) {
+            const auto message = RepairUtf8(std::format("{}: {}", check.what, check.reason));
+            lua_pushboolean(L, false);
+            lua_pushlstring(L, message.data(), message.size());
+            return 2;
+        }
+        lua_pushboolean(L, true);
+        lua_createtable(L, (int)check.conflicts.size(), 0);
+        for (size_t i = 0; i < check.conflicts.size(); ++i) {
+            const auto& raw = check.conflicts[i].native(); // 元のバイト列のまま(エントリの path と同じ)
+            lua_pushlstring(L, raw.data(), raw.size());
+            lua_rawseti(L, -2, (lua_Integer)i + 1);
+        }
+        return 2;
+    }
+
+    // copy_to / move_to の opts(スタックのidx。省略か nil なら、既定)を読む: { overwrite = boolean }。戻り値は overwrite
+    // (既定は false = 先に同名があれば、スキップ)。知らない項目と、型違いは、Luaのエラー(間違いが、黙って無視されると、
+    // 上書きするつもりでスキップされる、またはその逆になるため)。luaL_errorの前に、デストラクタを持つオブジェクトを作らない。
+    // 文字列でない名前は、lua_tostring が数値のキーを文字列に変えて、lua_next を壊すので、型を先に見る
+    static bool ReadTransferOpts(lua_State* L, int idx)
+    {
+        bool overwrite = false;
+        if (lua_isnoneornil(L, idx)) return overwrite;
+        idx = lua_absindex(L, idx);
+        Script::CheckArgType(L, idx, LUA_TTABLE);
+        lua_pushnil(L);
+        while (lua_next(L, idx) != 0) {
+            if (lua_type(L, -2) != LUA_TSTRING) {
+                luaL_error(L, "unknown option (option names must be strings)");
+                return overwrite;
+            }
+            const char* name = lua_tostring(L, -2);
+            if (std::strcmp(name, "overwrite") != 0) {
+                luaL_error(L, "unknown option: %s (expected \"overwrite\")", name);
+                return overwrite;
+            }
+            if (lua_type(L, -1) != LUA_TBOOLEAN) {
+                luaL_error(L, "option overwrite must be a boolean");
+                return overwrite;
+            }
+            overwrite = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+        }
+        return overwrite;
+    }
+
+    int Application::TransferCommand(lua_State* L, FileOpType type)
+    {
+        auto& app = Application::Instance();
+        lua_settop(L, 3); // 引数は 3 つまで(省いた opts は nil)。PushTargetPaths が積む表が、省いた引数の位置に来ないように
+        PushTargetPaths(L, 1);
+        const int paths_index = lua_gettop(L);
+        CheckAbsolutePathArg(L, 2);
+        const bool overwrite = ReadTransferOpts(L, 3); // luaL_error を呼びうるのは、ここまで
+
+        auto sources = ReadPathArray(L, paths_index);
+        lua_pushboolean(L, app.StartTransfer(type, std::move(sources), ReadAbsolutePathArg(L, 2), overwrite));
+        return 1;
+    }
+
+    // Miata.command.copy_to(target, dest_dir, [opts]) -> boolean
+    // target(パスの文字列・エントリ・それらの配列)を、dest_dir(絶対パスのフォルダ)へコピーする。確認は出さない
+    // (上書きの確認は、呼ぶ側で check_transfer と dialog_yes_no を使って組む)。裏スレッドで実行する(進捗パネルが出る)。
+    // opts.overwrite: 先に同名があるとき、上書きするか(true)、スキップするか(false。既定)。操作全体で1つ。
+    // 始める前に、check_transfer と同じ確認をする: 断る組み合わせなら、始めずに、ダイアログで知らせてfalse。
+    // 始めたらtrue(終わったかは、あとで分かる: 失敗は、完了のときにダイアログで知らせる)。対象が空なら、何もせずfalse。
+    // 完了すると、先と元のフォルダを表示しているペインが更新され、コピーしたファイルのマークが外れる。引数が正しくなければ、
+    // Luaのエラー(何もしない)
+    int Application::lua_command_copy_to(lua_State* L)
+    {
+        return TransferCommand(L, FileOpType::Copy);
+    }
+
+    // Miata.command.move_to(target, dest_dir, [opts]) -> boolean
+    // copy_to と同じ。移動する(同じボリュームなら rename、別のボリュームなら、コピーして、成功したときだけ元を消す)。
+    // 先を上書きするとき(opts.overwrite = true)は、先を消してから移すので、移すのに失敗すると、先だけが失われる
+    int Application::lua_command_move_to(lua_State* L)
+    {
+        return TransferCommand(L, FileOpType::Move);
     }
 
     // Miata.command.trash(target) -> boolean
@@ -1073,7 +1194,7 @@ namespace miata {
 
     // Miata.command.marked_entries([pane]) -> { {name, path, is_dir}, ... }
     // paneのペインの、マーク済みのエントリ(画面の並び順。絞り込み中は、見えている行のマークだけ)。マークが無ければ空の配列(カーソル下の1件には
-    // 置き換えない: copy_marked / move_marked の「マークが無ければカーソル下」は、呼ぶ側で cursor_entry と組み合わせる)。
+    // 置き換えない: コピー・移動(c / m)の「マークが無ければカーソル下」は、呼ぶ側(resources/test.lua)で cursor_entry と組み合わせる)。
     // 状態は変えない。
     int Application::lua_command_marked_entries(lua_State* L)
     {
