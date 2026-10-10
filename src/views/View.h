@@ -58,16 +58,13 @@ namespace miata::views {
         constants::Pane CurrentPane() const;
         FileListView& GetFileListView(constants::Pane pane);
         models::FileListModel& GetList(constants::Pane pane);
-        // listを表示しているペインを再スキャンして最新にする。カーソルとマークは維持される
-        // (FileListView::Reload参照。cursor_toの意味も同じ)。ファイル操作の後始末用で、
-        // 失敗(ディレクトリが読めない等)しても一覧が変わらないだけなので呼び出し側には返さない。
-        void ReloadList(const models::FileListModel& list, std::optional<std::filesystem::path> cursor_to = std::nullopt);
-        // dirを表示しているペイン(左右の両方でありうる)を、ReloadListと同じように再スキャンして最新にする。どのペインもdirを
-        // 表示していなければ、何もしない。ファイル操作(ゴミ箱・リネームなど)の後始末用: 操作の対象は、Luaから渡されたパスで
-        // 決まるので、どのペインが関係するかは、モデルではなく、表示しているパスで引く。
+        // dirを表示しているペイン(左右の両方でありうる)を再スキャンして最新にする(FileListView::Reload。カーソルとマークは
+        // 維持される)。どのペインもdirを表示していなければ、何もしない。ファイル操作(ゴミ箱・リネーム・コピー・移動の完了など)の
+        // 後始末用: 操作の対象は、Luaから渡されたパスで決まるので、どのペインが関係するかは、モデルではなく、表示している
+        // パスで引く。再スキャンの失敗(ディレクトリが読めない等)は、一覧が変わらないだけなので、呼び出し側には返さない。
         // renamedは、{旧パス, 新パス}(リネーム)。カーソルが旧パスにあるペインだけ、カーソルを新パスへ寄せる(旧パスは消えるので、
-        // 寄せないと、次のファイルに寄ってしまう。ReloadListのcursor_toと同じ意味)。カーソルが別のファイルにあるペインは、
-        // 再スキャンで、同じファイルに追従する。
+        // 寄せないと、次のファイルに寄ってしまう。FileListView::Reloadのcursor_toと同じ意味)。カーソルが別のファイルにある
+        // ペインは、再スキャンで、同じファイルに追従する。
         void ReloadDirectory(
             const std::filesystem::path& dir,
             std::optional<std::pair<std::filesystem::path, std::filesystem::path>> renamed = std::nullopt
@@ -138,8 +135,6 @@ namespace miata::views {
         void MoveToParentOrReport(models::FileListModel& list);
         // 移れたらtrue。移れなければ、ダイアログで知らせてfalse
         bool JumpToOrReport(models::FileListModel& list, const std::filesystem::path& path);
-        // listを表示しているペイン(どちらでもなければnullptr)
-        FileListView* FindFileListView(const models::FileListModel& list);
         // paneの、いまのフォルダとソート(保存・復元する状態)
         models::PaneState GetPaneState(constants::Pane pane);
 

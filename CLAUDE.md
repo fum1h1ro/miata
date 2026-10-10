@@ -85,7 +85,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 複数の機能が同居するファイル（`Application.cc`・`osx.mm`・`FileListView.mm` ほか）を触るときも効く規則。根拠と細部は、括弧内のルール（食い違ったら、ルールが正）。
 
 - **`luaL_error` は longjmp**（Lua は C としてビルドされている）：デストラクタを持つオブジェクト（`std::string` など）を作った後に呼ばない。引数を検証して `luaL_error` を呼んでから、オブジェクトを作る。（`lua-commands.md`・`history-panes.md`）
-- **ユーザー操作の移動は `TryJumpTo` / `NavigateToParent`**：`JumpTo` は、読めないと例外を投げる（コードベースに `catch` は無い）ので、起動時（ホーム）とテスト専用。同じディレクトリを再スキャンするだけなら `View::ReloadList(model, cursor_to)`（`JumpTo(Path())` ではない。カーソルとマークが消える）。（`permissions-signing.md`・`file-list.md`）
+- **ユーザー操作の移動は `TryJumpTo` / `NavigateToParent`**：`JumpTo` は、読めないと例外を投げる（コードベースに `catch` は無い）ので、起動時（ホーム）とテスト専用。同じディレクトリを再スキャンするだけなら `View::ReloadDirectory(dir)`（`JumpTo(Path())` ではない。カーソルとマークが消える。パスで、そのフォルダを表示しているペインを引く）。（`permissions-signing.md`・`file-list.md`）
 - **ファイル操作・移動の失敗は、必ず `View::ReportFileError` に通す**（権限の失敗に、許可のしかたの案内が付く）。例外は、起動時のペインの復元（案内を出さず、黙ってホームのまま。直さない）。（`permissions-signing.md`・`history-panes.md`）
 - **マークを外して画面にも反映するなら `UnmarkPaths`**（モデルの `Mark()` はビューに通知しない）。コピー・移動・ゴミ箱・リネームの既定のキー（`resources/test.lua`）の対象は「見えているマーク」（`FileListView::MarkedEntries()` = Lua の `marked_entries`）で、完了後に外すのは、操作したファイルのマークだけ。（`file-list.md`・`search-filter.md`）
 - **ファイル操作は「部品（C++）+ 組み立て（Lua）」**：`trash` / `copy_to` / `move_to` / `rename_to` / `make_directory` は、明示した絶対パスへの、確認なしの操作（失敗は `ReportFileError`、操作の後は、関係するフォルダを**表示しているパスで引いた**ペインを更新）。対象の選び方・確認・流れは `resources/test.lua`。コマンドの先頭で `lua_settop(L, 引数の数)` を忘れない（`PushTargetPaths` が積む表が、省略された引数の位置に来る）。（`lua-commands.md`）
