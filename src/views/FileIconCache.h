@@ -6,13 +6,15 @@
 #include <string>
 #include <unordered_map>
 #include "../models/FileEntryModel.h"
+#include "../platform.h"
 
 // 一覧の、ファイル名の頭に出すアイコンを、パスごとに保持する。AppKit依存のヘルパーなので.mmファイルからのみ
 // includeする(ViewMetrics.hと同じ規約)。メインスレッドからだけ使う。
 //
 // アイコンは、Finderと同じもの(NSWorkspaceのiconForFile:の結果。拡張子の種類のアイコン・.appの実物のアイコン・
-// カスタムアイコン・リンクの矢印バッジ)。ただし、ダウンロード前のファイル(クラウドストレージのプレースホルダ。
-// IsDataless())と、UTF-8として不正なパスは、ファイルに触れず、拡張子の種類のアイコンにする(Resolve参照)。
+// カスタムアイコン・リンクの矢印バッジ)。ただし、クラウドストレージの中のもの(pl_is_in_cloud_storage)・
+// ダウンロード前の印が付いたもの(IsDataless())・UTF-8として不正なパスは、ファイルの中身に触れかねない
+// iconForFile:を呼ばず、拡張子の種類のアイコンにする(Resolve参照)。
 // 引くのは、描くとき(見えている行だけ)に、保持していないパスだけ。保持していれば、パスの文字列の検索だけ。
 // 実測値と、設計の決定・罠は .claude/rules/file-list.md。
 namespace miata::views {
@@ -87,12 +89,16 @@ namespace miata::views {
         {
             NSWorkspace* workspace = [NSWorkspace sharedWorkspace];
 
-            // ダウンロード前のファイル(クラウドストレージのプレースホルダ)には、iconForFile:を呼ばない。カスタムアイコンや、
+            // クラウドストレージの中(pl_is_in_cloud_storage。リンクの先も)と、ダウンロード前の印が付いたもの
+            // (IsDataless()。フォルダやエイリアスにも付くことがある)には、iconForFile:を呼ばない。カスタムアイコンや、
             // .appの中のInfo.plistを読みに行って、ダウンロードを起こすかもしれない(未検証)。一覧は、メタデータだけを読む
-            // (<CLOUD>の札と同じ)。印は、フォルダやエイリアスにも付くことがあり、そのときも同じ。
+            // (<CLOUD>の札と同じ)。ダウンロード済みの書類の見た目は同じ(種類のアイコン)。違うのは、その中の
+            // .app・カスタムアイコン・リンクの矢印バッジだけ。
             // パスは、元のバイト列で引く(RepairUtf8を通すと、別のファイルを指す)。UTF-8として不正なパスは、
             // NSStringにならない(nil)ので、iconForFile:に渡さない
-            NSString* path = entry.IsDataless() ? nil : @(entry.Path().c_str());
+            const std::filesystem::path full = entry.Path();
+            const bool may_read_contents = entry.IsDataless() || pl_is_in_cloud_storage(full);
+            NSString* path = may_read_contents ? nil : @(full.c_str());
             NSImage* icon = path ? [workspace iconForFile:path] : nil;
             return icon ? icon : [workspace iconForContentType:TypeOf(entry)];
         }
