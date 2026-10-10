@@ -6,7 +6,7 @@ paths:
   - "resources/test.lua"
 ---
 
-# 設定（読み込み・キーバインド・色）
+# 設定（読み込み・キーバインド・色・その他の設定）
 
 > 機能別の設計メモ。上の `paths:` のファイルを触ると自動で読み込まれる。`Application.cc` など複数の機能が同居するファイルでは載らないので、そのときは CLAUDE.md の「設計メモの索引」から、該当するファイルを自分で読むこと。
 > テスト・実測・実機未確認の記録は `.claude/notes/config.md`（自動では読み込まれない。テストを書く・直す・検証するときに読む）。
@@ -55,3 +55,12 @@ Lua からの代入先は `Config::Color`（`Config.h` の `CONFIG_COLOR_LIST` =
 - **罠：ウィンドウやアプリ全体の `appearance` は切り替えない**：`pl_get_color`（`osx.mm`）は、描画の外（ダイアログの作成時など）では、`NSApp.appearance`/`window.appearance` を変えても OS の外観のままの色を返す（実測: `NSApp.appearance` を Dark にしても `windowBackgroundColor` は `#ffffff`）。全体を切り替えると、ダイアログの背景（`pl_get_color`）は白いまま、中のコントロールだけが Dark になって壊れる。切り替えるのは、`pl_get_color` を使わないビュー（ブラウザ領域のコンテナ）に限る。タイトルバーとダイアログは OS のテーマのまま。
 - **ウィンドウ自体の背景は起動時に一度だけ**（設定は起動時にだけ読むため）。ペインとヘッダーは描画のたびに設定を読む。ウィンドウ自体の背景は、ペインの境目の隙間と、リサイズ中に広がった部分にだけ見える。
 - **色の解釈**：`ToNSColor`（`colorWithRed:`）は sRGB（`colorWithSRGBRed:` と同じ。実測）。`"#rrggbb"`/`"#rrggbbaa"` は 16 進のとおりの色になる。
+
+## その他の設定（`Miata.config.set_*`）
+
+色以外の設定は、関数形（`set_font` / `set_font_size` / `set_history_limit` / `set_show_icons`）。`Config::ScriptInitialize()` が、`config_funcs[]`（`Config.cc`）を `Miata.config` に登録する（`Application::InitializeScript()` が、`base.lua` とコマンドの登録の後、`test.lua` / `init.lua` の前に呼ぶ）。**`Application.cc` の `config_commands[]` / `view_commands[]` ではない**（それは `Miata.command.*`）。値は `Config` の private メンバー + 静的な getter（`Config::FontSize()` など）。
+
+- **関数形にした理由**：`Miata.config.show_icons = true` のようなフィールドの代入は、タイプミスも黙って通り、何も起きない（`Miata.config` にメタテーブルは無く、あるのは `color` だけ）。関数なら、タイプミスは「nil を呼んだ」エラーになり、起動時のダイアログに出る
+- **検証**：引数の型・範囲を、設定を変える前に確かめ、外れたらエラーにする（値は変えない）。`luaL_error` は longjmp なので、`std::string` などを作る前に。真偽値は `lua_type == LUA_TBOOLEAN` を見る（`lua_toboolean` は `0` も `""` も真にする）。`Script::CheckArgType` のエラーメッセージは、型コードを個数として書く（`expected 1 arguments, got 1`）ので紛らわしい。説明のあるメッセージを自前で出す（`set_history_limit` と `set_show_icons` が手本）。`set_font_size` は、型（数値）は見るが、範囲は見ない（0・負数・NaN を通す。既知。直していない）
+- **反映のタイミング**：設定は、`View` を作る前に全部読み終わる（`InitializeImpl`）。値を読む側は、(a) 構築時に 1 回（`FileListView` のコンストラクタの `HeaderHeight()`、`QueryBar` のフォント。実行中の変更は反映されない）と、(b) 描くたびに（`FileListView::Draw` の色・フォント・行の高さ・`ShowIcons()`）の 2 通り。**`Config` から `View` への通知は無い**ので、実行中に変える設定は (b) の読み方にして、変えた側が `Redraw()` を呼ぶ。レイアウトの値（アイコンの列の幅など）は、`Draw` の中で計算する（構築時にキャッシュしない）
+- **実行中に切り替えられる設定は `show_icons` だけ**（`Miata.command.toggle_icons()`。`view_commands[]`。`resources/test.lua` で `.` キー）。`Config::SetShowIcons(bool)` を public にして、コマンドが、書き換えた後に両ペインの `Redraw()` を呼ぶ。保存はしない（起動時は設定が決める）。**ほかの設定は、実行中に切り替える手段を用意しておらず、反映も保証しない**（README の契約は「起動時にだけ読み込む」。色・フォント・行の高さは描くたびに読むので、書き換えると次の描画で変わりうるが、ヘッダーの高さなど構築時に読む値は変わらない）。`set_show_icons` を実行中に呼んでも、値が変わるだけで、再描画はしない（次に描かれるまで見た目は変わらない。`toggle_icons` を使う）。設定の読み込み中（`view_` が null）に `toggle_icons` を呼ぶと、`lua_view_trampoline` が、落とさずにエラーにする

@@ -17,6 +17,7 @@ Miata.config.color.alias = "#ff8ad8ff"
 Miata.config.color.cloud = "#7ec8ffff"
 -- Miata.config.set_font("フォント名") / Miata.config.set_font_size(size) でファイル一覧のフォントを指定できる(未指定ならデフォルト)
 -- Miata.config.set_history_limit(n) でフォルダの履歴の件数(左右のペイン合わせて)を指定できる(0〜10000。未指定なら 100。0 なら記録しない)
+-- Miata.config.set_show_icons(true/false) でファイル名の頭のアイコン(Finder と同じ)を出すかを指定できる(未指定なら出す。. で実行中に切り替えられる)
 
 local command <const> = Miata.command
 
@@ -134,6 +135,11 @@ Miata.command.bind("n", "dd", function()
 end)
 Miata.command.bind("n", "<C-r>", function()
     Miata.command.reload()
+end)
+-- ファイル名の頭のアイコンの表示を入り切りする(AFXW の . と同じ)。切り替えは保存しない(起動時の状態は、上の
+-- set_show_icons が決める)
+Miata.command.bind("n", ".", function()
+    Miata.command.toggle_icons()
 end)
 -- プレビュー(Quick Look)。カーソル下のファイルを、引数なしなら両ペインに被せて表示する。もう一度押すか Esc で閉じる
 Miata.command.bind("n", "p", function()

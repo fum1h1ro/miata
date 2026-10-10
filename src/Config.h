@@ -105,6 +105,18 @@ namespace miata {
         // set_history_limitに指定できる最大(0〜この値の整数)
         static constexpr int kHistoryLimitMax = 10000;
 
+        // ファイル名の頭に、ファイルのアイコン(Finderと同じ)を出すか。既定は出す。Miata.config.set_show_icons(bool)で
+        // 指定する。ほかの設定と違い、実行中に切り替えられる(Miata.command.toggle_icons)ので、描くたびに読むこと
+        // (構築時にキャッシュしない)。切り替えた後の再描画は、呼ぶ側がする(Configはビューを知らない)。
+        static inline bool ShowIcons()
+        {
+            return Instance().show_icons_;
+        }
+        static inline void SetShowIcons(bool show)
+        {
+            Instance().show_icons_ = show;
+        }
+
         // 背景色(Miata.config.color.background)。alphaは使わず、常に不透明にして返す。半透明で塗ると、
         // 後ろのOSのテーマの色(Lightなら白)が混ざって、OSの設定しだいで見た目が変わってしまうため。
         // 背景を塗る箇所は、Color().Get(...)ではなく必ずこれを使う(alphaの扱いをここに揃える)。
@@ -131,12 +143,14 @@ namespace miata {
         static int lua_set_font(lua_State* L);
         static int lua_set_font_size(lua_State* L);
         static int lua_set_history_limit(lua_State* L);
+        static int lua_set_show_icons(lua_State* L);
 
         static Config* _instance;
         class Color color_;
         std::string font_family_;
         float font_size_ = 12.0f;
         size_t history_limit_ = 100;
+        bool show_icons_ = true;
     };
 }
 

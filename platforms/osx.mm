@@ -605,6 +605,43 @@ bool pl_is_in_file_provider_domain(const std::filesystem::path& path)
     }
 }
 
+// path が root と同じか、root の下か(root は実パス)
+static bool IsUnderOrEqual(const std::string& root, const std::string& path)
+{
+    if (root.empty()) return false;
+    if (path == root) return true;
+    return path.size() > root.size() && path.compare(0, root.size(), root) == 0 && path[root.size()] == '/';
+}
+
+// home をホームとして、path が、クラウドストレージ(~/Library/CloudStorage か ~/Library/Mobile Documents)の中か
+static bool IsInCloudStorageOf(const std::filesystem::path& home, const std::filesystem::path& path)
+{
+    std::optional<std::string> parent;
+    std::optional<std::string> self;
+    bool resolved = false;
+    for (const char* sub : {"Library/CloudStorage", "Library/Mobile Documents"}) {
+        auto root = RealPathOf(home / sub);
+        if (!root) continue; // 無い(使っていない)
+        if (!resolved) {
+            // 親の実パスと、path 自身の実パス(リンクなら、リンク先)を、1 回だけ引く。どちらかが下にあれば、中
+            parent = RealPathOf(path.parent_path());
+            self = RealPathOf(path);
+            resolved = true;
+        }
+        if ((parent && IsUnderOrEqual(*root, *parent)) || (self && IsUnderOrEqual(*root, *self))) return true;
+    }
+    return false;
+}
+
+bool pl_is_in_cloud_storage(const std::filesystem::path& path)
+{
+    @autoreleasepool {
+        NSString* home = NSHomeDirectory();
+        if (home.length == 0) return false;
+        return IsInCloudStorageOf(home.fileSystemRepresentation, path);
+    }
+}
+
 // Finder に頼んだ失敗の説明。status は OSStatus(Apple Events の送信の失敗か、Finder の返事の errn)、
 // finder_message は Finder の返事の errs(あれば)。permission_denied は false のまま(フルディスクアクセスの案内は当てはまらない)
 static miata::FileError FinderTrashError(OSStatus status, const std::string& finder_message)
