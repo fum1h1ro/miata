@@ -169,6 +169,12 @@ namespace miata {
 
         view_ = std::make_unique<views::View>();
 
+        // 実行中の Miata.config.set_show_icons / set_show_hidden(キーの関数の中など)が、値を変えたときに、すぐ画面へ反映する
+        // (実行中の切り替えは、これだけ=set(not get)。専用の toggle コマンドは無い)。設定の読み込み中は、ここより前なので、
+        // 値だけが変わる(起動時の一覧は、その値で作られる)。同じ値を指定したときは、呼ばれない
+        Config::SetShowIconsObserver([this]() { view_->RefreshShowIcons(); });
+        Config::SetShowHiddenObserver([this]() { view_->RefreshHiddenFiles(); });
+
         // フォルダの履歴に、設定の上限を渡して、前回までの記録を復元する。設定の読み込みの後で、最初の移動より前
         // (タイマーが動き出す前)に済ませる。設定の読み込みでエラーが起きたときは、ユーザーが指定した上限が分からない
         // (エラーの行より後の設定は実行されない)ので、保存してある履歴を削らないよう、最大値で復元する。正しい上限は、
@@ -269,8 +275,6 @@ namespace miata {
             { "history_list", lua_command_history_list },
             { "jump_to", lua_command_jump_to },
             { "set_clipboard", lua_command_set_clipboard },
-            { "toggle_icons", lua_command_toggle_icons },
-            { "toggle_hidden", lua_command_toggle_hidden },
         };
         script.RegisterFunctions(
             "Miata.command",
@@ -840,37 +844,6 @@ namespace miata {
         auto& app = Application::Instance();
         app.view_->ToggleFocus();
         return 0;
-    }
-
-    // Miata.command.toggle_icons() -> boolean
-    // ファイル名の頭のアイコンの表示を、入り切りする。切り替えた後の状態(出していればtrue)を返す。
-    // Miata.config.set_show_icons で決めた値を書き換えるだけで、保存はしない(起動し直すと、設定が決める)。
-    // 両ペインを描き直す(フォーカスのあるペインは、カーソルの行へスクロールする。マークの変更などと同じ)。
-    int Application::lua_command_toggle_icons(lua_State* L)
-    {
-        auto& app = Application::Instance();
-        const bool show = !Config::ShowIcons();
-        Config::SetShowIcons(show);
-        app.view_->GetFileListView(views::constants::Pane::Left).Redraw();
-        app.view_->GetFileListView(views::constants::Pane::Right).Redraw();
-        lua_pushboolean(L, show);
-        return 1;
-    }
-
-    // Miata.command.toggle_hidden() -> boolean
-    // 隠しファイル(名前の頭が "." のものと、Finderの「隠す」フラグが付いたもの)の表示を、入り切りする。切り替えた後の
-    // 状態(出していればtrue)を返す。両ペインに効く。Miata.config.set_show_hidden で決めた値を書き換えるだけで、
-    // 保存はしない(起動し直すと、設定が決める)。両ペインの一覧を作り直す(カーソルは、同じファイルに留まる。隠れたら、近くの行)。
-    // 隠れた行は、検索・マークの一括操作・ファイル操作の対象から外れる(絞り込みで隠れた行と同じ)。
-    // 設定の読み込み中(view_ が無い)に呼ぶと、トランポリンが、落とさずにエラーにする。
-    int Application::lua_command_toggle_hidden(lua_State* L)
-    {
-        auto& app = Application::Instance();
-        const bool show = !Config::ShowHidden();
-        Config::SetShowHidden(show);
-        app.view_->RefreshHiddenFiles();
-        lua_pushboolean(L, show);
-        return 1;
     }
 
     int Application::lua_command_mark(lua_State* L)

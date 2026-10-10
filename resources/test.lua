@@ -17,9 +17,11 @@ Miata.config.color.alias = "#ff8ad8ff"
 Miata.config.color.cloud = "#7ec8ffff"
 -- Miata.config.set_font("フォント名") / Miata.config.set_font_size(size) でファイル一覧のフォントを指定できる(未指定ならデフォルト)
 -- Miata.config.set_history_limit(n) でフォルダの履歴の件数(左右のペイン合わせて)を指定できる(0〜10000。未指定なら 100。0 なら記録しない)
--- Miata.config.set_show_icons(true/false) でファイル名の頭のアイコン(Finder と同じ)を出すかを指定できる(未指定なら出す。. で実行中に切り替えられる。いまの状態は Miata.config.get_show_icons() で読める)
+-- Miata.config.set_show_icons(true/false) でファイル名の頭のアイコン(Finder と同じ)を出すかを指定できる(未指定なら出す。. で実行中に切り替えられる。いまの状態は Miata.config.get_show_icons() で読める。
+-- 実行中に set_show_icons を呼んでも、値が変わったら、すぐ描き直す)
 -- Miata.config.set_show_hidden(true/false) で隠しファイル(名前の頭が . のものと、Finder の「隠す」フラグが付いたもの。~/Library など)を
--- 出すかを指定できる(未指定なら隠す。zh で実行中に切り替えられる。いまの状態は Miata.config.get_show_hidden() で読める)
+-- 出すかを指定できる(未指定なら隠す。zh で実行中に切り替えられる。いまの状態は Miata.config.get_show_hidden() で読める。
+-- 実行中に set_show_hidden を呼んでも、値が変わったら、すぐ一覧を作り直す)
 
 local command <const> = Miata.command
 
@@ -204,16 +206,17 @@ end)
 Miata.command.bind("n", "<C-r>", function()
     Miata.command.reload()
 end)
--- ファイル名の頭のアイコンの表示を入り切りする(AFXW の . と同じ)。切り替えは保存しない(起動時の状態は、上の
--- set_show_icons が決める)
+-- ファイル名の頭のアイコンの表示を入り切りする(AFXW の . と同じ)。set_show_icons は、実行中に呼ぶと、値が変わったら
+-- すぐ描き直す。切り替えは保存しない(起動時の状態は、上の set_show_icons が決める)
 Miata.command.bind("n", ".", function()
-    Miata.command.toggle_icons()
+    Miata.config.set_show_icons(not Miata.config.get_show_icons())
 end)
 -- 隠しファイル(名前の頭が . のもの・Finder の「隠す」フラグが付いたもの。~/Library など)の表示を入り切りする(ranger / lf と同じ zh)。
 -- 隠しているあいだは、検索・絞り込み・まとめてマーク・コピー・移動・ゴミ箱の対象からも外れる(絞り込みで隠れた行と同じ)。
+-- set_show_hidden は、実行中に呼ぶと、値が変わったらすぐ一覧を作り直す(カーソルは同じファイルに留まる)。
 -- 切り替えは保存しない(起動時の状態は、上の set_show_hidden が決める)
 Miata.command.bind("n", "zh", function()
-    Miata.command.toggle_hidden()
+    Miata.config.set_show_hidden(not Miata.config.get_show_hidden())
 end)
 -- プレビュー(Quick Look)。カーソル下のファイルを、引数なしなら両ペインに被せて表示する。もう一度押すか Esc で閉じる
 Miata.command.bind("n", "p", function()

@@ -137,19 +137,24 @@ namespace miata {
 
     // Miata.config.set_show_icons(bool): ファイル名の頭のアイコンを出すか。真偽値だけ受け付ける
     // (lua_tobooleanは何でも受けて、0 や "" を真にしてしまうので、型を見る)。違う型は、設定を変えずにエラーにする
-    // (設定の読み込みのエラーとして、起動時のダイアログに出る)。
+    // (設定の読み込みのエラーとして、起動時のダイアログに出る)。実行中に値が変わったら、すぐ描き直す(show_icons_observer_)。
     int Config::lua_set_show_icons(lua_State* L)
     {
         if (lua_type(L, 1) != LUA_TBOOLEAN) {
             return luaL_error(L, "set_show_icons: expected a boolean (true or false)");
         }
-        Instance().show_icons_ = lua_toboolean(L, 1) != 0;
+        auto& config = Instance();
+        const bool show = lua_toboolean(L, 1) != 0;
+        const bool changed = config.show_icons_ != show;
+        config.show_icons_ = show;
+        // 実行中(ビューがある)に、値が変わったときだけ、両ペインを描き直す。検証の後なので、エラーは起きない
+        if (changed && config.show_icons_observer_) config.show_icons_observer_();
         return 0;
     }
 
     // Miata.config.get_show_icons() -> boolean: ファイル名の頭のアイコンを出している(出す設定になっている)か。
-    // set_show_icons で決めた値と、実行中の toggle_icons での切り替えの、どちらも反映した、いまの状態
-    // (どちらも同じ値 Config::ShowIcons() を書き換える)。読むだけで、状態は変えない。画面を触らないので、
+    // set_show_icons で決めた値(起動時の設定も、実行中の呼び出しも)を反映した、いまの状態(Config::ShowIcons())。
+    // 読むだけで、状態は変えない。画面を触らないので、
     // 設定の読み込み中(init.lua の最上位)からも呼べる。引数は見ない。
     int Config::lua_get_show_icons(lua_State* L)
     {
@@ -164,13 +169,18 @@ namespace miata {
         if (lua_type(L, 1) != LUA_TBOOLEAN) {
             return luaL_error(L, "set_show_hidden: expected a boolean (true or false)");
         }
-        Instance().show_hidden_ = lua_toboolean(L, 1) != 0;
+        auto& config = Instance();
+        const bool show = lua_toboolean(L, 1) != 0;
+        const bool changed = config.show_hidden_ != show;
+        config.show_hidden_ = show;
+        // 実行中(ビューがある)に、値が変わったときだけ、両ペインの一覧を作り直す
+        if (changed && config.show_hidden_observer_) config.show_hidden_observer_();
         return 0;
     }
 
     // Miata.config.get_show_hidden() -> boolean: 隠しファイルを一覧に出している(出す設定になっている)か。
-    // set_show_hidden で決めた値と、実行中の toggle_hidden での切り替えの、どちらも反映した、いまの状態
-    // (どちらも同じ値 Config::ShowHidden() を書き換える)。読むだけで、状態は変えない。画面を触らないので、
+    // set_show_hidden で決めた値(起動時の設定も、実行中の呼び出しも)を反映した、いまの状態(Config::ShowHidden())。
+    // 読むだけで、状態は変えない。画面を触らないので、
     // 設定の読み込み中(init.lua の最上位)からも呼べる。引数は見ない。
     int Config::lua_get_show_hidden(lua_State* L)
     {

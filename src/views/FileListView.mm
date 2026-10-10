@@ -1134,7 +1134,7 @@ void FileListView::Draw(double min_y, double max_y)
         NSFont* font = MakeFont(Config::FontSize());
         CGFloat row_height = RowHeight();
 
-        // ファイル名の頭のアイコン。入り切りの設定は、描くたびに読む(実行中に toggle_icons で切り替わる。Config.h)。
+        // ファイル名の頭のアイコン。入り切りの設定は、描くたびに読む(実行中に set_show_icons で切り替わる。Config.h)。
         // 列の幅は、この描画の間は、全行で同じ
         const bool show_icons = Config::ShowIcons();
         const CGFloat icon_size = IconSize(row_height);

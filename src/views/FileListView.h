@@ -252,7 +252,7 @@ namespace miata::views {
         int HiddenMarkCount() const;
 
         // --- 隠しファイル(Config::ShowHidden が偽のとき、隠しファイルを一覧に出さない) ---
-        // 隠しファイル(FileEntryModel::IsHidden)の表示の入り切りが変わった後に呼ぶ(Luaのtoggle_hidden。View::RefreshHiddenFiles
+        // 隠しファイル(FileEntryModel::IsHidden)の表示の入り切りが変わった後に呼ぶ(実行中の set_show_hidden。View::RefreshHiddenFiles
         // 経由)。一覧を作り直して、カーソルを、同じファイル(隠れたら、近くの見える行)へ寄せる。隠れた行は、絞り込みで外れた行と
         // 同じ扱い(list_に入らないので、検索・マークの一括操作・ファイル操作・ドラッグ・Luaのcursor_entry / marked_entriesの
         // 対象から外れる)。絞り込みの語と検索の語は、そのまま。Config::ShowHidden() は、一覧を作るとき(ApplyFilter)に読む
