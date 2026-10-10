@@ -408,12 +408,16 @@ Miata.command.navigate_left()
 Miata.command.navigate_right()
 Miata.command.navigate_ok()
 Miata.command.navigate_cancel()
+Miata.command.navigate_top()     -- 先頭の行へ（vim の gg）
+Miata.command.navigate_bottom()  -- 末尾の行へ（vim の G）
 Miata.command.current_pane()     -- カーソルのあるペイン: "left" または "right"
 ```
 
 ペインは `"left"` / `"right"` の文字列で表す。`current_pane()` の戻り値は、ペインを指定する引数（`reload` など）にそのまま渡せる。
 
 `navigate_cancel` は、ダイアログの表示中はダイアログをキャンセルし、それ以外のときは、プレビュー（[Quick Look](#プレビューquick-look)）と、カーソルのペインの[検索](#ファイル名の検索)を閉じる（`resources/test.lua` では Esc）。[絞り込み](#絞り込み)は解除しない。
+
+`navigate_top` / `navigate_bottom` は、カーソルのあるペインのカーソルを、**見えている行の先頭・末尾**へ動かす（vim の `gg` / `G`。`resources/test.lua` の既定のキーは、`gg` と `G`（Shift+g））。[絞り込み](#絞り込み)中は、絞り込んだ後の行の先頭・末尾（隠れた行へは行かない）。一覧が空なら、何もしない。カーソルの行が見えるところまで、スクロールする。1 回で届くので、行数が多くても遅くならない（`navigate_up(n)` / `navigate_down(n)` は、1 歩ずつの n 回の繰り返し）。**ダイアログの表示中は、何もしない**（ダイアログのカーソルは、これまでどおり上下の移動）。`5G` のような、行番号を指定する移動と、ページ送りは無い。
 
 `navigate_left`（親ディレクトリへ）と `navigate_ok`（ディレクトリへ入る）で、移動先が読めない（権限が無い・消えた等）ときは、移動せずに、エラーのダイアログを出す。権限が無い場合は、[許可のしかた](#権限のエラーmacos-の保護)も案内する。
 
