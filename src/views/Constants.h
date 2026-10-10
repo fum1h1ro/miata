@@ -13,6 +13,9 @@ namespace miata::views::constants {
         Right,
         Ok,
         Cancel,
+        // 一覧のカーソルを、見えている行の先頭・末尾へ(vimの gg / G)。ダイアログの表示中は、何もしない
+        Top,
+        Bottom,
     };
 
     // 左右2ペインのどちらか。Luaには "left" / "right" の文字列で公開する

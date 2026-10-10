@@ -573,6 +573,9 @@ void IDialog::Navigate(constants::Navigate dir)
     case constants::Navigate::Right: panel_.NavigateRight(); break;
     case constants::Navigate::Ok: panel_.NavigateOk(); break;
     case constants::Navigate::Cancel: OnCancel(); break;
+    // 先頭・末尾へ動くのは、一覧のカーソルだけ。ダイアログのカーソルは、上下の移動のまま
+    case constants::Navigate::Top:
+    case constants::Navigate::Bottom: break;
     }
 }
 

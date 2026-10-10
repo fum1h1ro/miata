@@ -416,6 +416,18 @@ void FileListView::MoveCursor(int offset)
     Redraw();
 }
 
+void FileListView::MoveCursorToTop()
+{
+    cursorIndex_ = 0;
+    Redraw();
+}
+
+void FileListView::MoveCursorToBottom()
+{
+    cursorIndex_ = std::max(0, (int)list_.size() - 1);
+    Redraw();
+}
+
 std::optional<std::filesystem::path> FileListView::CurrentPath() const
 {
     if (cursorIndex_ < 0 || (size_t)cursorIndex_ >= list_.size()) return std::nullopt;

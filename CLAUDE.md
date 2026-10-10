@@ -121,7 +121,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 | `quicklook.md` | プレビュー（Quick Look。倍率・ピンチ・スクロール） | `views/QuickLookView.*`、`BrowserView.mm`（覆いの配置）、`Application.cc`（`lua_command_quick_look*`） |
 | `history-panes.md` | フォルダの履歴／ペインの状態の保存／ウィンドウ位置・サイズの保存 | `models/PathHistory.*`・`PaneState.*`・`BrowserModel.*`、`View.mm`（`RestorePanes` ほか）、`osx.mm`（`pl_create_main_window`） |
 | `file-list.md` | 一覧の右側の札（`<DIR>` ほか）／ファイル名の頭のアイコン／ドラッグ&ドロップ／再読み込み／ディレクトリ監視／空のディレクトリ／UTF-8 として不正な名前 | `models/FileListModel.*`・`FileEntryModel.*`、`Utf8.*`、`views/FileIconCache.h`、`FileListView.mm`、`osx.mm`（`pl_watch_directory` / `pl_is_alias_file` / `pl_is_dataless_file` ほか） |
-| `lua-commands.md` | Lua から状況を取る／ファイルを開く／まとめてマークする／ファイルの操作（部品と組み立て） | `Application.cc`（`lua_command_*`）、`FileListView.mm`、`osx.mm`（`pl_open_paths` ほか）、`resources/base.lua`・`resources/test.lua` |
+| `lua-commands.md` | Lua から状況を取る／ファイルを開く／まとめてマークする／ファイルの操作（部品と組み立て）／先頭・末尾へ動く（`gg` / `G`） | `Application.cc`（`lua_command_*`）、`FileListView.mm`、`osx.mm`（`pl_open_paths` ほか）、`resources/base.lua`・`resources/test.lua` |
 | `config.md` | 設定の読み込み／キーバインド（`bind` / `unbind`）／色の設定（`Miata.config.color.*`）／その他の設定（`Miata.config.set_*`。実行中に切り替える `show_icons` の例外） | `Script.*`・`Config.*`・`KeyBinding.*`、`resources/test.lua`、`Application.cc`（`InitializeScript` / `lua_command_bind` / `lua_command_toggle_icons`） |
 
 ## ドキュメントの同期

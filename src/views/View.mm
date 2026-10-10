@@ -243,6 +243,12 @@ namespace miata::views {
         case constants::Navigate::Up:
             browser_->GetCurrentFileListView()->MoveCursor(-1);
             break;
+        case constants::Navigate::Top:
+            browser_->GetCurrentFileListView()->MoveCursorToTop();
+            break;
+        case constants::Navigate::Bottom:
+            browser_->GetCurrentFileListView()->MoveCursorToBottom();
+            break;
         case constants::Navigate::Ok:
             {
                 // 一覧が空(ファイルもフォルダも1つも無い、または絞り込みで0行)なら、入るものが無い

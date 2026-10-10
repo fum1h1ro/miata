@@ -72,6 +72,10 @@ namespace miata::views {
         int GetCursor() const { return cursorIndex_; }
         void SetCursor(int index);
         void MoveCursor(int offset);
+        // カーソルを、見えている行(絞り込んだ後の、画面の並び)の先頭・末尾へ動かす。一覧が空なら、カーソルは0のまま。
+        // 範囲への丸めと、カーソルの行へのスクロールは、MoveCursorと同じくRedraw()が行う
+        void MoveCursorToTop();
+        void MoveCursorToBottom();
         // カーソル下のエントリ。一覧が空(カーソルが一覧の外)ならnullptr
         inline FileEntryView* CurrentOrNull() const
         {

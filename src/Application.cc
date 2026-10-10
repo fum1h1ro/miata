@@ -229,6 +229,8 @@ namespace miata {
             { "navigate_right", lua_command_navigate_right },
             { "navigate_ok", lua_command_navigate_ok },
             { "navigate_cancel", lua_command_navigate_cancel },
+            { "navigate_top", lua_command_navigate_top },
+            { "navigate_bottom", lua_command_navigate_bottom },
             { "toggle_focus", lua_command_toggle_focus },
             { "mark", lua_command_mark },
             { "unmark", lua_command_unmark },
@@ -812,6 +814,23 @@ namespace miata {
     {
         auto& app = Application::Instance();
         app.view_->Navigate(views::constants::Navigate::Cancel);
+        return 0;
+    }
+
+    // Miata.command.navigate_top() / navigate_bottom()
+    // カーソルのペインの、見えている行(絞り込み中は、絞り込んだ後)の先頭・末尾へ、カーソルを動かす(vimの gg / G)。
+    // 一覧が空なら、何もしない。ダイアログの表示中も、何もしない(ダイアログのカーソルは動かさない)。
+    int Application::lua_command_navigate_top(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        app.view_->Navigate(views::constants::Navigate::Top);
+        return 0;
+    }
+
+    int Application::lua_command_navigate_bottom(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        app.view_->Navigate(views::constants::Navigate::Bottom);
         return 0;
     }
 

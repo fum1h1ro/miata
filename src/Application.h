@@ -61,6 +61,8 @@ namespace miata {
         static int lua_command_navigate_right(lua_State* L);
         static int lua_command_navigate_ok(lua_State* L);
         static int lua_command_navigate_cancel(lua_State* L);
+        static int lua_command_navigate_top(lua_State* L);
+        static int lua_command_navigate_bottom(lua_State* L);
         static int lua_command_toggle_focus(lua_State* L);
         static int lua_command_mark(lua_State* L);
         static int lua_command_unmark(lua_State* L);
