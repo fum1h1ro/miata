@@ -324,12 +324,17 @@ namespace miata::views {
         }
     }
 
-    void View::ReloadDirectory(const std::filesystem::path& dir, std::optional<std::filesystem::path> cursor_to)
+    void View::ReloadDirectory(
+        const std::filesystem::path& dir,
+        std::optional<std::pair<std::filesystem::path, std::filesystem::path>> renamed
+    )
     {
         for (auto pane : {constants::Pane::Left, constants::Pane::Right}) {
-            if (GetList(pane).Path() == dir) {
-                (void)GetFileListView(pane).Reload(cursor_to);
-            }
+            if (GetList(pane).Path() != dir) continue;
+            auto& view = GetFileListView(pane);
+            std::optional<std::filesystem::path> cursor_to;
+            if (renamed && view.CurrentPath() == renamed->first) cursor_to = renamed->second;
+            (void)view.Reload(std::move(cursor_to));
         }
     }
 

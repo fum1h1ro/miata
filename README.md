@@ -339,7 +339,7 @@ Miata.command.bind("n", "<C-d>", function()
     Miata.command.navigate_down(10)        -- Ctrl+d
 end)
 Miata.command.bind("n", "<S-k>", function()
-    Miata.command.make_folder()            -- Shift+k
+    Miata.command.reload()                 -- Shift+k
 end)
 Miata.command.bind("n", "dd", function()
     Miata.command.trash(Miata.command.marked_entries())   -- d を 2 回（確認なしで、マーク済みをゴミ箱へ）
@@ -620,8 +620,10 @@ Miata.command.copy_marked()         -- マーク済み(無ければカーソル�
 Miata.command.move_marked()         -- 同、移動。コピー/移動とも、名前が衝突する場合は上書き確認ダイアログを出す。同じフォルダへの操作などは、始める前に断る(下記)
 Miata.command.trash(target)         -- target(パス・エントリ・それらの配列)をゴミ箱へ移動(確認は出さない。下記)
 Miata.command.reload(pane)          -- ペインのディレクトリを再読み込み(カーソルとマークは維持)。pane省略で現在のペイン
-Miata.command.make_directory(name)  -- 現在のペインに新規フォルダを作成
-Miata.command.make_folder()         -- 名前を入力ダイアログで聞いてから make_directory を呼ぶ
+Miata.command.make_directory(path)  -- path(絶対パス)に新規フォルダを作成(下記)
+Miata.command.rename_to(target, new_path) -- target(1件)を new_path(絶対パス)へ。名前の変更(下記)
+Miata.command.exists(path)          -- path に何かあるか(リンクはたどらない。壊れたリンクも「ある」)
+Miata.util.path_join(dir, name)     -- フォルダ dir の中の名前 name の絶対パス(上の引数を組むとき)
 Miata.command.sort(key, reverse)    -- key: "name"/"size"/"mtime"/"ext"。カーソルのあるペインのソート。ペインごとに保存され、次回の起動で戻る。今の状態は current_sort で取れる（状況の取得）
 ```
 
@@ -683,13 +685,47 @@ end)
 
 複数の行をまとめてマークするコマンド（`mark_all` / `mark_range` ほか）は、[まとめてマークする](#まとめてマークする)を参照。
 
-#### `rename`
+#### `make_directory` / `rename_to` / `exists`
 
-カーソル位置の単一エントリの名前を変更する。**見えているマークが1件でもあれば何もしない**（複数選択時のリネームは未対応。[絞り込み](#絞り込み)で隠れている行のマークは数えない）。リネーム先の名前が既に存在する場合は上書きせず、衝突している旨のメッセージを添えて同じ入力ダイアログを開き直す。
+どれも、**対象を絶対パスで明示する**（カーソルやペインを暗黙の対象にしない）。確認や入力のダイアログは出さない（名前を聞くのは、呼ぶ側で `dialog_input` を使う。既定の `K` と `r` は、`resources/test.lua` にそう書いてある）。失敗は、ダイアログで知らせて `false`（権限が無い失敗には、[許可のしかた](#権限のエラーmacos-の保護)も案内する）。引数が正しくない（`nil`・相対パス・NUL を含む文字列など）と、Lua のエラー（何もしない）。成功したら、関係するフォルダを表示しているペイン（左右が同じなら両方）が再スキャンされる。
+
+- **`make_directory(path)`**: `path` にフォルダを作る。親フォルダは、あること（無ければ失敗）。**同じ場所に、既にフォルダがあれば、何もせずに `true`**（エラーにしない）。同名のファイルがあれば、失敗
+- **`rename_to(target, new_path)`**: `target`（パスの文字列、またはエントリ。ちょうど 1 件）を `new_path` へ移す。名前の変更（`rename(2)` なので、同じボリュームの中。別のボリュームへは動かせず、失敗する。ほかのフォルダへ移すときは、移動（`m`）を使う）。**`new_path` に既に何かあれば（壊れたシンボリックリンクも）、上書きせずに断る**。`new_path` が `target` と同じなら、何もせずに `true`。同じフォルダの中での変更なら、カーソルが旧名にあるペインは、カーソルが新しい名前に付いていく（別のファイルにあるペインは、そのまま）
+- **`exists(path)`**: `path` に何かがあるか。シンボリックリンクはたどらない（壊れたリンクも「ある」。コピー・移動の「同名があるか」と同じ見方）。読むだけ
+- **`Miata.util.path_join(dir, name)`**: フォルダ `dir` の中の名前 `name` の絶対パス。`name` が `/` で始まる絶対パスなら、それ（`dir` は無視する）。`dir` がルート（`/`）のときは、`/` を重ねない。名前の正当性（空・`/` を含む、など）は見ない
 
 ```lua
-Miata.command.rename()
+-- 既定の K と同じ: 名前を聞いて、カーソルのあるペインのフォルダの中に作る（名前に絶対パスを入れれば、その場所に作る）
+Miata.command.bind("n", "<S-k>", function()
+    local dir = Miata.command.pane_path()
+    local name = Miata.command.dialog_input("新しいフォルダ名を入力してください", "")
+    if name and name ~= "" then
+        Miata.command.make_directory(Miata.util.path_join(dir, name))
+    end
+end)
+
+-- 既定の r と同じ: カーソルのファイルの名前を変える。見えているマークがあれば、何もしない。
+-- 同名があれば、上書きせず、同じ入力ダイアログを開き直す
+Miata.command.bind("n", "r", function()
+    if #Miata.command.marked_entries() > 0 then return end
+    local entry = Miata.command.cursor_entry()
+    if not entry then return end
+    local dir = Miata.command.pane_path()
+    local message = "リネーム"
+    local new_name = entry.name
+    local new_path
+    while true do
+        new_name = Miata.command.dialog_input(message, new_name)
+        if not new_name or new_name == "" or new_name == entry.name then return end
+        new_path = Miata.util.path_join(dir, new_name)
+        if not Miata.command.exists(new_path) then break end
+        message = "リネーム（同名のファイル/フォルダが既に存在します）"
+    end
+    Miata.command.rename_to(entry, new_path)
+end)
 ```
+
+`rename_to` は、複数のファイルを一度には扱わない（マークした複数のファイルの名前の変更は未対応）。
 
 #### `reload`
 
@@ -914,6 +950,7 @@ Miata.config.set_history_limit(300)
 
 ```lua
 Miata.util.pp(value)          -- デバッグ出力（pretty print）
+Miata.util.path_join(dir, name) -- フォルダ dir の中の名前 name の絶対パス（[ファイル操作](#make_directory--rename_to--exists)）
 ```
 
 ### 設定

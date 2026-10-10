@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <queue>
+#include <utility>
 #include <vector>
 #include "Dialog.h"
 #include "BrowserView.h"
@@ -64,7 +65,13 @@ namespace miata::views {
         // dirを表示しているペイン(左右の両方でありうる)を、ReloadListと同じように再スキャンして最新にする。どのペインもdirを
         // 表示していなければ、何もしない。ファイル操作(ゴミ箱・リネームなど)の後始末用: 操作の対象は、Luaから渡されたパスで
         // 決まるので、どのペインが関係するかは、モデルではなく、表示しているパスで引く。
-        void ReloadDirectory(const std::filesystem::path& dir, std::optional<std::filesystem::path> cursor_to = std::nullopt);
+        // renamedは、{旧パス, 新パス}(リネーム)。カーソルが旧パスにあるペインだけ、カーソルを新パスへ寄せる(旧パスは消えるので、
+        // 寄せないと、次のファイルに寄ってしまう。ReloadListのcursor_toと同じ意味)。カーソルが別のファイルにあるペインは、
+        // 再スキャンで、同じファイルに追従する。
+        void ReloadDirectory(
+            const std::filesystem::path& dir,
+            std::optional<std::pair<std::filesystem::path, std::filesystem::path>> renamed = std::nullopt
+        );
         // listを表示しているペインの、pathsのファイルのマークを外して、再描画する(FileListView::UnmarkPaths参照)。
         void UnmarkPaths(const models::FileListModel& list, const std::vector<std::filesystem::path>& paths);
 

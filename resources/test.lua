@@ -123,11 +123,34 @@ end)
 Miata.command.bind("n", "m", function()
     Miata.command.move_marked()
 end)
+-- K: 新しいフォルダを作る。名前を聞いて、カーソルのあるペインのフォルダの中に作る(名前に絶対パスを入れれば、その場所に作る)。
+-- 場所(ペインのフォルダ)は、ダイアログを開く前に決める
 Miata.command.bind("n", "<S-k>", function()
-    Miata.command.make_folder()
+    local dir = Miata.command.pane_path()
+    local name = Miata.command.dialog_input("新しいフォルダ名を入力してください", "")
+    if name and name ~= "" then
+        Miata.command.make_directory(Miata.util.path_join(dir, name))
+    end
 end)
+-- r: カーソルのファイルの名前を変える(入力欄の初めの値は、今の名前)。見えているマークがあれば何もしない(単一のファイルだけ。
+-- 絞り込みで隠れているマークは数えない)。同名のファイル/フォルダが既にあれば、上書きせず、同じ入力ダイアログを開き直す。
+-- 名前に絶対パスを入れれば、その場所へ移す(同じボリュームの中)
 Miata.command.bind("n", "r", function()
-    Miata.command.rename()
+    if #Miata.command.marked_entries() > 0 then return end
+    local entry = Miata.command.cursor_entry()
+    if not entry then return end
+    local dir = Miata.command.pane_path()
+    local message = "リネーム"
+    local new_name = entry.name
+    local new_path
+    while true do
+        new_name = Miata.command.dialog_input(message, new_name)
+        if not new_name or new_name == "" or new_name == entry.name then return end
+        new_path = Miata.util.path_join(dir, new_name)
+        if not Miata.command.exists(new_path) then break end
+        message = "リネーム（同名のファイル/フォルダが既に存在します）"
+    end
+    Miata.command.rename_to(entry, new_path)
 end)
 -- dd: マーク済み(見えている行のマークだけ)をゴミ箱へ。確認する。マークが無ければ何もしない(カーソル下の1件にはしない)。
 -- 確認の前に対象を決める(marked_entries)。確認の後の trash は、そのパスに対して動く(ダイアログの間に一覧が変わっても、

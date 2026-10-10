@@ -243,6 +243,8 @@ namespace miata {
             { "copy_marked", lua_command_copy_marked },
             { "move_marked", lua_command_move_marked },
             { "make_directory", lua_command_make_directory },
+            { "rename_to", lua_command_rename_to },
+            { "exists", lua_command_exists },
             { "trash", lua_command_trash },
             { "current_pane", lua_command_current_pane },
             { "pane_path", lua_command_pane_path },
@@ -275,9 +277,6 @@ namespace miata {
             { "dialog_open", lua_private_dialog_open },
             { "dialog_is_open", lua_private_dialog_is_open },
             { "dialog_result", lua_private_dialog_result },
-            { "rename_target", lua_private_rename_target },
-            { "rename_conflict", lua_private_rename_conflict },
-            { "rename_execute", lua_private_rename_execute },
             { "paths_of", lua_private_paths_of },
             { "open_paths", lua_private_open_paths },
             { "reveal_paths", lua_private_reveal_paths },
@@ -834,20 +833,42 @@ namespace miata {
         return 0;
     }
 
+    // Luaの文字列(スタックのidx)を、絶対パスとして読む(IsOpenablePath: "/" で始まり、NULを含まない)。文字列でない、
+    // 絶対パスでないときは、Luaのエラー(何もしない)。luaL_errorの前に、デストラクタを持つオブジェクトを作らない
+    static void CheckAbsolutePathArg(lua_State* L, int idx)
+    {
+        Script::CheckArgType(L, idx, LUA_TSTRING);
+        size_t length = 0;
+        const char* s = lua_tolstring(L, idx, &length);
+        if (!IsOpenablePath(s, length)) {
+            luaL_error(L, "the path must be an absolute path (starting with \"/\") and must not contain NUL");
+        }
+    }
+
+    // CheckAbsolutePathArg を通った引数から、パスを取り出す(エラーを起こさない)
+    static std::filesystem::path ReadAbsolutePathArg(lua_State* L, int idx)
+    {
+        size_t length = 0;
+        const char* s = lua_tolstring(L, idx, &length);
+        return std::filesystem::path(std::string(s, length));
+    }
+
+    // Miata.command.make_directory(path) -> boolean
+    // path(絶対パスの文字列)にフォルダを作る。親フォルダは、あること(無ければ失敗)。既に同じ場所にフォルダがあれば、
+    // 何もせずtrue(エラーにしない)。同名のファイルがある・権限が無いなど、作れなければ、ダイアログで知らせてfalse
+    // (権限が無い失敗には、許可のしかたも案内する)。作った後は、親フォルダを表示しているペイン(左右が同じなら両方)を
+    // 再スキャンする(カーソルとマークは維持される)。pathが絶対パスの文字列でなければ、Luaのエラー
     int Application::lua_command_make_directory(lua_State* L)
     {
         auto& app = Application::Instance();
-        Script::CheckArgType(L, 1, LUA_TSTRING);
-        const std::string name = lua_tostring(L, 1);
+        CheckAbsolutePathArg(L, 1); // luaL_error を呼びうるのは、ここまで
 
-        auto& list = app.view_->CurrentList();
-        auto dest = list.Path() / name;
-
+        const auto dest = ReadAbsolutePathArg(L, 1);
         std::error_code ec;
         std::filesystem::create_directory(dest, ec);
 
         if (!ec) {
-            app.view_->ReloadList(list);
+            app.view_->ReloadDirectory(ParentDirOf(dest));
             lua_pushboolean(L, true);
         }
         else {
@@ -857,66 +878,70 @@ namespace miata {
         return 1;
     }
 
-    // 見えている行に、マークが1件でもあれば true(rename系コマンドは単一ファイルのみ対応のため無効化する)。
-    // 絞り込みで隠れている行のマークは数えない(見えないマークのせいで、リネームできなくならないように)
-    static bool AnyVisibleMarked(views::View& view)
+    bool Application::RenamePath(const std::filesystem::path& from, const std::filesystem::path& to)
     {
-        return !view.CurrentFileListView().MarkedEntries().empty();
-    }
+        if (from == to) return true; // 同じパス: 何もしない
 
-    // 見えているマークがある、またはリストが空ならnil。それ以外はカーソル位置のエントリ名を返す。
-    int Application::lua_private_rename_target(lua_State* L)
-    {
-        auto& app = Application::Instance();
-
-        auto* current = app.view_->CurrentEntry();
-        if (!current || AnyVisibleMarked(*app.view_)) {
-            lua_pushnil(L);
-            return 1;
-        }
-        lua_pushstring(L, current->Name().c_str());
-        return 1;
-    }
-
-    // カレントディレクトリ内にnameと同名のエントリが既に存在するか
-    int Application::lua_private_rename_conflict(lua_State* L)
-    {
-        auto& app = Application::Instance();
-        Script::CheckArgType(L, 1, LUA_TSTRING);
-        const std::string name = lua_tostring(L, 1);
-
-        auto& list = app.view_->CurrentList();
-        std::error_code ec;
-        lua_pushboolean(L, std::filesystem::exists(list.Path() / name, ec));
-        return 1;
-    }
-
-    int Application::lua_private_rename_execute(lua_State* L)
-    {
-        auto& app = Application::Instance();
-        Script::CheckArgType(L, 1, LUA_TSTRING);
-        const std::string new_name = lua_tostring(L, 1);
-
-        auto& list = app.view_->CurrentList();
-        auto* entry = app.view_->CurrentEntry();
-        if (!entry || AnyVisibleMarked(*app.view_)) {
-            lua_pushboolean(L, false);
-            return 1;
+        // 先に何かあれば(壊れたシンボリックリンクも)、上書きしない。std::filesystem::rename は、先がファイルなら、
+        // 黙って置き換える(失ったファイルは戻せない)ので、ここで断る
+        if (ExistsNoFollow(to)) {
+            view_->ReportFileError("リネームできませんでした", FileError{.message = "同名のファイル/フォルダが既に存在します"});
+            return false;
         }
 
-        auto dest = list.Path() / new_name;
-
         std::error_code ec;
-        std::filesystem::rename(entry->Path(), dest, ec);
+        std::filesystem::rename(from, to, ec);
+        if (ec) {
+            view_->ReportFileError("リネームできませんでした", FileError::From(ec));
+            return false;
+        }
 
-        if (!ec) {
-            app.view_->ReloadList(list, dest); // 旧名は消えるので、カーソルは新しい名前に合わせる
-            lua_pushboolean(L, true);
+        // 親フォルダを表示しているペインを再スキャンする。同じフォルダの中での名前の変更なら、カーソルが旧パスにある
+        // ペインのカーソルを、新しい名前へ寄せる(旧名は消えるので、寄せないと、次のファイルに寄ってしまう)。別のフォルダへ
+        // 移したときは、移した先も再スキャンする(旧パスのあったフォルダのカーソルは、次に残っているファイルへ寄る)
+        const auto from_dir = ParentDirOf(from);
+        const auto to_dir = ParentDirOf(to);
+        if (from_dir == to_dir) {
+            view_->ReloadDirectory(from_dir, std::make_pair(from, to));
         }
         else {
-            app.view_->ReportFileError("リネームできませんでした", FileError::From(ec));
-            lua_pushboolean(L, false);
+            view_->ReloadDirectory(from_dir);
+            view_->ReloadDirectory(to_dir);
         }
+        return true;
+    }
+
+    // Miata.command.rename_to(target, new_path) -> boolean
+    // target(パスの文字列、またはエントリ。ちょうど1件)を、new_path(絶対パスの文字列)へ移す(名前の変更。rename(2)なので、
+    // 同じボリュームの中。別のボリュームへは動かせず、失敗になる: 移動(move_marked)を使う)。new_path に既に何かあれば(壊れた
+    // リンクも)、上書きせずに断る。new_path が target と同じなら、何もせずtrue。失敗(断った場合も)は、ダイアログで
+    // 知らせてfalse。成功したら、関係するフォルダを表示しているペインを再スキャンして(同じフォルダの中での変更なら、カーソルが
+    // 旧パスにあるペインは、カーソルが新しい名前に付いていく)、true。引数が正しくなければ、Luaのエラー(何もしない)
+    int Application::lua_command_rename_to(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        lua_settop(L, 2); // 引数は 2 つまで(PushTargetPaths が積む表が、省いた引数の位置に来ないように)
+        PushTargetPaths(L, 1);
+        const int paths_index = lua_gettop(L);
+        if (lua_rawlen(L, paths_index) != 1) {
+            luaL_error(L, "rename_to: expected exactly one target (a path or an entry), got %d", (int)lua_rawlen(L, paths_index));
+            return 0;
+        }
+        CheckAbsolutePathArg(L, 2); // luaL_error を呼びうるのは、ここまで
+
+        const auto from = ReadPathArray(L, paths_index).front();
+        const auto to = ReadAbsolutePathArg(L, 2);
+        lua_pushboolean(L, app.RenamePath(from, to));
+        return 1;
+    }
+
+    // Miata.command.exists(path) -> boolean
+    // path(絶対パスの文字列)に、何かがあるか。シンボリックリンクはたどらない(壊れたリンクも「ある」。コピー・移動の
+    // 「同名があるか」と同じ見方)。読むだけ。pathが絶対パスの文字列でなければ、Luaのエラー
+    int Application::lua_command_exists(lua_State* L)
+    {
+        CheckAbsolutePathArg(L, 1);
+        lua_pushboolean(L, ExistsNoFollow(ReadAbsolutePathArg(L, 1)));
         return 1;
     }
 
@@ -929,6 +954,7 @@ namespace miata {
     int Application::lua_command_trash(lua_State* L)
     {
         auto& app = Application::Instance();
+        lua_settop(L, 1); // 余分な引数は無視する
         PushTargetPaths(L, 1); // luaL_error を呼びうるのは、ここまで
         const int paths_index = lua_gettop(L);
 

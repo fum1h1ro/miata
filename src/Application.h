@@ -44,6 +44,9 @@ namespace miata {
         // pathsを、ゴミ箱へ移す(同期。確認は出さない)。移した後に、そのフォルダを表示しているペインを再スキャンして、
         // 失敗は、まとめて1回のダイアログで知らせる。全部移せたらtrue(pathsが空ならfalse)
         bool TrashPaths(const std::vector<std::filesystem::path>& paths);
+        // fromを、toへ移す(名前の変更。同じボリュームの中)。toに既に何かあれば(壊れたリンクも)、上書きせずに断る。
+        // 失敗は、ダイアログで知らせてfalse。成功したら、関係するフォルダを表示しているペインを再スキャンして、true
+        bool RenamePath(const std::filesystem::path& from, const std::filesystem::path& to);
         void OnFileOperationCompleted(FileOperationCompleted& event);
 
 
@@ -69,6 +72,8 @@ namespace miata {
         static int lua_command_copy_marked(lua_State* L);
         static int lua_command_move_marked(lua_State* L);
         static int lua_command_make_directory(lua_State* L);
+        static int lua_command_rename_to(lua_State* L);
+        static int lua_command_exists(lua_State* L);
         static int lua_command_trash(lua_State* L);
         static int lua_command_current_pane(lua_State* L);
         static int lua_command_pane_path(lua_State* L);
@@ -98,9 +103,6 @@ namespace miata {
         static int lua_private_dialog_open(lua_State* L);
         static int lua_private_dialog_is_open(lua_State* L);
         static int lua_private_dialog_result(lua_State* L);
-        static int lua_private_rename_target(lua_State* L);
-        static int lua_private_rename_conflict(lua_State* L);
-        static int lua_private_rename_execute(lua_State* L);
         static int lua_private_paths_of(lua_State* L);
         static int lua_private_open_paths(lua_State* L);
         static int lua_private_reveal_paths(lua_State* L);

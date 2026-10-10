@@ -85,32 +85,6 @@ Miata = {
                 Miata.command.jump_to(picked, pane)
             end
         end,
-        make_folder = function()
-            local name = Miata.command.dialog_input("新しいフォルダ名を入力してください", "")
-            if name and name ~= "" then
-                Miata.command.make_directory(name)
-            end
-        end,
-        -- 見えているマーク(絞り込みで隠れた行のマークは数えない)があれば何もしない(単一ファイルのリネームのみ対応)。
-        -- 同名のファイル/フォルダが既に存在する場合は、上書きせず同じ入力ダイアログを開き直す。
-        rename = function()
-            local current = Miata._private.rename_target()
-            if not current then return end
-
-            local message = "リネーム"
-            local new_name = current
-            while true do
-                new_name = Miata.command.dialog_input(message, new_name)
-                if not new_name or new_name == "" or new_name == current then
-                    return
-                end
-                if not Miata._private.rename_conflict(new_name) then
-                    break
-                end
-                message = "リネーム（同名のファイル/フォルダが既に存在します）"
-            end
-            Miata._private.rename_execute(new_name)
-        end,
         -- ファイルを開く・Finderで表示する・パスをクリップボードへ。targetは、対象のパスの文字列、エントリ({ path = ... }。
         -- cursor_entry の戻り値など)、またはそれらの配列(marked_entries の戻り値など)。対象は、いつも明示する
         -- (マーク済み、無ければカーソル下、にしたいときは、呼ぶ側で marked_entries と cursor_entry を組み合わせる)。
@@ -151,6 +125,14 @@ Miata = {
     },
     _private = {},
     util = {
+        -- フォルダ dir の中の、名前 name のパス(make_directory / rename_to / exists などの、絶対パスの引数を組むとき)。
+        -- name が "/" で始まる絶対パスなら、それ(dir は無視する。名前を入力させるダイアログに、絶対パスを入れたときの扱い)。
+        -- dir がルート("/")のときは、"/" を重ねない。名前の正当性(空・"/" を含む、など)は見ない
+        path_join = function(dir, name)
+            if name:sub(1, 1) == "/" then return name end
+            if dir:sub(-1) == "/" then return dir .. name end
+            return dir .. "/" .. name
+        end,
         inspect = function(val, indent)
             -- インデントの初期化
             indent = indent or 0
