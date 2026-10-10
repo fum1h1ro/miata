@@ -38,6 +38,7 @@ if (APPLE)
         "-framework Quartz"
         "-framework WebKit"
         "-framework AudioToolbox"
+        "-framework UniformTypeIdentifiers" # ファイル名の頭のアイコン(views/FileIconCache.h)。-fmodules の自動リンクに頼らない
     )
 
     foreach(res IN LISTS RESOURCES)

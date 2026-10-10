@@ -12,6 +12,7 @@
 #include "../Config.h"
 #include "NSColorUtil.h"
 #include "ViewMetrics.h"
+#include "FileIconCache.h"
 
 namespace {
     constexpr CGFloat kDragStartDistance = 4; // 押下位置からこれ以上動いたらドラッグ開始とみなす(pt)
@@ -156,6 +157,18 @@ namespace {
     CGFloat RowHeight()
     {
         return Config::FontSize() + kRowVerticalMargin;
+    }
+
+    // ファイル名の頭のアイコン。大きさは行の高さに連動する(フォントサイズを上げれば、アイコンも大きくなる)。
+    // 行の高さから、上下に2ptずつ空ける(カーソルの下線=行の下端の2ptと重ならない)。小数の行の高さでも、
+    // アイコンの画素がにじまないよう、大きさは整数にする
+    constexpr CGFloat kIconVerticalMargin = 4; // 行の高さからアイコンの大きさを引く値(上下の合計)
+    constexpr CGFloat kIconGap = 5;            // アイコンと名前の間
+
+    CGFloat IconSize(CGFloat row_height)
+    {
+        // 下限は、set_font_sizeに0や負数が指定されても、0以下の大きさの画像を作らないため(set_font_sizeは範囲を見ない)
+        return std::max((CGFloat)1, std::floor(row_height) - kIconVerticalMargin);
     }
 
     // ls -lh 風の簡易フォーマット。将来的に外部指定できるようにするまでの固定実装。
@@ -328,6 +341,9 @@ FileListView::FileListView(models::FileListModel& list) : model_(list), impl_(st
                 if (!reload_memo_) {
                     search_.Clear();
                     filter_.Clear();
+                    // 名前の頭のアイコンも引き直す。左右のペインで共有しているので、もう一方のペインの分も捨てるが、
+                    // 見えている行を引き直すだけ。再スキャン(Reload)では捨てない(自動リロードは0.5秒ごとにありうる)
+                    FileIconCache::Instance().Clear();
                 }
                 Fetch();
                 // Reload()経由の通知ならカーソルを復元する。ディレクトリ移動(JumpTo)は先頭から
@@ -1071,6 +1087,12 @@ void FileListView::Draw(double min_y, double max_y)
         NSFont* font = MakeFont(Config::FontSize());
         CGFloat row_height = RowHeight();
 
+        // ファイル名の頭のアイコン。入り切りの設定は、描くたびに読む(実行中に toggle_icons で切り替わる。Config.h)。
+        // 列の幅は、この描画の間は、全行で同じ
+        const bool show_icons = Config::ShowIcons();
+        const CGFloat icon_size = IconSize(row_height);
+        const CGFloat icon_column = show_icons ? icon_size + kIconGap : 0;
+
         // 描き直す範囲にかかる行だけ描く(行ごとにファイルの大きさを調べるので、全行描くと数万件で重い)
         auto size = (int)list_.size();
         int first = std::max(0, (int)std::floor(min_y / row_height));
@@ -1115,14 +1137,35 @@ void FileListView::Draw(double min_y, double max_y)
                 [right_text drawInRect:right_rect withAttributes:attrs];
             }
 
+            // 名前の左に、アイコンの列を空ける: x を右へずらし、幅を同じだけ狭める(対で直す。x だけだと、右の欄に重なる)。
+            // 幅が0以下(狭いペイン)でも、drawInRectは何も描かない(実測)ので、そのままにする
             NSString* name = @(entry_model.Name().c_str());
             NSSize name_size = [name sizeWithAttributes:attrs];
             NSRect name_rect = NSMakeRect(
-                row_rect.origin.x + kPadding,
+                row_rect.origin.x + kPadding + icon_column,
                 row_rect.origin.y + (row_height - name_size.height) / 2,
-                row_rect.size.width - right_size.width - kPadding * 3,
+                row_rect.size.width - right_size.width - kPadding * 3 - icon_column,
                 name_size.height
             );
+
+            if (show_icons) {
+                // 縦は行の中央(整数に切り捨てる: 小数の行の高さでも、画素にそろい、カーソルの下線に重ならない)
+                NSRect icon_rect = NSMakeRect(
+                    row_rect.origin.x + kPadding,
+                    std::floor(row_rect.origin.y + (row_height - icon_size) / 2),
+                    icon_size, icon_size
+                );
+                // 右の欄に収まるときだけ描く(狭いペインで、右の欄の文字に重ねない)。
+                // respectFlipped:YES が要る。この一覧は isFlipped なので、無いと上下が逆さまに描かれる
+                if (NSMaxX(icon_rect) <= right_rect.origin.x) {
+                    [FileIconCache::Instance().IconFor(entry_model, icon_size) drawInRect:icon_rect
+                                                                                 fromRect:NSZeroRect
+                                                                                operation:NSCompositingOperationSourceOver
+                                                                                 fraction:1.0
+                                                                           respectFlipped:YES
+                                                                                    hints:nil];
+                }
+            }
 
             // 絞り込みと検索で一致した部分(すべての出現)に、背景色を付ける。同じ文字に両方当たれば、検索の色になる
             // (検索を後に塗る)。検索のカーソルのある行(今いるマッチ)は別の色にする。カーソルの下線と同じく、

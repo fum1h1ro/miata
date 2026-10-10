@@ -171,6 +171,15 @@ std::expected<void, miata::FileError> pl_trash_file(const std::filesystem::path&
 // は対象外(未検証)。
 bool pl_is_in_file_provider_domain(const std::filesystem::path& path);
 
+// pathが、クラウドストレージの中か。~/Library/CloudStorage(Dropbox・Google Drive・OneDriveなどのファイルプロバイダの領域)と、
+// ~/Library/Mobile Documents(iCloud Drive)の、実パスの下(領域そのものも含む)。親フォルダの実パスと、path自身の実パス
+// (シンボリックリンクなら、リンク先)の、どちらかが下にあれば真(クラウドの中への、シンボリックリンクも真。
+// ~/Dropbox のような、領域へのリンク経由のパスも真)。メタデータ(realpath)だけを見て、中身は読まない。
+// 名前の頭のアイコン(FileIconCache)が、iconForFile:(カスタムアイコンや .app の中の Info.plist を読みかねないので、
+// ダウンロードを起こすかもしれない)を呼んでよいかの判断に使う。pl_is_in_file_provider_domainと違い、領域そのものと、
+// iCloud Driveも対象。調べられないとき(存在しない・クラウドストレージを使っていない)は false。
+bool pl_is_in_cloud_storage(const std::filesystem::path& path);
+
 // Finderに頼んで、ファイルをゴミ箱へ移す(Apple Events)。Finder自身の権限で行われる。pl_trash_fileのフォールバック
 // (クラウドストレージの中では、普段の起動のアプリからは、書き込みの許可があっても、ゴミ箱への移動だけが拒否される。
 // .claude/rules/permissions-signing.mdの「権限エラーの案内」)。初回は、オートメーションの許可のダイアログが出て、答えるまで呼び出しが止まる
