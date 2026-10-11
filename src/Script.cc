@@ -208,6 +208,37 @@ namespace miata {
         return true;
     }
 
+    namespace {
+        // 命令数の上限を超えたときに呼ばれる(LUA_MASKCOUNT)。Lua のエラーにして、pcall に戻す
+        void InstructionLimitHook(lua_State* L, lua_Debug* /*ar*/)
+        {
+            luaL_error(L, "instruction limit exceeded (the function ran too long)");
+        }
+    }
+
+    std::expected<void, std::string> Script::CallProtected(
+        lua_CFunction func,
+        void* ud,
+        int max_instructions,
+        const std::function<void(lua_State*)>& read
+    )
+    {
+        const auto orig = lua_gettop(L_);
+        lua_pushcfunction(L_, func);
+        lua_pushlightuserdata(L_, ud);
+        if (max_instructions > 0) lua_sethook(L_, InstructionLimitHook, LUA_MASKCOUNT, max_instructions);
+        const int status = lua_pcall(L_, 1, 1, 0);
+        if (max_instructions > 0) lua_sethook(L_, nullptr, 0, 0);
+        if (status != LUA_OK) {
+            auto error = ErrorMessage(L_);
+            lua_settop(L_, orig);
+            return std::unexpected(error);
+        }
+        if (read) read(L_);
+        lua_settop(L_, orig);
+        return {};
+    }
+
     std::expected<bool, std::string> Script::InvokeRefFunctionOnThread(std::string thread_key, int ref)
     {
         auto it = threads_.find(thread_key);

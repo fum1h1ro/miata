@@ -1,4 +1,6 @@
 #include "KeyBinding.h"
+#include <algorithm>
+#include <iterator>
 #include <print>
 #include <expected>
 
@@ -232,13 +234,13 @@ namespace miata {
         }
         return std::unexpected(ErrorReason::MaybeTooShort);
     }
-    std::expected<bool, KeyBinding::ErrorReason> KeyBinding::Register(const char* key_string, int func_ref)
+    std::expected<bool, KeyBinding::ErrorReason> KeyBinding::Register(const char* key_string, int func_ref, std::string_view desc)
     {
         auto r = ParseKey(key_string);
         if (!r) return std::unexpected(r.error());
-        return Register(r.value(), func_ref);
+        return Register(r.value(), func_ref, desc);
     }
-    std::expected<bool, KeyBinding::ErrorReason> KeyBinding::Register(const KeyStroke& ks, int func_ref)
+    std::expected<bool, KeyBinding::ErrorReason> KeyBinding::Register(const KeyStroke& ks, int func_ref, std::string_view desc)
     {
         KeyStroke route;
         for (auto i = 0; i < ks.Size(); ++i) {
@@ -255,6 +257,9 @@ namespace miata {
         }
 
         bindings_[ks] = func_ref;
+        // 説明は、登録し直すと置き換わる(説明なしで登録し直したら、前の説明は残さない)
+        if (desc.empty()) descriptions_.erase(ks);
+        else descriptions_[ks] = std::string(desc);
         return true;
     }
     std::expected<int, KeyBinding::ErrorReason> KeyBinding::Unregister(const char* key_string)
@@ -282,7 +287,109 @@ namespace miata {
             }
         }
         bindings_.erase(ks);
+        descriptions_.erase(ks);
         return r.value();
+    }
+
+    std::vector<KeyBinding::Continuation> KeyBinding::Continuations(const KeyStroke& prefix) const
+    {
+        const int n = prefix.Size();
+        std::vector<Continuation> result;
+
+        for (const auto& [ks, ref] : bindings_) {
+            if (ks.Size() <= n) continue;
+            bool under_prefix = true;
+            for (int i = 0; i < n; ++i) {
+                if (!(ks.Keys()[(size_t)i] == prefix.Keys()[(size_t)i])) {
+                    under_prefix = false;
+                    break;
+                }
+            }
+            if (!under_prefix) continue;
+
+            const Key next = ks.Keys()[(size_t)n];
+            auto it = std::find_if(result.begin(), result.end(), [&](const Continuation& c) { return c.key == next; });
+            if (it == result.end()) {
+                Continuation c;
+                c.key = next;
+                result.push_back(std::move(c));
+                it = std::prev(result.end());
+            }
+            // このキーだけで確定する割り当て(prefix + next)があれば leaf。それより長い割り当ては、完全一致が先なので到達できない
+            if (ks.Size() == n + 1) {
+                it->leaf = true;
+                auto d = descriptions_.find(ks);
+                it->desc = d == descriptions_.end() ? std::string() : d->second;
+            }
+        }
+
+        // 修飾キー無しを先に、表示名の昇順
+        std::sort(result.begin(), result.end(), [](const Continuation& a, const Continuation& b) {
+            const bool a_mod = a.key.Mods() != 0;
+            const bool b_mod = b.key.Mods() != 0;
+            if (a_mod != b_mod) return b_mod;
+            return KeyName(a.key) < KeyName(b.key);
+        });
+        return result;
+    }
+
+    std::string KeyBinding::KeyName(const Key& key)
+    {
+        const uint16_t code = key.KeyCode();
+        const uint16_t mods = key.Mods();
+
+        // 括弧と修飾を除いた、キーの名前。bare は、修飾が無ければ、括弧なしで書ける(スペースと、1文字の印字文字)こと
+        std::string name;
+        bool bare = false;
+        for (const auto& [special, special_code] : special_to_keycode_) {
+            if (special_code == code) {
+                name = std::string(special);
+                break;
+            }
+        }
+        if (name.empty()) {
+            if (code == kVK_Space) {
+                // README に書いたとおり、"<space>" は bind では使えない(表示だけ)
+                name = "Space";
+                bare = true;
+            }
+            else if (const auto c = KeyCodeToAscii(code)) {
+                // 英数字(表の値 0 は「割り当て無し」と a の両方。その曖昧さは、KeyCodeToAscii が吸収している)
+                name = std::string(1, *c);
+                bare = true;
+            }
+            else {
+                // 記号。大文字は小文字と同じキー(Shift ではない)で、上で引けているので、ここに来ない。
+                // code は 0 ではない(0 は a で、上で引けている)ので、表の「割り当て無し」(0)には当たらない
+                for (int c = 33; c < 127; ++c) {
+                    if (ascii_to_keycode_[c] == code) {
+                        name = std::string(1, (char)c);
+                        bare = true;
+                        break;
+                    }
+                }
+            }
+            if (name.empty()) name = std::format("key:{}", code);
+        }
+
+        if (mods == 0 && bare) return name;
+        std::string s = "<";
+        if (mods & pl_modifier::Ctrl) s += "C-";
+        if (mods & pl_modifier::Shift) s += "S-";
+        if (mods & pl_modifier::Alt) s += "A-";
+        if (mods & pl_modifier::Super) s += "M-";
+        s += name;
+        s += '>';
+        return s;
+    }
+
+    std::string KeyBinding::StrokeName(const KeyStroke& ks)
+    {
+        std::string s;
+        for (int i = 0; i < ks.Size(); ++i) {
+            s += KeyName(ks.Keys()[(size_t)i]);
+        }
+        return s;
     }
 
     void KeyBinding::DumpAll()

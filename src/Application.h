@@ -3,11 +3,13 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <lua.h>
 #include "misc.h"
 #include "KeyBinding.h"
 #include "Script.h"
 #include "views/View.h"
+#include "views/StatusBarState.h"
 #include "FileOperation.h"
 
 namespace miata {
@@ -36,7 +38,13 @@ namespace miata {
         std::vector<Script::ConfigError> InitializeScript();
         void ReportConfigErrors(const std::vector<Script::ConfigError>& errors);
         void Update(); // タイマーから定期的に呼ばれる(旧FrameImpl相当)
+        // キー入力。本体は KeyDownImpl で、ここは、どの出口(早期の return を含む)の後でも、ステータスバーを合わせる
         void KeyDown(uint16_t key_code, uint16_t mods);
+        void KeyDownImpl(uint16_t key_code, uint16_t mods);
+        // ステータスバー(ウィンドウの下端)を、いまの状態に合わせる。毎ティック(Update)と、KeyDown の出口から呼ぶ。
+        // 鍵(StatusBarState)が前回と同じなら、何もしない(Lua も lstat も呼ばない)。呼ぶのは、Lua も View の更新も走って
+        // いない時点だけ(Lua の関数が、View の更新の途中に、入れ子で呼ばれないように)
+        void UpdateStatusBar();
         void KeyUp(uint16_t key_code, uint16_t mods);
         void Resize(int width, int height);
         std::expected<KeyBindingMap, std::string> GetKeyBinding(const char map_c);
@@ -103,10 +111,16 @@ namespace miata {
         static int lua_command_history_list(lua_State* L);
         static int lua_command_jump_to(lua_State* L);
         static int lua_command_set_clipboard(lua_State* L);
+        static int lua_command_file_info(lua_State* L);
 
         // Viewを操作するコマンドの入口(Script::RegisterFunctionsのwrapper)。upvalue(1)に本来のC関数を持つ。
-        // Viewは設定ファイルの読み込みより後に作るので、読み込み中に呼ばれたらLuaのエラーにする
+        // Viewは設定ファイルの読み込みより後に作るので、読み込み中に呼ばれたらLuaのエラーにする。
+        // ステータスバーの Lua の関数の中(in_status_function_)では、呼べない(関数は、何も変えない。状態を変えると、
+        // 鍵が変わって、毎ティック、関数が呼び直される)
         static int lua_view_trampoline(lua_State* L);
+        // 読むだけのコマンド(current_pane / cursor_entry など。状態を変えない)の入口。読み込み中は呼べないが、
+        // ステータスバーの関数の中では呼べる(ctx に無い情報を、関数が読めるように)
+        static int lua_view_query_trampoline(lua_State* L);
 
         static int lua_private_dialog_open(lua_State* L);
         static int lua_private_dialog_is_open(lua_State* L);
@@ -128,6 +142,14 @@ namespace miata {
         //KeyBinding key_binding_;
         std::array<std::unique_ptr<KeyBinding>, (size_t)KeyBindingMap::Max> key_binding_map_;
         KeyBinding::KeyStroke key_stroke_;
+        // キー入力の途中(前置きが保留中)の、次のキー候補。KeyDown の出口の状態: キーを押すたびに作り直し、
+        // 割り当てが確定したか、外れたら空になる(KeyBinding::Has が MaybeTooShort を返したときだけ入る)。
+        // key_stroke_ を、ステータスバーのために直接読まない: Lua の関数の実行中は、確定した完全なキー列が残っている
+        std::optional<views::StatusPending> pending_;
+        // ステータスバーに何を出すか(鍵の比較・Lua のエラーのラッチ)
+        views::StatusBarState status_state_;
+        // ステータスバーの Lua の関数を実行している間だけ真
+        bool in_status_function_ = false;
 
 
         misc::ReactiveProperty<int> width_;

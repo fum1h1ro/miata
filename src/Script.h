@@ -116,6 +116,19 @@ namespace miata {
         std::expected<bool, std::string> InvokeRefFunction(int ref);
         std::expected<bool, std::string> InvokeRefFunctionOnThread(std::string thread_key, int ref);
 
+        // func を、メインの state で、保護して(lua_pcall)呼ぶ。func は、lightuserdata(ud)を引数に取り、戻り値を 1 つ返す
+        // C 関数。Luaのエラー(funcの中で呼んだ Lua の関数のエラー・メモリ不足を含む)は、戻り値のエラーの文面になる。
+        // 成功したときだけ、funcの戻り値(スタックの先頭)を read(L) に渡す(読んだ後に、スタックは元に戻る)。
+        // max_instructions が 1 以上なら、その数の VM 命令を超えたところでエラーにする(暴走する関数で、UI が固まらない
+        // ようにするため。os.execute のように、C の側で待つものは止められない)。コルーチンの外なので、yield はエラーになる。
+        // 引数 func の中は、C++ のデストラクタを持つオブジェクトを作らないこと(Lua のエラーは longjmp)
+        std::expected<void, std::string> CallProtected(
+            lua_CFunction func,
+            void* ud,
+            int max_instructions,
+            const std::function<void(lua_State*)>& read
+        );
+
 
 
 

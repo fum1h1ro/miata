@@ -38,7 +38,7 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 
 **構成:**
 - `src/models/` — データモデル（`FileListModel`、`FileEntryModel`、`BrowserModel`）と、フォルダの履歴 `PathHistory`（AppKit 非依存。左右で 1 つを共有し、`BrowserModel` が持つ）と、ペインの保存用の状態 `PaneState`（AppKit 非依存。保存と復元は `View`）
-- `src/views/` — UI レイヤー。`View`（ダイアログキュー管理・ブラウザ操作の起点）、`BrowserView`（左右ペインの `NSSplitView` と、その上に被せるプレビューの覆い、各ペインの下の入力バー（検索・絞り込み）を持つコンテナ）、`FileListView`（ファイル一覧本体。`NSScrollView` + 自前 `NSView.drawRect` で描画）、`QuickLookView`（Quick Look のプレビューを載せる覆い）、`QueryBar`（各ペインの下の入力バー）、`ProgressOverlay`（ファイル操作の進捗を、ウィンドウの右上に重ねる半透明のパネル）、`ProgressState`（そのパネルに、何をいつ出すかの判断。AppKit 非依存）、`SearchState`・`FilterState`（検索・絞り込みの状態。AppKit 非依存）、`NameMatcher`（名前に語が一致するかの判定=部分一致。検索と絞り込みが共用する）、`Dialog`（`IDialog`/`DialogPanel` によるダイアログ基盤）
+- `src/views/` — UI レイヤー。`View`（ダイアログキュー管理・ブラウザ操作の起点）、`BrowserView`（左右ペインの `NSSplitView` と、その上に被せるプレビューの覆い、各ペインの下の入力バー（検索・絞り込み）を持つコンテナ）、`FileListView`（ファイル一覧本体。`NSScrollView` + 自前 `NSView.drawRect` で描画）、`QuickLookView`（Quick Look のプレビューを載せる覆い）、`QueryBar`（各ペインの下の入力バー）、`ProgressOverlay`（ファイル操作の進捗を、ウィンドウの右上に重ねる半透明のパネル）、`ProgressState`（そのパネルに、何をいつ出すかの判断。AppKit 非依存）、`StatusBar`（ウィンドウの下端の全幅 1 行。カーソル下の属性・マークの要約・次のキー候補）、`StatusBarState`（その内容の判断。AppKit・Lua 非依存）、`SearchState`・`FilterState`（検索・絞り込みの状態。AppKit 非依存）、`NameMatcher`（名前に語が一致するかの判定=部分一致。検索と絞り込みが共用する）、`Dialog`（`IDialog`/`DialogPanel` によるダイアログ基盤）
 - `src/widgets/` は存在しない（過去のドキュメントの残骸。汎用ウィジェットは今のところ `views/` 直下に個別実装されている）
 - `platforms/` — OS 固有実装（`.mm`）。現状 macOS 用の `osx.mm` と `main.mm` のみ
 
@@ -48,7 +48,10 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 |---------|------|
 | `Application.cc/h` | `pl_start_timer` による 0.05 秒周期の更新処理（`Update()`。旧 `FrameImpl` 相当だが実際のフレームループではない）、キーイベント処理、`Miata.command.*`/`Miata._private.*` のコマンド登録（シングルトン） |
 | `Script.cc/h` | Lua VM 管理、C++ 関数登録（`RegisterFunctions`）、設定の読み込み（`PostInitialize`: 組み込みの既定の設定 → ユーザーの `init.lua`。後述）、コルーチン駆動（`InvokeRefFunctionOnThread`/`Update`） |
-| `KeyBinding.h` | キーストローク解析、モード別（Normal/Dialog）キーマップ管理、キーコード → 英数字の逆引き（`KeyCodeToAscii`。ダイアログ項目のショートカットが使う） |
+| `KeyBinding.h` | キーストローク解析、モード別（Normal/Dialog）キーマップ管理、キーコード → 英数字の逆引き（`KeyCodeToAscii`。ダイアログ項目のショートカットが使う）。割り当ての説明（`bind` の 4 番目）・次のキー候補（`Continuations`）・表示名（`KeyName`）も持つ（後述「ステータスバー」） |
+| `views/StatusBar.h/.mm` | ウィンドウの下端の、全幅のステータスバー（左: カーソル下のファイルの属性 / 右: マークの要約 / キー列の途中は、左を次のキー候補に）。渡された内容を描くだけ（pimpl・自前 `drawRect:`）。`View` が、ブラウザ領域の下に置く（`_MiataMainLayout`）。何を出すかは `StatusBarState`、Lua の関数との受け渡しは `StatusBarScript`、書式は `Format`（後述「ステータスバー」） |
+| `views/StatusBarState.h/.cc` | ステータスバーに何を出すかの判断（既定の書式 `DefaultStatusText`・整形・鍵の比較・Lua のエラーのラッチ）。AppKit にも Lua にも依存しない純ロジック（`ProgressState` と同じ作り）。`Application::UpdateStatusBar` が配線する |
+| `StatusBarScript.h/.cc` / `Format.h/.cc` | ステータスバーの Lua の関数（`Miata.config.set_statusbar`）との受け渡し（ctx の組み立てと戻り値の読み取り。Lua の C API だけ）/ 表示用の書式（サイズ・権限・日時。一覧とバーが共有する。AppKit 非依存） |
 | `views/View.h/.mm` | ダイアログキュー管理（`RequestDialog`/`CheckDialogState`）、ブラウザ操作へのキー入力ルーティング |
 | `views/Dialog.h/.mm` | ダイアログ基盤。`IDialog`（confirm/yesno/inputtext/custom/filterlist の基底）と `DialogPanel`（実体となる非モーダル NSView オーバーレイ）。詳細は後述 |
 | `views/FileListView.h/.mm` | ファイル一覧の描画・スクロール・キーボードカーソル移動（`NSScrollView` + 自前描画）。マーク済みファイルのドラッグ元（`NSDraggingSource`）も兼ねる（後述）。見えているマーク済みのエントリを画面の並び順で返す `MarkedEntries()` は、ファイル操作の対象・ドラッグ・Lua の `marked_entries` が使う（後述「Lua から状況を取る」）。マークの一括操作（`MarkAll` / `MarkRange` / `MarkSearchHits` / `StepMark`）も持つ（後述「まとめてマークする」）。絞り込み（`sorted_` から語に一致する行を選んで `list_` を作る `ApplyFilter` ほか。あいまい一致は外部の fzf に任せる `FuzzySource`）も持つ（後述「絞り込み（フィルタ）」）。`ApplyFilter` は、隠しファイル（`Config::ShowHidden()` が偽のとき）も、絞り込みの前に除く（`RefreshHidden`。後述「隠しファイル」） |
@@ -103,7 +106,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 ## C++ から Lua へ関数を登録する手順
 
 1. `Application.h` の `Application` クラスに `static int lua_command_XXX(lua_State* L)`（`Miata.command.*` 用）または `static int lua_private_XXX(lua_State* L)`（`Miata._private.*` 用）を追加
-2. `Application.cc` の `InitializeScript()` の `view_commands[]`（`Miata.command` 用）または `privates[]`（`Miata._private` 用）に `{ "name", lua_command_XXX }` を追加。Viewに触らず、設定ファイルの読み込み中にも使えるべきもの(`bind`/`unbind` のような)だけ `config_commands[]` に入れる（後述「設定の読み込み」のトランポリン）。**設定の関数 `Miata.config.set_*` は、これらではなく `Config.cc` の `config_funcs[]`**（`.claude/rules/config.md`「その他の設定」）
+2. `Application.cc` の `InitializeScript()` の `view_commands[]`（`Miata.command` 用）または `privates[]`（`Miata._private` 用）に `{ "name", lua_command_XXX }` を追加。Viewに触らず、設定ファイルの読み込み中にも使えるべきもの(`bind`/`unbind` のような)だけ `config_commands[]` に入れる（後述「設定の読み込み」のトランポリン）。**画面も状態も変えない、読むだけのもの（`cursor_entry` / `file_info` のような）は `view_queries[]`**（ステータスバーの Lua の関数の中でも呼べる。変えるものは、呼べない。`.claude/rules/status-bar.md`）。**設定の関数 `Miata.config.set_*` は、これらではなく `Config.cc` の `config_funcs[]`**（`.claude/rules/config.md`「その他の設定」）
 3. OS 依存の実装が必要な場合は `platform.h` に `pl_*` 関数を宣言し、`platforms/osx.mm` に実装を追加（AppKit 型はここか `views/*.mm` にのみ閉じ込め、`.h` には持ち込まない。例外は、`.mm` からだけ include する AppKit 依存のヘッダ: `views/ViewMetrics.h`・`NSColorUtil.h`・`FileIconCache.h`）
 
 **注意**：`Miata.command.*` と `Miata._private.*` は同じ実装が入り得る別の名前空間ではあるが、`Miata.command` テーブル自身の中で Lua 側（`base.lua`）の関数と C++ 側の関数に同じキー名を使ってはいけない。`Application::InitializeScript()` は `script.Initialize()`（`base.lua` 読み込み）の後に `RegisterFunctions("Miata.command", ...)` を実行するため、同名なら C++ 側が Lua 側を**無言で上書きする**（コンパイルエラーにも起動時エラーにもならず、該当キーを実際に呼び出した時だけ引数不一致などで失敗する）。Lua ラッパー＋その内部で使う生の C++ 実行関数、という組み合わせを作る場合は、`dialog_input`（`Miata.command`）/ `dialog_open`（`Miata._private`）や `open`（`Miata.command`。Lua）/ `open_paths`（`Miata._private`。C++）のように、公開する名前と内部実装の名前を必ず分ける（内部実装は `Miata._private.*` に置くのが基本）。
@@ -122,7 +125,8 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 | `history-panes.md` | フォルダの履歴／ペインの状態の保存／ウィンドウ位置・サイズの保存 | `models/PathHistory.*`・`PaneState.*`・`BrowserModel.*`、`View.mm`（`RestorePanes` ほか）、`osx.mm`（`pl_create_main_window`） |
 | `file-list.md` | 一覧の右側の札（`<DIR>` ほか）／ファイル名の頭のアイコン／隠しファイル（表示の入り切り。`zh`）／ドラッグ&ドロップ／再読み込み／ディレクトリ監視／空のディレクトリ／UTF-8 として不正な名前 | `models/FileListModel.*`・`FileEntryModel.*`、`Utf8.*`、`views/FileIconCache.h`、`FileListView.mm`、`osx.mm`（`pl_watch_directory` / `pl_is_alias_file` / `pl_is_dataless_file` ほか） |
 | `lua-commands.md` | Lua から状況を取る／ファイルを開く／まとめてマークする／ファイルの操作（部品と組み立て）／先頭・末尾へ動く（`gg` / `G`） | `Application.cc`（`lua_command_*`）、`FileListView.mm`、`osx.mm`（`pl_open_paths` ほか）、`resources/base.lua`・`resources/test.lua` |
-| `config.md` | 設定の読み込み／キーバインド（`bind` / `unbind`）／色の設定（`Miata.config.color.*`）／その他の設定（`Miata.config.set_*` と、読み出しの `get_show_icons` / `get_show_hidden`。実行中に切り替える `show_icons` / `show_hidden` の例外） | `Script.*`・`Config.*`・`KeyBinding.*`、`resources/test.lua`、`Application.cc`（`InitializeScript` / `lua_command_bind`。`Config::SetShow*Observer` の登録） |
+| `config.md` | 設定の読み込み／キーバインド（`bind` / `unbind`）／色の設定（`Miata.config.color.*`）／その他の設定（`Miata.config.set_*` と、読み出しの `get_show_icons` / `get_show_hidden` / `get_show_statusbar`。実行中に切り替える `show_icons` / `show_hidden` / `show_statusbar` / `set_statusbar` の例外） | `Script.*`・`Config.*`・`KeyBinding.*`、`resources/test.lua`、`Application.cc`（`InitializeScript` / `lua_command_bind`。`Config::SetShow*Observer` の登録） |
+| `status-bar.md` | ステータスバー（カーソル下の属性・マークの要約・次のキー候補・`set_statusbar` の Lua の関数・入り切り `set_show_statusbar` / `zs`。鍵・前置きの判定・関数の呼び方・描画・レイアウト） | `views/StatusBar*`・`views/StatusBarState.*`・`StatusBarScript.*`・`Format.*`、`Application.cc`（`UpdateStatusBar` / `KeyDownImpl` / `lua_view_query_trampoline`）、`KeyBinding.*`（`Continuations` / `KeyName`）、`FileListView.mm`（`ListEpoch` / `GetMarkSummary`）、`View.mm`（`_MiataMainLayout`） |
 
 ## ドキュメントの同期
 

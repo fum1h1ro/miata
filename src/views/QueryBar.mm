@@ -81,14 +81,8 @@ namespace {
 - (BOOL)isOpaque { return YES; }
 - (void)drawRect:(NSRect)dirtyRect
 {
-    // dirtyRectは、自分の範囲(bounds)を超えて渡されることがある(親をまるごと描くとき。macOS 14以降、ビューは
-    // 既定で自分の範囲に描画を切り詰めないので、そのまま塗ると、隣のビュー(一覧)を塗りつぶしてしまう)
-    NSRect rect = NSIntersectionRect(dirtyRect, self.bounds);
-    if (NSIsEmptyRect(rect)) return;
-    [miata::views::ToNSColor(miata::Config::Background()) setFill];
-    NSRectFill(rect);
-    [[NormalTextColor() colorWithAlphaComponent:0.35] setFill];
-    NSRectFillUsingOperation(NSIntersectionRect(NSMakeRect(0, 0, self.bounds.size.width, 1), rect), NSCompositingOperationSourceOver);
+    // 背景と、上端の境目の線(ステータスバーと共通。dirtyRect を自分の範囲に切る理由も、そちらに書いてある)
+    miata::views::DrawBarBackground(self, dirtyRect);
 }
 // 入力中以外は、マウスを常にこのビューが受ける(何もしない)。入力欄はクリックでfirst responderを
 // 奪えないので、確定後に、キー入力の窓口(MiataRootView)から外れない(_MiataQuickLookShieldと同じ考え方)。
@@ -179,7 +173,7 @@ QueryBar::QueryBar(const std::string& prompt) : impl_(std::make_unique<Impl>())
 
     impl_->count = [NSTextField labelWithString:@""];
     impl_->count.font = font;
-    impl_->count.textColor = [text_color colorWithAlphaComponent:0.8];
+    impl_->count.textColor = [text_color colorWithAlphaComponent:kBarSubTextAlpha];
     impl_->count.alignment = NSTextAlignmentRight;
 
     impl_->field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 100, 20)];

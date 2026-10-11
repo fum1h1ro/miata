@@ -7,7 +7,9 @@
 #include <copyfile.h>
 #include <crt_externs.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <poll.h>
+#include <pwd.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/attr.h>
@@ -25,6 +27,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 static uint16_t ConvertModifierFlags(NSEventModifierFlags flags)
 {
@@ -791,6 +794,58 @@ bool pl_is_hidden_file(const std::filesystem::path& path)
     struct stat status;
     if (lstat(path.c_str(), &status) != 0) return false;
     return (status.st_flags & UF_HIDDEN) != 0;
+}
+
+// ユーザー名・グループ名を、id から引く。getpwuid_r / getgrgid_r は、ディレクトリサービスに問い合わせることがあり
+// (ネットワークのアカウントなど)、数 ms かかりうるので、引いた結果を覚える(上限を超えたら捨てる)。メインスレッドからだけ呼ぶ。
+// 引けなければ、id の数字
+static std::string LookupAccountName(std::unordered_map<uint32_t, std::string>& cache, uint32_t id, bool is_group)
+{
+    if (auto it = cache.find(id); it != cache.end()) return it->second;
+
+    std::string name;
+    char buffer[2048];
+    if (is_group) {
+        struct group entry;
+        struct group* found = nullptr;
+        if (getgrgid_r((gid_t)id, &entry, buffer, sizeof(buffer), &found) == 0 && found && entry.gr_name) name = entry.gr_name;
+    }
+    else {
+        struct passwd entry;
+        struct passwd* found = nullptr;
+        if (getpwuid_r((uid_t)id, &entry, buffer, sizeof(buffer), &found) == 0 && found && entry.pw_name) name = entry.pw_name;
+    }
+    if (name.empty()) name = std::to_string(id);
+
+    constexpr size_t kMaxCachedNames = 256;
+    if (cache.size() >= kMaxCachedNames) cache.clear();
+    cache.emplace(id, name);
+    return name;
+}
+
+std::expected<pl_file_info, std::string> pl_get_file_info(const std::filesystem::path& path)
+{
+    struct stat status;
+    if (lstat(path.c_str(), &status) != 0) return std::unexpected(std::string(strerror(errno)));
+
+    static std::unordered_map<uint32_t, std::string> user_names;
+    static std::unordered_map<uint32_t, std::string> group_names;
+
+    pl_file_info info;
+    info.mode = (uint32_t)status.st_mode;
+    info.uid = (uint32_t)status.st_uid;
+    info.gid = (uint32_t)status.st_gid;
+    info.owner = LookupAccountName(user_names, info.uid, false);
+    info.group = LookupAccountName(group_names, info.gid, true);
+    info.size = status.st_size < 0 ? 0 : (uintmax_t)status.st_size;
+    info.mtime = (int64_t)status.st_mtimespec.tv_sec;
+    info.dataless = (status.st_flags & SF_DATALESS) != 0;
+    if (S_ISLNK(status.st_mode)) {
+        char target[PATH_MAX];
+        const ssize_t length = readlink(path.c_str(), target, sizeof(target));
+        if (length > 0) info.link.assign(target, (size_t)length);
+    }
+    return info;
 }
 
 // copyfile(3) の進捗のコールバック: 中身をコピーしている間、1 MiB ごとに来る。COPYFILE_STATE_COPIED は、このファイルの累計。

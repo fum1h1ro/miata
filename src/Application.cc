@@ -16,6 +16,7 @@
 #include "Application.h"
 #include "Config.h"
 #include "misc.h"
+#include "StatusBarScript.h"
 #include "Utf8.h"
 
 namespace miata {
@@ -174,6 +175,15 @@ namespace miata {
         // 値だけが変わる(起動時の一覧は、その値で作られる)。同じ値を指定したときは、呼ばれない
         Config::SetShowIconsObserver([this]() { view_->RefreshShowIcons(); });
         Config::SetShowHiddenObserver([this]() { view_->RefreshHiddenFiles(); });
+        // ステータスバーの出入り(set_show_statusbar)。バーと、ブラウザ領域の高さを直して、前回の鍵を忘れる(出し直したとき、
+        // 隠している間に変わったことを、組み直す)。組み直しは、ここではしない: Lua のキー関数の中から呼ばれることがあり、
+        // その中で、ステータスバーの関数を、入れ子に呼ばないため。キー入力の出口(KeyDown)と、毎ティックが、組み直す
+        Config::SetShowStatusBarObserver([this]() {
+            view_->RefreshStatusBarVisibility();
+            status_state_.Invalidate();
+        });
+        // ステータスバーの Lua の関数の中では、画面を変える設定(上の 3 つ)を呼べない(関数は、何も変えない)
+        Config::SetViewChangeGuard([this]() { return !in_status_function_; });
 
         // フォルダの履歴に、設定の上限を渡して、前回までの記録を復元する。設定の読み込みの後で、最初の移動より前
         // (タイマーが動き出す前)に済ませる。設定の読み込みでエラーが起きたときは、ユーザーが指定した上限が分からない
@@ -185,6 +195,9 @@ namespace miata {
         // 前回の終了時のペインの状態(いるフォルダ・ソート・フォーカス)を戻す。タイマーが動き出す前に済ませる(最初の
         // ティックの SavePanesIfChanged が、基準の無いまま比べないように)。履歴に記録しない移動なので、履歴の復元との順序は問わない
         view_->RestorePanes();
+
+        // ステータスバーの最初の内容(タイマーの最初のティックより前に、空のバーを見せない)
+        UpdateStatusBar();
 
         file_operations_.SetCallback([this](FileOperationCompleted& e) {
             OnFileOperationCompleted(e);
@@ -248,19 +261,11 @@ namespace miata {
             { "mark_search_hits", lua_command_mark_search_hits },
             { "next_mark", lua_command_next_mark },
             { "prev_mark", lua_command_prev_mark },
-            { "check_transfer", lua_command_check_transfer },
             { "copy_to", lua_command_copy_to },
             { "move_to", lua_command_move_to },
             { "make_directory", lua_command_make_directory },
             { "rename_to", lua_command_rename_to },
-            { "exists", lua_command_exists },
             { "trash", lua_command_trash },
-            { "current_pane", lua_command_current_pane },
-            { "pane_path", lua_command_pane_path },
-            { "cursor_entry", lua_command_cursor_entry },
-            { "marked_entries", lua_command_marked_entries },
-            { "hidden_mark_count", lua_command_hidden_mark_count },
-            { "current_sort", lua_command_current_sort },
             { "reload", lua_command_reload },
             { "quick_look", lua_command_quick_look },
             { "quick_look_zoom", lua_command_quick_look_zoom },
@@ -272,7 +277,6 @@ namespace miata {
             { "filter", lua_command_filter },
             { "filter_set", lua_command_filter_set },
             { "filter_clear", lua_command_filter_clear },
-            { "history_list", lua_command_history_list },
             { "jump_to", lua_command_jump_to },
             { "set_clipboard", lua_command_set_clipboard },
         };
@@ -280,6 +284,25 @@ namespace miata {
             "Miata.command",
             std::vector<luaL_Reg>(std::begin(view_commands), std::end(view_commands)),
             lua_view_trampoline
+        );
+
+        // Viewの状態を読むだけのコマンド(何も変えない)。ステータスバーの Lua の関数の中でも呼べる(上のコマンドは、呼べない)
+        static luaL_Reg view_queries[] = {
+            { "check_transfer", lua_command_check_transfer },
+            { "exists", lua_command_exists },
+            { "file_info", lua_command_file_info },
+            { "current_pane", lua_command_current_pane },
+            { "pane_path", lua_command_pane_path },
+            { "cursor_entry", lua_command_cursor_entry },
+            { "marked_entries", lua_command_marked_entries },
+            { "hidden_mark_count", lua_command_hidden_mark_count },
+            { "current_sort", lua_command_current_sort },
+            { "history_list", lua_command_history_list },
+        };
+        script.RegisterFunctions(
+            "Miata.command",
+            std::vector<luaL_Reg>(std::begin(view_queries), std::end(view_queries)),
+            lua_view_query_trampoline
         );
 
         static luaL_Reg privates[] = {
@@ -322,6 +345,20 @@ namespace miata {
 
     int Application::lua_view_trampoline(lua_State* L)
     {
+        auto& app = Instance();
+        if (!app.view_) {
+            return luaL_error(L, "this command is not available while the config is loading; call it from a function bound to a key");
+        }
+        if (app.in_status_function_) {
+            // ステータスバーの関数は、何も変えない。変えると、鍵が変わって、毎ティック、関数が呼び直される(振動する)。
+            // 状態を読むだけのコマンド(current_pane・cursor_entry・file_info など)と、ctx は、使える
+            return luaL_error(L, "this command cannot be called from the status bar function (it must not change anything); read with ctx or a query such as cursor_entry");
+        }
+        return lua_tocfunction(L, lua_upvalueindex(1))(L);
+    }
+
+    int Application::lua_view_query_trampoline(lua_State* L)
+    {
         if (!Instance().view_) {
             return luaL_error(L, "this command is not available while the config is loading; call it from a function bound to a key");
         }
@@ -341,6 +378,10 @@ namespace miata {
         view_->UpdateQueryBars();
         // 自動リロードの後に行う(リロードで動いたカーソルに、同じティックで追従を始められるように)
         view_->UpdateQuickLook();
+        // ステータスバー(下端)を、いまの状態に合わせる。Lua のコルーチン・ダイアログの後始末・自動リロードが済んだ後に行う
+        // (Lua の関数を、それらの途中で、入れ子に呼ばないため。リロードで動いたカーソルと、変わったマークを、同じティックで反映する)。
+        // 検索・絞り込みの入力中は、キー関数を通らずにカーソルが動くので、キー入力の出口だけでは足りない(ここが拾う)
+        UpdateStatusBar();
         // 進捗パネル(右上)を、実行中の操作に合わせる。完了は、上の file_operations_.Update() のコールバック
         // (OnFileOperationCompleted)が、View::FinishProgress で伝えている(失敗のダイアログと同じティックで、パネルが消える)
         view_->UpdateProgress(std::chrono::steady_clock::now(), file_operations_.Running());
@@ -353,9 +394,20 @@ namespace miata {
 
     void Application::KeyDown(uint16_t key_code, uint16_t mods)
     {
+        KeyDownImpl(key_code, mods);
+        // どの出口(早期の return も含む)の後でも、ステータスバーを合わせる: 前置きの出入りと、キー関数が動かしたカーソル・
+        // マークを、次のティックを待たずに見せる(鍵が同じなら、何もしない)
+        UpdateStatusBar();
+    }
+
+    void Application::KeyDownImpl(uint16_t key_code, uint16_t mods)
+    {
         auto& script = Script::Instance();
         const bool in_dialog = view_->IsAnyDialogOpened();
         auto& kb = in_dialog ? key_binding_map_[(int)KeyBindingMap::Dialog] : key_binding_map_[(int)KeyBindingMap::Normal];
+
+        // 前置きは、キーごとに作り直す(割り当てが確定したか、外れたら、空のまま)
+        pending_.reset();
 
         auto r = key_stroke_.Add(KeyBinding::Key::MakeKey(mods, key_code));
         if (!r) {
@@ -372,7 +424,17 @@ namespace miata {
                 printf("error: %s\n", result.error().c_str());
             }
         }
-        else if (key_setting.error() != KeyBinding::ErrorReason::MaybeTooShort) {
+        else if (key_setting.error() == KeyBinding::ErrorReason::MaybeTooShort) {
+            // キー列の途中(前置き)。次のキー候補を控える(ステータスバーが出す)。Has が MaybeTooShort を返すのは、
+            // key_stroke_ に 1 打以上入っているときだけ(空のキー列でも MaybeTooShort を返すので、ここでだけ判定する)
+            views::StatusPending pending;
+            pending.keys = KeyBinding::StrokeName(key_stroke_);
+            for (const auto& next : kb->Continuations(key_stroke_)) {
+                pending.candidates.push_back({KeyBinding::KeyName(next.key), next.desc, next.leaf});
+            }
+            pending_ = std::move(pending);
+        }
+        else {
             // 割り当てが無い。ダイアログの表示中なら、項目のショートカット(ラベルの `&x`)を試す。ここに来るのは、キーバインドに
             // 完全一致も途中一致も無いキーだけなので、キーバインドが優先される。試すのは、修飾キー無しの単独のキーだけ
             // (キー列の2打目以降は試さない。Normal の `dd` の1打目が残ったまま、ダイアログが開くことがある)
@@ -690,9 +752,10 @@ namespace miata {
         return true;
     }
 
-    // Miata.command.bind(mode, keys, fn)
+    // Miata.command.bind(mode, keys, fn [, desc])
     // モードごとに、別々の Lua の参照を作る。1つの参照を複数のモード("nd")で共有すると、unbind("n", ...) が、Dialog 側が
     // まだ使っている参照を解放し、その参照を再利用した別の関数が、Dialog 側のキーで呼ばれてしまう(二重に解放もする)。
+    // descは、割り当ての説明(任意。文字列か nil)。ステータスバーの「次のキー候補」に出る。
     // luaL_error は longjmp なので、デストラクタを持つオブジェクト(std::string など)は、luaL_error の前に作らない。
     int Application::lua_command_bind(lua_State* L)
     {
@@ -703,6 +766,16 @@ namespace miata {
 
         const char* modes = lua_tostring(L, 1);
         const char* key_string = lua_tostring(L, 2);
+
+        // 4番目: 説明(任意)。省略か nil なら、説明なし。型の検証は、何かを登録する前に行う
+        const char* desc = nullptr;
+        size_t desc_length = 0;
+        if (lua_gettop(L) >= 4 && !lua_isnil(L, 4)) {
+            if (lua_type(L, 4) != LUA_TSTRING) {
+                return luaL_error(L, "bind: expected a string (or nil) for the description (4th argument)");
+            }
+            desc = lua_tolstring(L, 4, &desc_length);
+        }
 
         // 登録の前に、モードの文字を全部確かめる(途中で失敗して、一部のモードにだけ登録されるのを避ける)
         for (const char* m = modes; *m; ++m) {
@@ -723,7 +796,7 @@ namespace miata {
 
             lua_pushvalue(L, 3);
             const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-            auto r = kb->Register(key_string, ref);
+            auto r = kb->Register(key_string, ref, desc ? std::string_view(desc, desc_length) : std::string_view());
             if (!r) {
                 // キーの書き方の誤りは、どのモードでも同じなので、最初のモードで失敗する(他のモードには登録していない)
                 luaL_unref(L, LUA_REGISTRYINDEX, ref);
@@ -979,6 +1052,26 @@ namespace miata {
         return 1;
     }
 
+    // Miata.command.file_info(path) -> table | nil, message
+    // path(絶対パスの文字列)の属性(lstat 1回)。シンボリックリンクは、リンクそのものを見る(リンク先は見ない。壊れていてもよい)。
+    // 戻り値の表: is_dir / is_link(リンクそのものの種類。フォルダへのリンクは is_dir=false, is_link=true)、perm("-rw-r--r--")、
+    // mode(権限のビット。0644 なら 420)、owner / group(名前)、uid / gid、mtime(エポックからの秒)/ mtime_text、
+    // dataless(ダウンロード前)。通常のファイルなら size / size_text、シンボリックリンクなら link(リンク先の文字列)。
+    // 取れなければ nil と OS の説明。メタデータだけを読む(ダウンロードは起こさない)。状態は変えない。
+    // pathが絶対パスの文字列でなければ、Luaのエラー。ステータスバーの ctx.entry と、同じ項目
+    int Application::lua_command_file_info(lua_State* L)
+    {
+        CheckAbsolutePathArg(L, 1); // luaL_error を呼びうるのは、ここまで
+        auto info = pl_get_file_info(ReadAbsolutePathArg(L, 1));
+        if (!info) {
+            lua_pushnil(L);
+            lua_pushlstring(L, info.error().data(), info.error().size());
+            return 2;
+        }
+        PushFileInfoTable(L, *info);
+        return 1;
+    }
+
     // check_transfer / copy_to / move_to の、種類の引数("copy" / "move")を読む。それ以外は、Luaのエラー
     // (luaL_errorの前に、デストラクタを持つオブジェクトを作らない)
     static FileOpType ReadTransferKindArg(lua_State* L, int idx)
@@ -1170,6 +1263,75 @@ namespace miata {
         auto& app = Application::Instance();
         lua_pushstring(L, PaneName(app.view_->CurrentPane()));
         return 1;
+    }
+
+    void Application::UpdateStatusBar()
+    {
+        if (!view_) return;
+        // バーを隠しているあいだは、何もしない(材料の収集の lstat も、Lua の関数の呼び出しも)。出し直すとき(Config の通知)に、
+        // 前回の鍵を忘れさせるので、そのときに、組み直す
+        if (!Config::ShowStatusBar()) return;
+
+        // 鍵: 画面に出す内容が変わりうるかを見る、安価な値(lstat も Lua も呼ばない)。Lua の関数が状態を変えた場合に備えて、
+        // StatusBarState が、関数を呼んだ後にも、もう一度作る
+        auto make_key = [this]() {
+            views::StatusKey key;
+            key.pane = view_->CurrentPane() == views::constants::Pane::Left ? 0 : 1;
+            // 両方のペイン(反対側を読む Lua の関数が、反対側の変化で、呼び直されるように)
+            for (size_t i = 0; i < 2; ++i) {
+                auto& list_view = view_->GetFileListView(i == 0 ? views::constants::Pane::Left : views::constants::Pane::Right);
+                if (auto path = list_view.CurrentPath()) key.cursor_paths[i] = path->string();
+                key.list_epochs[i] = list_view.ListEpoch();
+            }
+            key.mark_epoch = models::FileEntryModel::MarkEpoch();
+            key.pending = pending_ ? pending_->keys : std::string();
+            key.dialog = view_->IsAnyDialogOpened();
+            key.function_generation = Config::StatusBarGeneration();
+            return key;
+        };
+
+        // 材料: 鍵が変わったときだけ集める(カーソル下の lstat 1 回と、マークの要約。要約は一覧とマークの世代でメモ化)
+        auto collect = [this]() {
+            views::StatusSnapshot snapshot;
+            const auto pane = view_->CurrentPane();
+            auto& list_view = view_->GetFileListView(pane);
+            snapshot.pane = PaneName(pane);
+            snapshot.dir = view_->GetList(pane).Path().string();
+            snapshot.dialog = view_->IsAnyDialogOpened();
+            const auto filter = list_view.GetFilterStatus();
+            snapshot.shown = filter.shown;
+            snapshot.total = filter.total;
+            // エントリのポインタは持ち越さない(再スキャンで破棄される)。ここで、値にして写す
+            if (auto* current = list_view.CurrentOrNull()) {
+                const auto& model = current->Model();
+                views::StatusEntry entry;
+                entry.name = model.Name();
+                entry.path = model.Path().string();
+                entry.is_dir = model.IsDirectory();
+                entry.is_link = model.IsSymlink();
+                entry.is_alias = model.IsAlias();
+                if (auto info = pl_get_file_info(model.Path())) entry.info = std::move(*info);
+                else entry.error = info.error();
+                snapshot.entry = std::move(entry);
+            }
+            snapshot.marks = list_view.GetMarkSummary();
+            snapshot.pending = pending_;
+            return snapshot;
+        };
+
+        const int ref = Config::StatusBarRef();
+        auto script = [this, ref](const views::StatusSnapshot& snapshot, const views::StatusText& defaults) {
+            in_status_function_ = true;
+            auto result = CallStatusBarFunction(ref, snapshot, defaults);
+            in_status_function_ = false;
+            // エラーは、バーに出す(StatusBarState がラッチして、左に出し続ける)。標準出力にも、1 回だけ出す
+            if (!result) printf("statusbar: %s\n", result.error().c_str());
+            return result;
+        };
+
+        if (auto text = status_state_.Update(make_key, ref != LUA_NOREF, collect, script)) {
+            view_->SetStatusText(*text);
+        }
     }
 
     // エントリを { name, path, is_dir } のテーブルにして積む(Luaに公開する形)。

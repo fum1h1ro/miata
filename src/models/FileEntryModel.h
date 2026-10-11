@@ -87,9 +87,20 @@ namespace miata::models {
         }
         inline void Mark(bool marked)
         {
+            // マークの状態が実際に変わったときだけ、世代を進める(同じ値の書き込みでは、進めない)
+            if (flags_.is(flags::marked) == marked) return;
             flags_.set(flags::marked, marked);
+            ++mark_epoch_;
+        }
+        // マークの世代。どのエントリのマークが変わっても(付く・外れる)進む。マークを書く入口は Mark() だけなので、
+        // 呼び出し元を数えなくても、取りこぼさない。ステータスバーの、マークの要約を作り直すかの判断に使う
+        // (反対側のペインのマークが変わったときも進む。作り直しは、安く済ませてある)。メインスレッドからだけ
+        static uint64_t MarkEpoch()
+        {
+            return mark_epoch_;
         }
     private:
+        static inline uint64_t mark_epoch_ = 0;
         FileEntryModel(const std::filesystem::directory_entry& entry);
         std::string format_time(const std::filesystem::file_time_type& time);
         //

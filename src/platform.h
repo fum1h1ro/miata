@@ -205,6 +205,25 @@ bool pl_is_dataless_file(const std::filesystem::path& path);
 // リンクそのもののフラグを見る。調べられないとき(存在しない・権限が無い)は false。
 bool pl_is_hidden_file(const std::filesystem::path& path);
 
+// ファイルの属性(lstat 1 回 + 所有者・グループの名前 + シンボリックリンクのリンク先)。ステータスバーの、カーソル下のファイルの情報。
+// メタデータだけを読む(lstat・readlink)ので、ダウンロード前のファイルでも、ダウンロードは起きない(pl_is_dataless_file と同じ)。
+// xattr・Finderのタグ・UTIは読まない(ダウンロードを起こすかが未確認)。
+struct pl_file_info {
+    uint32_t mode = 0;     // st_mode(種類と権限)
+    uint32_t uid = 0;
+    uint32_t gid = 0;
+    std::string owner;     // ユーザー名(引けなければ uid の数字)
+    std::string group;     // グループ名(引けなければ gid の数字)
+    uintmax_t size = 0;    // st_size。通常ファイルはバイト数。リンクは、リンク先の文字列の長さ。フォルダは意味が無い
+    int64_t mtime = 0;     // st_mtime(エポックからの秒)。リンクは、リンクそのものの
+    std::string link;      // シンボリックリンクのリンク先の文字列(リンクのときだけ。読めなければ空)
+    bool dataless = false; // ダウンロード前(SF_DATALESS)
+};
+// シンボリックリンクは、リンクそのものを見る(リンク先は見ない。壊れていてもよい)。
+// パスは c_str() のバイト列のまま POSIX を呼ぶ(NSStringにしない。UTF-8として不正な名前でも動く)。
+// 失敗(存在しない・権限が無い)は、OSの説明(strerror)。ユーザー名・グループ名は、引いた結果を覚える(メインスレッドからだけ呼ぶこと)
+std::expected<pl_file_info, std::string> pl_get_file_info(const std::filesystem::path& path);
+
 // ファイル1つをコピーする(copyfile(3))。Finderのコピーと同じく、中身に加えて、更新日時・権限・拡張属性・ACLも引き継ぐ。
 // srcがシンボリックリンクなら、たどらずに、リンクそのものを写す(壊れたリンクも写せる)。APFSの同じボリュームの中では、
 // クローン(中身を共有する、瞬間のコピー)になる(別のボリュームやAPFS以外では、普通のコピーに戻る)。

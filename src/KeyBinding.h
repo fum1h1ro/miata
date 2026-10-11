@@ -1,7 +1,10 @@
 #ifndef KEYBINDING_H__
 #define KEYBINDING_H__
 
+#include <array>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 #include <format>
 #include <map>
@@ -66,6 +69,16 @@ namespace miata {
             bool operator==(const Key& rhs) const
             {
                 return mods_.value() == rhs.mods_.value() && keycode_ == rhs.keycode_;
+            }
+            // 修飾キー(pl_modifier のビットOR)と、macOSのvirtual keycode。表示名(KeyBinding::KeyName)と、候補の並びが使う。
+            // データメンバーは足さない(KeyStrokeHash が、4バイトの Key を uint32_t として読むため)
+            uint16_t Mods() const
+            {
+                return (uint16_t)mods_.value();
+            }
+            uint16_t KeyCode() const
+            {
+                return keycode_;
             }
         private:
             misc::Flags<uint16_t> mods_;
@@ -150,15 +163,35 @@ namespace miata {
 
 
 
+        // 前置き(キー列の途中)の、次の1打の候補。ステータスバーの「次のキー候補」が使う
+        struct Continuation {
+            Key key;          // 次に押すキー
+            bool leaf = false; // true: このキーで割り当てが確定する(実行される)。false: さらに続きがある
+            std::string desc; // leaf のときの、その割り当ての説明(bind の4番目の引数。無ければ空)。続きがあるときは空
+        };
+
         KeyBinding();
         virtual ~KeyBinding();
         std::expected<int, ErrorReason> Has(const char* key_string);
         std::expected<int, ErrorReason> Has(const KeyStroke& ks);
-        std::expected<bool, ErrorReason> Register(const char* key_string, int func_ref);
-        std::expected<bool, ErrorReason> Register(const KeyStroke& ks, int func_ref);
+        // descは、割り当ての説明(任意。空なら説明なし)。同じキー列を登録し直すと、説明も置き換わる(空なら消える)
+        std::expected<bool, ErrorReason> Register(const char* key_string, int func_ref, std::string_view desc = {});
+        std::expected<bool, ErrorReason> Register(const KeyStroke& ks, int func_ref, std::string_view desc = {});
         std::expected<int, ErrorReason> Unregister(const char* key_string);
         std::expected<int, ErrorReason> Unregister(const KeyStroke& ks);
         void DumpAll();
+
+        // prefixの次に押せるキーの候補(次のキーごとに 1 つ)。bindings_ を全走査する(routes_ は、unbind した後も 0 のまま
+        // 残るので使えない)。そのキーだけで割り当てが確定するなら leaf(その先の、より長い割り当ては、完全一致が先に
+        // 実行されるので、到達できない。数えない)。無ければ、続きのあるキー。並びは、修飾キー無し → 有り、表示名の昇順。
+        // prefixが空なら、すべての 1 打目。候補が無ければ空
+        std::vector<Continuation> Continuations(const KeyStroke& prefix) const;
+        // Keyの表示名。README の記法に揃える("g" "<S-g>" "<C-d>" "<enter>")。スペースは "Space"(README に書いたとおり、
+        // "<space>" は bind では使えない。表示だけ)。表に無いキーは "<key:コード>"(bind できないキーなので、ふつうは出ない)。
+        // KeyStroke::ToString() はスレッドの名前用で区切りが無く、曖昧("sd" と "q" が同じ)なので、表示には使わない
+        static std::string KeyName(const Key& key);
+        // キー列の表示名(KeyName の連結。"dd" "<C-q>s")
+        static std::string StrokeName(const KeyStroke& ks);
 
 
 
@@ -199,6 +232,9 @@ namespace miata {
 
         std::unordered_map<KeyStroke, int, KeyStrokeHash> routes_;
         std::unordered_map<KeyStroke, int, KeyStrokeHash> bindings_;
+        // 割り当ての説明(bind の4番目の引数)。説明のある割り当てだけ。Unregister で消える。Key にデータメンバーを足せない
+        // (KeyStrokeHash の型パンニング)ので、別の表に持つ
+        std::unordered_map<KeyStroke, std::string, KeyStrokeHash> descriptions_;
 
 
 
