@@ -105,6 +105,7 @@ namespace miata {
         static luaL_Reg config_funcs[] = {
             { "set_font", lua_set_font },
             { "set_font_size", lua_set_font_size },
+            { "set_statusbar_font_size", lua_set_statusbar_font_size },
             { "set_history_limit", lua_set_history_limit },
             { "set_show_icons", lua_set_show_icons },
             { "get_show_icons", lua_get_show_icons },
@@ -121,6 +122,22 @@ namespace miata {
     {
         Script::CheckArgType(L, 1, LUA_TNUMBER);
         Instance().font_size_ = (float)lua_tonumber(L, 1);
+        return 0;
+    }
+
+    // Miata.config.set_statusbar_font_size(n): ステータスバーの文字のサイズ(pt)。kStatusBarFontSizeMin〜Maxの数値だけ
+    // 受け付ける(14.5 のような小数も可)。文字列 "14"・NaN・無限大・範囲外は、設定を変えずにエラーにする(設定の読み込みの
+    // エラーとして、起動時のダイアログに出る)。set_font_size と違って範囲も見る(0 や負数は、バーの高さが壊れるため)。
+    // luaL_errorはlongjmpなので、C++のオブジェクトを作る前に検証する。
+    int Config::lua_set_statusbar_font_size(lua_State* L)
+    {
+        const bool is_number = lua_type(L, 1) == LUA_TNUMBER;
+        const lua_Number size = is_number ? lua_tonumber(L, 1) : 0;
+        // NaN は、どちらの比較も偽になるので、ここで外れる
+        if (!is_number || !(size >= kStatusBarFontSizeMin && size <= kStatusBarFontSizeMax)) {
+            return luaL_error(L, "set_statusbar_font_size: expected a number from %d to %d", kStatusBarFontSizeMin, kStatusBarFontSizeMax);
+        }
+        Instance().statusbar_font_size_ = static_cast<float>(size);
         return 0;
     }
 

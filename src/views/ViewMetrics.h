@@ -29,12 +29,20 @@ namespace miata::views {
         return std::ceil(font.ascender - font.descender + font.leading);
     }
 
-    // ヘッダー(パス表示)の高さ。フォントサイズに応じて動的に決める(固定値のままだとフォントサイズを
-    // 上げた時に文字が収まらなくなるため)。入力バーも同じ高さにそろえる。
+    // 1 行のバー(ヘッダー・入力バー・ステータスバー)の高さ。文字のサイズに応じて動的に決める(固定値のままだと
+    // フォントサイズを上げた時に文字が収まらなくなるため)。文字のサイズが同じバーは、同じ高さになる。
+    // (ProgressOverlay.mm の BarHeight は、進捗バーの太さで、別物)
+    inline CGFloat SingleLineBarHeight(CGFloat font_size)
+    {
+        constexpr CGFloat kVerticalMargin = 13;
+        return font_size + 1 + kVerticalMargin;
+    }
+
+    // ヘッダー(パス表示)の高さ(ファイル一覧のフォントサイズから決める)。入力バーも同じ高さにそろえる。
+    // ステータスバーは、自分のフォントサイズ(Config::StatusBarFontSize)で SingleLineBarHeight を決める
     inline CGFloat HeaderHeight()
     {
-        constexpr CGFloat kHeaderVerticalMargin = 13;
-        return Config::FontSize() + 1 + kHeaderVerticalMargin;
+        return SingleLineBarHeight(Config::FontSize());
     }
 }
 
