@@ -12,6 +12,7 @@
 #include "BrowserView.h"
 #include "ProgressOverlay.h"
 #include "ProgressState.h"
+#include "StatusBar.h"
 #include "../FileError.h"
 #include "../FileOperationProgress.h"
 #include "../models/Model.h"
@@ -135,6 +136,15 @@ namespace miata::views {
         // ダイアログで知らせるので、パネルは、その場で消す。画面への反映は、同じティックの UpdateProgress で行う
         void FinishProgress(FileOperationId id, bool succeeded, ProgressClock::time_point now);
 
+        // ステータスバー(ウィンドウの下端の、全幅の 1 行。ブラウザ領域の下)の内容を更新する。何を出すかは、Application が
+        // 決める(StatusBarState。材料は、このクラスの CurrentPane / GetFileListView などから集める)。同じ内容なら、画面に触らない
+        void SetStatusText(const StatusText& text);
+        // いま出している内容(テスト用)
+        const StatusText& GetStatusText() const;
+        // ステータスバーの出入り(Config::ShowStatusBar。実行中の set_show_statusbar)が変わった後に呼ぶ。バーを隠して、
+        // ブラウザ領域を全面に広げる(出すときは、バーの高さを空ける)。ダイアログの表示中でも動く
+        void RefreshStatusBarVisibility();
+
     private:
         void OpenNextDialogIfNeeded();
         // 親ディレクトリ/pathへ移動する。読めない場合(権限が無い等)は、移動せずに、ダイアログで知らせる
@@ -146,6 +156,10 @@ namespace miata::views {
         models::PaneState GetPaneState(constants::Pane pane);
 
         std::unique_ptr<BrowserView> browser_;
+        // ステータスバー(contentView の直下の縦の並びの、ブラウザ領域の下)
+        std::unique_ptr<StatusBar> status_bar_;
+        // 縦の並び(_MiataMainLayout)。AppKit 型を .h に持ち込まないための、素のポインタ(保持は、contentView が持つ)
+        void* main_layout_ = nullptr;
         // 進捗パネルの、表示の状態と、画面(contentView の、ブラウザの上に足す)
         ProgressState progress_state_;
         std::unique_ptr<ProgressOverlay> progress_overlay_;

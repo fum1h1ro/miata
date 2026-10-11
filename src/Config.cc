@@ -110,6 +110,9 @@ namespace miata {
             { "get_show_icons", lua_get_show_icons },
             { "set_show_hidden", lua_set_show_hidden },
             { "get_show_hidden", lua_get_show_hidden },
+            { "set_statusbar", lua_set_statusbar },
+            { "set_show_statusbar", lua_set_show_statusbar },
+            { "get_show_statusbar", lua_get_show_statusbar },
         };
         script.RegisterFunctions("Miata.config", std::vector<luaL_Reg>(std::begin(config_funcs), std::end(config_funcs)));
     }
@@ -144,6 +147,9 @@ namespace miata {
             return luaL_error(L, "set_show_icons: expected a boolean (true or false)");
         }
         auto& config = Instance();
+        if (config.view_change_guard_ && !config.view_change_guard_()) {
+            return luaL_error(L, "set_show_icons: cannot be called from the status bar function (it must not change anything)");
+        }
         const bool show = lua_toboolean(L, 1) != 0;
         const bool changed = config.show_icons_ != show;
         config.show_icons_ = show;
@@ -170,6 +176,9 @@ namespace miata {
             return luaL_error(L, "set_show_hidden: expected a boolean (true or false)");
         }
         auto& config = Instance();
+        if (config.view_change_guard_ && !config.view_change_guard_()) {
+            return luaL_error(L, "set_show_hidden: cannot be called from the status bar function (it must not change anything)");
+        }
         const bool show = lua_toboolean(L, 1) != 0;
         const bool changed = config.show_hidden_ != show;
         config.show_hidden_ = show;
@@ -186,6 +195,58 @@ namespace miata {
     {
         lua_pushboolean(L, Instance().show_hidden_);
         return 1;
+    }
+
+    // Miata.config.set_show_statusbar(bool): ステータスバーを出すか(既定は出す)。真偽値だけ受け付ける(set_show_icons と同じ。
+    // 型の違いは、設定を変えずにエラー)。実行中に値が変わったら、すぐ反映する(show_statusbar_observer_)。
+    // ステータスバーの Lua の関数の中では、呼べない(画面を変えるので。set_show_icons / set_show_hidden と同じ)
+    int Config::lua_set_show_statusbar(lua_State* L)
+    {
+        if (lua_type(L, 1) != LUA_TBOOLEAN) {
+            return luaL_error(L, "set_show_statusbar: expected a boolean (true or false)");
+        }
+        auto& config = Instance();
+        if (config.view_change_guard_ && !config.view_change_guard_()) {
+            return luaL_error(L, "set_show_statusbar: cannot be called from the status bar function (it must not change anything)");
+        }
+        const bool show = lua_toboolean(L, 1) != 0;
+        const bool changed = config.show_statusbar_ != show;
+        config.show_statusbar_ = show;
+        // 実行中(ビューがある)に、値が変わったときだけ、バーの出入りを直す。検証の後なので、エラーは起きない
+        if (changed && config.show_statusbar_observer_) config.show_statusbar_observer_();
+        return 0;
+    }
+
+    // Miata.config.get_show_statusbar() -> boolean: ステータスバーを出している(出す設定になっている)か。いまの状態
+    // (set_show_statusbar の値と、実行中の切り替えを反映する)。読むだけで、状態は変えない。設定の読み込み中も呼べる
+    int Config::lua_get_show_statusbar(lua_State* L)
+    {
+        lua_pushboolean(L, Instance().show_statusbar_);
+        return 1;
+    }
+
+    // Miata.config.set_statusbar(fn | nil): ステータスバーの内容を決める Lua の関数を登録する(nil で解除=C++ の既定の表示)。
+    // 関数か nil だけ受け付ける(引数なしも不可)。違う型は、設定を変えずにエラーにする(設定の読み込みのエラーとして、起動時の
+    // ダイアログに出る)。ほかの設定と違い、実行中に呼んでよい(関数が自分を差し替えてもよい: 呼び出し中の関数の値は、
+    // Lua のスタックに残るので、参照を解放しても生きている)。世代が進み、次のティック(KeyDown の中なら、その出口)で反映される。
+    // 設定の読み込み中(Viewが無い)も、参照を持つだけ。luaL_error は longjmp なので、検証の後に、何かを作る
+    int Config::lua_set_statusbar(lua_State* L)
+    {
+        const int type = lua_type(L, 1);
+        if (type != LUA_TFUNCTION && type != LUA_TNIL) {
+            return luaL_error(L, "set_statusbar: expected a function or nil");
+        }
+        auto& config = Instance();
+        if (config.statusbar_ref_ != LUA_NOREF) {
+            luaL_unref(L, LUA_REGISTRYINDEX, config.statusbar_ref_);
+            config.statusbar_ref_ = LUA_NOREF;
+        }
+        if (type == LUA_TFUNCTION) {
+            lua_pushvalue(L, 1);
+            config.statusbar_ref_ = luaL_ref(L, LUA_REGISTRYINDEX);
+        }
+        ++config.statusbar_generation_;
+        return 0;
     }
 
     int Config::lua_set_font(lua_State* L)

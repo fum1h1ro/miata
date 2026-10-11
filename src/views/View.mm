@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #include <format>
 #include "View.h"
+#include "../Config.h"
 #include "../platform.h"
 #include "../Utf8.h"
 
@@ -42,6 +43,42 @@ namespace {
     }
 }
 
+// ウィンドウの内容(contentView)の直下に置く、縦の並び: 上がブラウザ領域、下がステータスバー(全幅の 1 行)。
+// 子の位置は、明示的に計算する(isFlipped=YES なビューでは、autoresizingMask の Y 軸のマージンの意味が反転する癖があり、
+// このコードベースは、FileListView.mm の _MiataFileListLayoutContainer のように、フレーム変更時に計算し直す)。
+// ブラウザ領域の中(NSSplitView・Quick Look の覆い・入力バー)は、ブラウザの大きさに追従する
+@interface _MiataMainLayout : NSView
+@property (nonatomic, weak) NSView* browserView;
+@property (nonatomic, weak) NSView* statusView;
+@property (nonatomic, assign) CGFloat statusHeight;
+// バーを隠すか。真なら、バーは隠れ(高さ 0)、ブラウザ領域が全面になる(設定 show_statusbar)。変えると、並べ直す。
+// 「隠す」側を持つのは、既定(未設定=NO)が「出す」になるため(並びの部品を直接作る場合も、バーが出る)
+@property (nonatomic, assign) BOOL statusHidden;
+- (void)layoutChildren;
+@end
+@implementation _MiataMainLayout
+- (BOOL)isFlipped { return YES; }
+- (void)setStatusHidden:(BOOL)hidden
+{
+    _statusHidden = hidden;
+    [self layoutChildren];
+}
+- (void)layoutChildren
+{
+    CGFloat w = self.bounds.size.width;
+    CGFloat h = self.bounds.size.height;
+    CGFloat bar = self.statusHidden ? 0 : MIN(self.statusHeight, h);
+    self.statusView.hidden = self.statusHidden;
+    self.browserView.frame = NSMakeRect(0, 0, w, h - bar);
+    self.statusView.frame = NSMakeRect(0, h - bar, w, bar);
+}
+- (void)setFrameSize:(NSSize)newSize
+{
+    [super setFrameSize:newSize];
+    [self layoutChildren];
+}
+@end
+
 namespace miata::views {
     View::View() : browser_(std::make_unique<BrowserView>())
     {
@@ -49,11 +86,25 @@ namespace miata::views {
         // ダイアログ表示中はファイルのドラッグ開始を受け付けない。
         browser_->SetDragGuard([this] { return !IsAnyDialogOpened(); });
 
+        // ブラウザ領域とステータスバーの縦の並び。contentView の全面に、窓に合わせて広がる
+        // (中の位置は、_MiataMainLayout が、フレームが変わるたびに、明示的に計算する)
         NSView* content = (__bridge NSView*)pl_get_content_view();
         NSView* browser_view = (__bridge NSView*)browser_->NativeView();
-        browser_view.frame = content.bounds;
-        browser_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-        [content addSubview:browser_view];
+        status_bar_ = std::make_unique<StatusBar>();
+        NSView* status_view = (__bridge NSView*)status_bar_->NativeView();
+
+        browser_view.autoresizingMask = NSViewNotSizable; // 大きさは、_MiataMainLayout が決める
+        _MiataMainLayout* layout = [[_MiataMainLayout alloc] initWithFrame:content.bounds];
+        layout.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        layout.browserView = browser_view;
+        layout.statusView = status_view;
+        layout.statusHeight = (CGFloat)StatusBar::Height();
+        layout.statusHidden = !Config::ShowStatusBar(); // 設定は、View を作る前に読み終えている
+        [layout addSubview:browser_view];
+        [layout addSubview:status_view];
+        [layout layoutChildren];
+        [content addSubview:layout];
+        main_layout_ = (__bridge void*)layout; // 保持は、contentView が持つ(アプリの間、生きている)
 
         // 進捗パネルの、全面の素通しのホスト。ブラウザの上に足す(Quick Look の覆いは、ブラウザの中にあるので、その上になる)。
         // ダイアログは、開くたびに contentView の末尾に足されるので、常にこれより手前になる
@@ -419,6 +470,23 @@ namespace miata::views {
     void View::FinishProgress(FileOperationId id, bool succeeded, ProgressClock::time_point now)
     {
         progress_state_.Finish(id, succeeded, now);
+    }
+
+    void View::SetStatusText(const StatusText& text)
+    {
+        status_bar_->SetText(text);
+    }
+
+    void View::RefreshStatusBarVisibility()
+    {
+        // バーの出入りに合わせて、ブラウザ領域の高さを直す(並べ直す)。バーの内容は、出し直したときの、次の組み立てが作る
+        _MiataMainLayout* layout = (__bridge _MiataMainLayout*)main_layout_;
+        layout.statusHidden = !Config::ShowStatusBar();
+    }
+
+    const StatusText& View::GetStatusText() const
+    {
+        return status_bar_->Text();
     }
 
     void View::ToggleFocus()

@@ -10,6 +10,7 @@
 #include "../platform.h"
 #include "../FzfFilter.h"
 #include "../Config.h"
+#include "../Format.h"
 #include "NSColorUtil.h"
 #include "ViewMetrics.h"
 #include "FileIconCache.h"
@@ -169,22 +170,6 @@ namespace {
     {
         // 下限は、set_font_sizeに0や負数が指定されても、0以下の大きさの画像を作らないため(set_font_sizeは範囲を見ない)
         return std::max((CGFloat)1, std::floor(row_height) - kIconVerticalMargin);
-    }
-
-    // ls -lh 風の簡易フォーマット。将来的に外部指定できるようにするまでの固定実装。
-    std::string FormatSize(uintmax_t bytes)
-    {
-        static const char* units[] = {"B", "K", "M", "G", "T"};
-        double size = (double)bytes;
-        int unit = 0;
-        while (size >= 1024.0 && unit < 4) {
-            size /= 1024.0;
-            ++unit;
-        }
-        if (unit == 0) {
-            return std::format("{}{}", (uintmax_t)size, units[unit]);
-        }
-        return std::format("{:.1f}{}", size, units[unit]);
     }
 
     // 行の右側の、サイズの欄。フォルダとリンクは、サイズの代わりに札を出す。リンクは、リンク先の種類に関わらず札にする
@@ -501,6 +486,7 @@ FzfFilter& FileListView::FuzzySource()
 
 void FileListView::ApplyFilter()
 {
+    ++list_epoch_; // 一覧を作り直す(ステータスバーが、材料を集め直す鍵。ListEpoch)
     row_of_sorted_.assign(sorted_.size(), -1);
     list_.clear();
     std::vector<std::vector<MatchRange>> ranges;
@@ -965,6 +951,32 @@ int FileListView::HiddenMarkCount() const
         if (row_of_sorted_[i] < 0 && sorted_[i]->Model().IsMarked()) ++count;
     }
     return count;
+}
+
+MarkSummary FileListView::GetMarkSummary() const
+{
+    // 一覧もマークも変わっていなければ、前回の結果(カーソルを動かすだけでは、マークの数だけ stat しない)
+    const uint64_t mark_epoch = models::FileEntryModel::MarkEpoch();
+    if (mark_summary_list_epoch_ == list_epoch_ && mark_summary_mark_epoch_ == mark_epoch) return mark_summary_;
+
+    MarkSummary summary;
+    for (auto* entry : list_) {
+        const auto& model = entry->Model();
+        if (!model.IsMarked()) continue;
+        ++summary.count;
+        if (model.IsDirectory()) {
+            ++summary.dirs; // フォルダの中身は数えない(重い・クラウドで取得が起きる)
+        }
+        else if (!model.IsSymlink()) {
+            summary.bytes += model.Size(); // リンクは、一覧と同じく、サイズを持たないものとして扱う
+        }
+    }
+    summary.hidden = HiddenMarkCount();
+
+    mark_summary_ = summary;
+    mark_summary_list_epoch_ = list_epoch_;
+    mark_summary_mark_epoch_ = mark_epoch;
+    return summary;
 }
 
 FilterStatus FileListView::GetFilterStatus() const

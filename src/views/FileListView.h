@@ -15,6 +15,7 @@
 #include "../platform.h"
 #include "FilterState.h"
 #include "SearchState.h"
+#include "StatusBarState.h"
 
 namespace miata {
     class FzfFilter;
@@ -251,6 +252,15 @@ namespace miata::views {
         // (隠れた行が無ければ0)。ファイル操作の対象は、見えているマークだけなので、これは「対象外のマーク」の数
         int HiddenMarkCount() const;
 
+        // --- ステータスバー用 ---
+        // 一覧(list_)を作り直した回数。list_ を書くのは ApplyFilter() だけなので、そこで進む(再スキャン・ソート・絞り込み・
+        // 隠しファイルの切り替え・ディレクトリの移動のすべて)。カーソルの移動では進まない。ステータスバーが、作り直すかの鍵に使う
+        uint64_t ListEpoch() const { return list_epoch_; }
+        // 見えているマークの要約(件数・フォルダ数・ファイルの合計サイズ・隠れたマークの数)。フォルダの中身は再帰しない
+        // (重い・クラウドで取得が起きるため)。合計はマークの数だけの stat なので、一覧とマークの世代が変わらない間は、
+        // 前回の結果を返す(カーソルの移動では、数え直さない)
+        MarkSummary GetMarkSummary() const;
+
         // --- 隠しファイル(Config::ShowHidden が偽のとき、隠しファイルを一覧に出さない) ---
         // 隠しファイル(FileEntryModel::IsHidden)の表示の入り切りが変わった後に呼ぶ(実行中の set_show_hidden。View::RefreshHiddenFiles
         // 経由)。一覧を作り直して、カーソルを、同じファイル(隠れたら、近くの見える行)へ寄せる。隠れた行は、絞り込みで外れた行と
@@ -335,6 +345,12 @@ namespace miata::views {
         // 絞り込む前の、出してよいエントリの数(隠しファイルを隠しているときは、それを除いた数。出しているときは、
         // sorted_.size())。絞り込みバーの「見えている行数/全行数」の、全行数。ApplyFilter()が作る
         int eligible_count_ = 0;
+        // list_ を作り直した回数(ListEpoch)。ApplyFilter()が進める
+        uint64_t list_epoch_ = 0;
+        // GetMarkSummary の前回の結果と、そのときの(一覧の世代, マークの世代)。同じ間は、数え直さない
+        mutable MarkSummary mark_summary_;
+        mutable uint64_t mark_summary_list_epoch_ = UINT64_MAX;
+        mutable uint64_t mark_summary_mark_epoch_ = UINT64_MAX;
         // あいまい一致のfzfの窓口。sorted_の名前を候補にする(sorted_と同じ並びの添字を返す)。Fetch()で捨てて、必要になったら作る
         std::unique_ptr<FzfFilter> fuzzy_source_;
         // 絞り込みと検索の状態。一致箇所とヒットは、list_(の添字)を使うので、list_を作り直すApplyFilter()のたびに作り直す。

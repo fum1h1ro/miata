@@ -9,6 +9,7 @@
 #include <expected>
 extern "C" {
 #include "lua.h"
+#include "lauxlib.h"
 }
 
 #define CONFIG_COLOR_LIST \
@@ -125,6 +126,28 @@ namespace miata {
         {
             Instance().show_hidden_observer_ = std::move(observer);
         }
+        static void SetShowStatusBarObserver(std::function<void()> observer)
+        {
+            Instance().show_statusbar_observer_ = std::move(observer);
+        }
+
+        // ステータスバー(ウィンドウの下端)を出すか。既定は出す。Miata.config.set_show_statusbar(bool)で指定する。
+        // show_icons / show_hidden と同じく、実行中にも変えられる(Miata.config.set_show_statusbar を、実行中に呼ぶ)。
+        // 値を書くのは、Luaの set_show_statusbar だけ(上の通知が、バーの出入りと、ブラウザ領域の高さを、すぐ直す)。
+        // 隠しているあいだは、Application::UpdateStatusBar が、何もしない(材料の収集も、Lua の関数の呼び出しもしない)ので、
+        // 描くたび・毎ティックに読むこと(構築時にキャッシュしない)
+        static inline bool ShowStatusBar()
+        {
+            return Instance().show_statusbar_;
+        }
+
+        // 画面を変える設定(set_show_icons / set_show_hidden)を、いま Lua から呼んでよいかを返す関数(Application が登録する)。
+        // 偽を返す間は、これらの設定は、値を変えずに Lua のエラーになる(ステータスバーの Lua の関数は、何も変えない)。
+        // 未登録(設定の読み込み中)なら、いつでも呼べる
+        static void SetViewChangeGuard(std::function<bool()> allowed)
+        {
+            Instance().view_change_guard_ = std::move(allowed);
+        }
 
         // 隠しファイル(名前の頭が "." のものと、Finderの「隠す」フラグが付いたもの。FileEntryModel::IsHidden)を一覧に出すか。
         // 既定は隠す(Finderと同じ)。Miata.config.set_show_hidden(bool)で指定する。実行中にも変えられる
@@ -133,6 +156,19 @@ namespace miata {
         static inline bool ShowHidden()
         {
             return Instance().show_hidden_;
+        }
+
+        // ステータスバーの Lua の関数(Miata.config.set_statusbar)。luaL_ref の参照(無ければ LUA_NOREF)。
+        // Config は、参照を持つだけで、呼ばない(呼ぶのは Application。StatusBarScript)。set_statusbar を呼ぶたびに、
+        // StatusBarGeneration が進む(関数の差し替え・解除の検出と、エラーでラッチした関数の差し替えに使う)。
+        // ほかの設定と違い、実行中に差し替えてよい(観測者は作らない: 世代の比較で足りる)
+        static inline int StatusBarRef()
+        {
+            return Instance().statusbar_ref_;
+        }
+        static inline uint64_t StatusBarGeneration()
+        {
+            return Instance().statusbar_generation_;
         }
 
         // 背景色(Miata.config.color.background)。alphaは使わず、常に不透明にして返す。半透明で塗ると、
@@ -165,6 +201,9 @@ namespace miata {
         static int lua_get_show_icons(lua_State* L);
         static int lua_set_show_hidden(lua_State* L);
         static int lua_get_show_hidden(lua_State* L);
+        static int lua_set_statusbar(lua_State* L);
+        static int lua_set_show_statusbar(lua_State* L);
+        static int lua_get_show_statusbar(lua_State* L);
 
         static Config* _instance;
         class Color color_;
@@ -175,6 +214,11 @@ namespace miata {
         bool show_hidden_ = false;
         std::function<void()> show_icons_observer_;
         std::function<void()> show_hidden_observer_;
+        bool show_statusbar_ = true;
+        std::function<void()> show_statusbar_observer_;
+        std::function<bool()> view_change_guard_;
+        int statusbar_ref_ = LUA_NOREF;
+        uint64_t statusbar_generation_ = 0;
     };
 }
 
