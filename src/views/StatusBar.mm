@@ -13,7 +13,8 @@ namespace {
     constexpr CGFloat kRightMaxFraction = 0.5;
 }
 
-// バー全体。背景を設定の背景色で塗り(OSのテーマの色は使わない)、上端に境目の線を引いて、文字を描く。
+// バー全体。背景をバー専用の背景色(statusbar_background)で塗り(OSのテーマの色は使わない)、上端に境目の線を引いて、
+// 文字(statusbar_text)を描く。
 @interface _MiataStatusBarView : NSView
 @property (nonatomic, copy) NSString* leftText;
 @property (nonatomic, copy) NSString* rightText;
@@ -39,14 +40,15 @@ namespace {
 }
 - (void)drawRect:(NSRect)dirtyRect
 {
+    // 色は、バー専用の設定(statusbar_text / statusbar_background)。右の文字と上端の線は、文字色から導く
+    NSColor* text_color = miata::views::StatusBarTextColor();
     // 背景と、上端の境目の線(入力バーと共通。dirtyRect を自分の範囲に切る理由も、そちらに書いてある)
-    if (NSIsEmptyRect(miata::views::DrawBarBackground(self, dirtyRect))) return;
+    if (NSIsEmptyRect(miata::views::DrawBarBackground(self, dirtyRect, miata::views::ToNSColor(miata::Config::StatusBarBackground()), text_color))) return;
 
-    NSColor* text_color = miata::views::NormalTextColor();
     using miata::views::kListPadding;
     NSMutableParagraphStyle* style = [[NSMutableParagraphStyle alloc] init];
     style.lineBreakMode = NSLineBreakByTruncatingTail;
-    NSFont* font = miata::views::MakeFont(miata::Config::FontSize());
+    NSFont* font = miata::views::MakeFont(miata::Config::StatusBarFontSize());
     NSDictionary* left_attrs = @{
         NSFontAttributeName: font,
         NSForegroundColorAttributeName: text_color,
@@ -104,7 +106,7 @@ void* StatusBar::NativeView() const
 
 double StatusBar::Height()
 {
-    return HeaderHeight();
+    return SingleLineBarHeight(Config::StatusBarFontSize());
 }
 
 void StatusBar::SetText(const StatusText& text)

@@ -23,6 +23,8 @@ extern "C" {
     X(Symlink, symlink) \
     X(Alias, alias) \
     X(Cloud, cloud) \
+    X(StatusBarBackground, statusbar_background) \
+    X(StatusBarText, statusbar_text) \
 
 
 
@@ -95,6 +97,17 @@ namespace miata {
         {
             return Instance().font_size_;
         }
+
+        // ステータスバーの文字のサイズ(pt)。Miata.config.set_statusbar_font_size(n)で指定する(既定は12)。
+        // ファイル一覧の set_font_size とは独立している(フォントのファミリー set_font は共通)。バーの高さも、
+        // これに連動する(ViewMetrics.h の SingleLineBarHeight)。ほかの設定と同じく、起動時にだけ読み込む(Viewの構築時に高さを決める)。
+        static inline float StatusBarFontSize()
+        {
+            return Instance().statusbar_font_size_;
+        }
+        // set_statusbar_font_sizeに指定できる範囲(ptの数値)
+        static constexpr int kStatusBarFontSizeMin = 1;
+        static constexpr int kStatusBarFontSizeMax = 200;
 
         // フォルダの履歴の上限(件数。左右のペインで1つの履歴を共有するので、合わせて)。0なら記録しない。
         // Miata.config.set_history_limit(n)で指定する。上限を大きくするほど、移動のたびに保存する量と、履歴を
@@ -181,6 +194,15 @@ namespace miata {
             return c;
         }
 
+        // ステータスバーの背景色(Miata.config.color.statusbar_background)。Background()と同じ理由で、alphaは使わず、
+        // 常に不透明にして返す。ステータスバーの背景を塗る箇所は、Color().Get(...)ではなく必ずこれを使う。
+        static inline Color4f StatusBarBackground()
+        {
+            auto c = Color().Get(Color::Type::StatusBarBackground);
+            c.a = 1.0f;
+            return c;
+        }
+
     private:
         static inline Config& Instance()
         {
@@ -196,6 +218,7 @@ namespace miata {
         static int lua_color_newindex(lua_State* L);
         static int lua_set_font(lua_State* L);
         static int lua_set_font_size(lua_State* L);
+        static int lua_set_statusbar_font_size(lua_State* L);
         static int lua_set_history_limit(lua_State* L);
         static int lua_set_show_icons(lua_State* L);
         static int lua_get_show_icons(lua_State* L);
@@ -209,6 +232,7 @@ namespace miata {
         class Color color_;
         std::string font_family_;
         float font_size_ = 12.0f;
+        float statusbar_font_size_ = 12.0f;
         size_t history_limit_ = 100;
         bool show_icons_ = true;
         bool show_hidden_ = false;

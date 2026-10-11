@@ -64,7 +64,7 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 | `views/NameMatcher.h/.mm` | 語がファイル名に一致するかの判定（いまは部分一致のみ。スマートケース）と、一致箇所（UTF-16 の範囲）。検索（`RebuildSearchHits`）と絞り込み（`ApplyFilter`）が共用する |
 | `views/QueryTypes.h` | 検索と絞り込みが共有する値の型（`QueryMode`・`MatchKind`=部分一致/あいまい一致・`MatchRange`・`ListPosition`）。AppKit 非依存 |
 | `views/Mnemonic.h/.cc` | ダイアログ項目のラベルの `&x`（ショートカット）の解析。AppKit 非依存の純関数 `ParseMnemonicLabel`（後述「ダイアログ項目のショートカット」） |
-| `views/ViewMetrics.h` | 一覧・入力バー・進捗パネルが共有するフォント（`MakeFont`）・1 行の高さ（`LineHeight`）・ヘッダーの高さ（`HeaderHeight`）。`.mm` 専用 |
+| `views/ViewMetrics.h` | 一覧・入力バー・進捗パネル・ステータスバーが共有するフォント（`MakeFont`）・1 行の高さ（`LineHeight`）・1 行のバーの高さの式（`SingleLineBarHeight(font_size)`。ヘッダーの高さ `HeaderHeight` と、ステータスバーの高さが使う）。`.mm` 専用 |
 | `views/FileIconCache.h` | ファイル名の頭のアイコン（Finder と同じ `iconForFile:`）を、パスごとに保持する（全ペインで共有。ディレクトリ移動と件数の上限で捨てる。クラウドストレージの中(`pl_is_in_cloud_storage`)・ダウンロード前の印が付いたもの・UTF-8 として不正なパスは、拡張子の種類のアイコン）。`FileListView::Draw` が使う。`.mm` 専用（後述「ファイル名の頭のアイコン」。入り切りは `Config::ShowIcons()` / 実行中の `Miata.config.set_show_icons`） |
 | `models/PaneState.h/.cc` | ペインの保存用の状態（いるフォルダ・ソートの名前・降順か）と、保存用の辞書との変換、保存してあった値の検査（`IsPlainAbsolutePath`）。AppKit・Lua・Config のどれも知らない純ロジック（`PathHistory` と同じ作り）。保存と復元は `View` が行う（後述「ペインの状態の保存」） |
 | `models/PathHistory.h/.cc` | フォルダの履歴（新しい順・重複なし・上限・現在地の除外・保存していない変更の有無）。AppKit・Lua・Config・Pane のどれも知らない純ロジック。左右のペインで 1 つを共有し、`BrowserModel` が持つ（左右の `FileListModel` は、そこへのポインタで記録する。後述「フォルダの履歴」） |

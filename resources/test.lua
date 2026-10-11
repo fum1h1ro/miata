@@ -15,7 +15,13 @@ Miata.config.color.filter_match = "#5a2d82ff"
 Miata.config.color.symlink = "#ffd24dff"
 Miata.config.color.alias = "#ff8ad8ff"
 Miata.config.color.cloud = "#7ec8ffff"
+-- ステータスバー(ウィンドウの下端)専用の色。背景は、alpha を使わず不透明に塗る(background と同じ)。右側のマークの要約と上端の線は、
+-- 文字色(statusbar_text)の薄い色。既定は background / normal_text と同じ値(独立した設定なので、background などを変えても、
+-- これは動かない。合わせたいときは、こちらも書き換える)
+Miata.config.color.statusbar_background = "#112233ff"
+Miata.config.color.statusbar_text = "#aaff55ff"
 -- Miata.config.set_font("フォント名") / Miata.config.set_font_size(size) でファイル一覧のフォントを指定できる(未指定ならデフォルト)
+-- Miata.config.set_statusbar_font_size(size) でステータスバーの文字のサイズ(pt。1〜200。未指定なら 12。set_font_size とは独立。バーの高さも連動する)を指定できる(ファミリーは set_font と共通)
 -- Miata.config.set_history_limit(n) でフォルダの履歴の件数(左右のペイン合わせて)を指定できる(0〜10000。未指定なら 100。0 なら記録しない)
 -- Miata.config.set_show_icons(true/false) でファイル名の頭のアイコン(Finder と同じ)を出すかを指定できる(未指定なら出す。. で実行中に切り替えられる。いまの状態は Miata.config.get_show_icons() で読める。
 -- 実行中に set_show_icons を呼んでも、値が変わったら、すぐ描き直す)

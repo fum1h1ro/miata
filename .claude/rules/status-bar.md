@@ -32,7 +32,8 @@ paths:
 | `views/StatusBar.h/.mm` | 渡された内容を描くだけ（pimpl）。自前 `drawRect:`、子に `NSTextField` を持たない。クリックは吸収、first responder にならない |
 | `StatusBarScript.h/.cc` | `ctx` を組み、関数を呼び、戻り値を読む。Lua の C API だけ |
 | `Format.h/.cc` | サイズ・権限・日時の書式（一覧の `FormatSize` を移した。`FileEntryModel` の更新日時と共有） |
-| `views/NSColorUtil.h` の `DrawBarBackground` | 入力バーとステータスバーの背景と上端の線（共通。.mm 専用ヘッダ） |
+| `views/NSColorUtil.h` の `DrawBarBackground` | 入力バーとステータスバーの背景と上端の線（共通。色は呼ぶ側が渡す。.mm 専用ヘッダ） |
+| `Config::StatusBarFontSize()` / `StatusBarBackground()`、`ViewMetrics.h` の `SingleLineBarHeight` | バー専用の文字のサイズ・背景色と、高さの式（後述「色とフォントサイズ」） |
 | `Application::UpdateStatusBar()` | 配線。`make_key` / `collect` / `script` の 3 つのラムダを、`StatusBarState::Update` に渡す |
 | `FileListView::ListEpoch()` / `GetMarkSummary()` | 一覧の世代と、マークの要約（世代でメモ化） |
 | `FileEntryModel::MarkEpoch()` | マークの世代（static。`Mark()` が、値が変わるときだけ進める） |
@@ -70,10 +71,10 @@ paths:
 ## 描画・レイアウト
 
 - `_MiataMainLayout`（`View.mm`）が、contentView の全面に広がり、子の位置を、`setFrameSize:` で明示的に計算する（ブラウザ領域 `(0, 0, w, h − バー)`、バー `(0, h − バー, w, バー)`）。**flipped のビューでは、autoresizing の Y マージンの意味が反転する癖があり、前例が無い**ので使わない（`_MiataFileListLayoutContainer` と同じ作り）。ブラウザ領域の中（`NSSplitView`・Quick Look の覆い・入力バー）は、分割ビュー由来の明示計算なので、ブラウザを縮めれば、追従する。進捗パネルのホストは contentView 全面のまま（右上なので無関係）。ダイアログは contentView の中央のまま（ブラウザ領域の中心より、バーの半分だけ下。害は無い）
-- バーの高さは `HeaderHeight()`（ヘッダー・入力バーと同じ）。文字の縦位置は、ヘッダー（`DrawHeader`）と同じ式（文字列の高さで中央）。右を先に確保して（幅の半分まで）、左は、末尾を「…」で切る（`NSLineBreakByTruncatingTail`）
-- **背景と上端の境目の線は、入力バー（`QueryBar`）と共通の `DrawBarBackground`**（`NSColorUtil.h`。`kBarBorderAlpha` = 0.35、補助の文字の `kBarSubTextAlpha` = 0.8 も共通）。共通にしたときの確認は、入力バーとステータスバーが並んだウィンドウの PNG が、前後でバイト単位で同一であること（`qbar_render`）
+- バーの高さは `SingleLineBarHeight(Config::StatusBarFontSize())`（ヘッダー・入力バーと同じ式=サイズ + 14。サイズが同じなら同じ高さ。後述「色とフォントサイズ」）。文字の縦位置は、ヘッダー（`DrawHeader`）と同じ式（文字列の高さで中央）。右を先に確保して（幅の半分まで）、左は、末尾を「…」で切る（`NSLineBreakByTruncatingTail`）
+- **背景と上端の境目の線は、入力バー（`QueryBar`）と共通の `DrawBarBackground`**（`NSColorUtil.h`。`kBarBorderAlpha` = 0.35、補助の文字の `kBarSubTextAlpha` = 0.8 も共通。**色は引数で渡す**: 4 引数のオーバーロードに、バー専用の背景と文字色を。2 引数のほうは、入力バー用に `background` / `normal_text` を渡す）。共通にしたときの確認は、入力バーとステータスバーが並んだウィンドウの PNG が、前後でバイト単位で同一であること（`qbar_render`）
 - **罠: `drawRect:` で `dirtyRect` をそのまま塗らない**（`DrawBarBackground` が `NSIntersectionRect(dirtyRect, bounds)` を取る）。macOS 14 以降、親をまるごと描くと、`dirtyRect` が子の範囲を超えて渡され、不透明に塗るバーが、ブラウザ領域を塗りつぶす（`render` のテストが検出する）
-- 色は、設定のものだけ（背景は `Config::Background()`、文字は `normal_text`。右は alpha 0.8、上端の線は alpha 0.35）。新しい色名は足していない。ブラウザ領域のコンテナにだけ設定している `AppearanceForBackground()` に依存しないよう、自前描画（OS が描く部品が無い）
+- 色は、設定のものだけ（背景は `Config::StatusBarBackground()`=`statusbar_background`、文字は `StatusBarTextColor()`=`statusbar_text`。右は alpha 0.8、上端の線は alpha 0.35。後述「色とフォントサイズ」）。ブラウザ領域のコンテナにだけ設定している `AppearanceForBackground()` に依存しないよう、自前描画（OS が描く部品が無い）
 
 ## 入り切り（`set_show_statusbar` / `get_show_statusbar` / `zs`）
 
@@ -84,6 +85,18 @@ paths:
 - **レイアウト**: `_MiataMainLayout` は、`statusHidden`（既定 `NO`=出す）を持つ。**「出す」ではなく「隠す」側の名前にした**のは、未設定（`NO`）が既定の「出す」になるため（並びの部品を直接作るテスト・将来の呼び出しで、バーが消えない）。`layoutChildren` が、隠すときは、バーの高さを 0 にして `hidden = YES`、ブラウザ `(0, 0, w, h)`。窓のリサイズ中も、同じ式で追従する。隠したバーは、ヒットテストにも当たらない
 - **起動したときの状態**は、`init.lua` の `set_show_statusbar(false)`（`View` を作る前に読み終えているので、`View::View()` が、その値で並べる）。`zs` の切り替えは保存しない
 - **限界・注意**: 隠している間は、バーに出すはずだった Lua のエラー（`Lua: …`）も見えない（stdout への 1 回の出力は、エラーが起きた時点でのみ。隠している間は関数を呼ばないので、新しいエラーも起きない）。ダイアログの `RequestDialog` などは、バーの有無とは無関係
+
+## 色とフォントサイズ（`statusbar_background` / `statusbar_text` / `set_statusbar_font_size`）
+
+ユーザーの依頼（2026-10-11）: 「status bar の色およびフォントサイズを設定できるようにしたい。表示だけなので、テスト軽めで」。
+
+- **ユーザーの決定**: ①未設定のときの扱いは「**独立した既定値を置く**」（「一覧に追従する」=未設定なら `background` / `normal_text` / `set_font_size` と同じ、という案もあった。独立を選んだ）。②色は**文字色と背景色の 2 つ**（右のマークの要約と上端の線は、文字色から導く。専用の設定は無い）
+- **独立した設定**: 色の既定値は `resources/test.lua` に、`background` / `normal_text` と同じ値を置く（`#112233ff` / `#aaff55ff`）。文字のサイズの既定は 12（`Config::statusbar_font_size_`）。**`background` / `normal_text` / `set_font_size` を変えても、バーは動かない**（背景を明るくするときは、`statusbar_*` も変える。入力バーとは、色が食い違いうる）。**`init.lua` が `set_font_size(20)`（Osaka）でバーを設定しないと、バーだけ 12pt に縮む**（これまでの見た目なら、`set_statusbar_font_size(20)` を足す）
+- **高さは、バーの文字のサイズに連動**: `StatusBar::Height()` = `SingleLineBarHeight(Config::StatusBarFontSize())`（サイズ + 14）。`View::View()` で 1 回だけ決める=**起動時にだけ読む**（`set_font_size` と同じ。`set_show_*` のような実行中の切り替えは作っていない。色は描くたびに読むので、実行中に書き換えると、次の描画で変わりうるが、保証しない）
+- **`SingleLineBarHeight(font_size)` は `ViewMetrics.h`**（`HeaderHeight()` が、これを `FontSize()` で呼ぶ）。**名前を `BarHeight` にしない**: `ProgressOverlay.mm` の無名名前空間に、進捗バーの太さの `BarHeight()` があり、`miata::views` の中では新しい関数に隠される（引数が合わず、コンパイルエラーになった）
+- **`DrawBarBackground` は、色を引数に取るオーバーロードを足した**（引数 2 つのほうは、入力バー用に `background` / `normal_text` を渡す=入力バーの描画は変わらない）。背景は不透明で渡す（`StatusBarBackground()` が alpha を 1 にする。ビューが `isOpaque` = YES のため）
+- **検証**: `set_statusbar_font_size` は、数値だけ・1〜200（NaN・無限大・文字列 `"14"`・`nil`・引数なし・真偽値・表は、エラーで、値は変えない）。色は、既存の `color.*` の検証のまま（`#rrggbb` / `#rrggbbaa` 以外・未知の名前はエラー）
+- **フォントのファミリーは、専用の設定を作っていない**（`set_font` と共通）。色の追加（右のマークの要約・上端の線を別の色に）も、作っていない
 
 ## 限界
 
