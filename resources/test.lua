@@ -29,7 +29,8 @@ Miata.config.color.statusbar_text = "#aaff55ff"
 -- 出すかを指定できる(未指定なら隠す。zh で実行中に切り替えられる。いまの状態は Miata.config.get_show_hidden() で読める。
 -- 実行中に set_show_hidden を呼んでも、値が変わったら、すぐ一覧を作り直す)
 -- Miata.config.set_editor('コマンド') で、e(edit)が使うエディタを指定できる。%f を含む一行のコマンドで、%f が、対象のファイルに
--- 置き換わる(複数のときは、1 件ずつクォートして空白でつなぐ。%f はクォートの外に書く。%f が無ければ末尾に足す。%% は %)。
+-- 置き換わる(複数のときは、1 件ずつ別の引数になる。名前の中の $() や引用符は、コマンドとして解釈されない。%f は引用符の外に書く
+-- ("%f" や '%f' はエラー)。%f が無ければ末尾に足す。%% は %)。
 -- 未指定なら 'open -t %f'(システムの既定のテキストエディタ)。いまの値は Miata.config.get_editor() で読める。例:
 --   Miata.config.set_editor('open -a "Visual Studio Code" %f')
 --   Miata.config.set_editor('/opt/homebrew/bin/zed %f')

@@ -469,6 +469,7 @@ namespace {
 
 std::expected<void, std::string> pl_spawn_shell_command(
     const std::string& command,
+    const std::vector<std::string>& arguments,
     std::function<void(int exit_code, const std::string& error_output)> on_exit)
 {
     // 標準エラーの受け皿は、名前を消した一時ファイル。パイプだと、子が長く動くとき、読み手のスレッドを終わりまで
@@ -506,13 +507,22 @@ std::expected<void, std::string> pl_spawn_shell_command(
     for (auto& variable : environment) envp.push_back(variable.data());
     envp.push_back(nullptr);
 
-    std::string command_line = command; // argv は const でない char*
-    char shell_name[] = "sh";
-    char shell_flag[] = "-c";
-    char* argv[] = { shell_name, shell_flag, command_line.data(), nullptr };
+    // sh -c <command> sh <arguments...>: command の次の引数が $0("sh")、その次から $1 $2 …
+    // (arguments は、シェルが構文として読む文字列ではなく、引数として渡る)
+    std::vector<std::string> argument_strings;
+    argument_strings.reserve(arguments.size() + 4);
+    argument_strings.push_back("sh");
+    argument_strings.push_back("-c");
+    argument_strings.push_back(command);
+    argument_strings.push_back("sh");
+    for (const auto& argument : arguments) argument_strings.push_back(argument);
+    std::vector<char*> argv;
+    argv.reserve(argument_strings.size() + 1);
+    for (auto& argument : argument_strings) argv.push_back(argument.data());
+    argv.push_back(nullptr);
 
     pid_t pid = 0;
-    const int spawn_result = posix_spawn(&pid, "/bin/sh", &actions, &attr, argv, envp.data());
+    const int spawn_result = posix_spawn(&pid, "/bin/sh", &actions, &attr, argv.data(), envp.data());
     posix_spawn_file_actions_destroy(&actions);
     posix_spawnattr_destroy(&attr);
     if (spawn_result != 0) {

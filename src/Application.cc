@@ -1982,12 +1982,15 @@ namespace miata {
         return detail.empty() ? std::format("終了コード {}", exit_code) : std::format("終了コード {}\n{}", exit_code, detail);
     }
 
-    // Miata._private.spawn_shell(command, [what]) -> boolean
-    // commandは、シェルのコマンドライン(1行。/bin/sh -c で実行する。空でなく、NULを含まないこと)。待たずに起動する
-    // (pl_spawn_shell_command)。起動の要求を出せたらtrue。起動できなかったとき、と、あとで非0の終了コードで終わった
-    // ときは、whatを見出し(省略・nilなら「コマンドが失敗しました」)にして、ダイアログで知らせる(終了コードと、標準エラーの先頭)。
-    // 権限の案内は付けない(エディタが失敗したのは、Miataの権限の問題ではない)。
-    // %f の展開と、パスのクォートは、呼ぶ側の Lua(edit)の仕事: これは、できあがったコマンドを起動するだけ。
+    // Miata._private.spawn_shell(command, paths, [what]) -> boolean
+    // commandは、シェルのコマンドライン(1行。/bin/sh -c で実行する。空でなく、NULを含まないこと)。pathsは、絶対パスの
+    // 文字列の配列(空でもよい)で、シェルの位置パラメータ(command の中の "$@")として、別の引数で渡す。**シェルの構文
+    // としては解釈されない**: 名前の中の $()・バッククォート・引用符・; が、コマンドとして実行されることは無い
+    // (パスを command の文字列に埋め込むと、"%f" のようにユーザーが引用符で囲んだとき、細工した名前が実行される)。
+    // 待たずに起動する(pl_spawn_shell_command)。起動の要求を出せたらtrue。起動できなかったとき、と、あとで非0の
+    // 終了コードで終わったときは、whatを見出し(省略・nilなら「コマンドが失敗しました」)にして、ダイアログで知らせる
+    // (終了コードと、標準エラーの先頭)。権限の案内は付けない(エディタが失敗したのは、Miataの権限の問題ではない)。
+    // %f を "$@" に置き換える仕事と、検査は、呼ぶ側の Lua(edit)の仕事: これは、できあがったコマンドを起動するだけ。
     int Application::lua_private_spawn_shell(lua_State* L)
     {
         auto& app = Application::Instance();
@@ -1999,19 +2002,22 @@ namespace miata {
             luaL_error(L, "spawn_shell: expected a non-empty command line without NUL characters");
             return 0;
         }
-        const bool has_what = lua_gettop(L) >= 2 && !lua_isnil(L, 2);
-        if (has_what) Script::CheckArgType(L, 2, LUA_TSTRING);
+        CheckPathArray(L, 2, "spawn_shell");
+        const bool has_what = lua_gettop(L) >= 3 && !lua_isnil(L, 3);
+        if (has_what) Script::CheckArgType(L, 3, LUA_TSTRING);
 
         // ここから先はluaL_errorを呼ばない(std::stringなどを作るため)
         const std::string command(raw, length);
+        std::vector<std::string> arguments;
+        for (const auto& path : ReadPathArray(L, 2)) arguments.push_back(path.string());
         std::string what = "コマンドが失敗しました";
         if (has_what) {
             size_t what_length = 0;
-            const char* what_raw = lua_tolstring(L, 2, &what_length);
+            const char* what_raw = lua_tolstring(L, 3, &what_length);
             what.assign(what_raw, what_length);
         }
 
-        auto result = pl_spawn_shell_command(command, [what](int exit_code, const std::string& error_output) {
+        auto result = pl_spawn_shell_command(command, arguments, [what](int exit_code, const std::string& error_output) {
             // メインスレッドで呼ばれる(終了を待っていたスレッドから戻される)
             if (exit_code == 0) return;
             Application::Instance().view_->ReportFileError(what, FileError{.message = SpawnFailureMessage(exit_code, error_output)});
