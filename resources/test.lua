@@ -28,6 +28,11 @@ Miata.config.color.statusbar_text = "#aaff55ff"
 -- Miata.config.set_show_hidden(true/false) で隠しファイル(名前の頭が . のものと、Finder の「隠す」フラグが付いたもの。~/Library など)を
 -- 出すかを指定できる(未指定なら隠す。zh で実行中に切り替えられる。いまの状態は Miata.config.get_show_hidden() で読める。
 -- 実行中に set_show_hidden を呼んでも、値が変わったら、すぐ一覧を作り直す)
+-- Miata.config.set_editor('コマンド') で、e(edit)が使うエディタを指定できる。%f を含む一行のコマンドで、%f が、対象のファイルに
+-- 置き換わる(複数のときは、1 件ずつクォートして空白でつなぐ。%f はクォートの外に書く。%f が無ければ末尾に足す。%% は %)。
+-- 未指定なら 'open -t %f'(システムの既定のテキストエディタ)。いまの値は Miata.config.get_editor() で読める。例:
+--   Miata.config.set_editor('open -a "Visual Studio Code" %f')
+--   Miata.config.set_editor('/opt/homebrew/bin/zed %f')
 
 local command <const> = Miata.command
 
@@ -255,8 +260,12 @@ end)
 Miata.command.bind("n", "yy", function()
     Miata.command.copy_path(targets())
 end, "パスをクリップボードへ")
+-- e: 対象(マーク済み。無ければカーソル下の1件)を、エディタで開く。エディタは Miata.config.set_editor で決める
+-- (%f を含む一行のコマンド。未設定なら、システムの既定のテキストエディタ)。10 件を超えると、確認する
+Miata.command.bind("n", "e", function()
+    Miata.command.edit(targets())
+end)
 -- アプリを指定して開く例(アプリの名前は、自分の環境に合わせる。名前・Bundle ID・絶対パスのどれでもよい):
--- Miata.command.bind("n", "e", function() Miata.command.open_with("Visual Studio Code", targets()) end)
 -- Miata.command.bind("n", "t", function() Miata.command.open_with("Terminal", Miata.command.pane_path()) end)
 -- ファイル名の検索(vim の / n N)。/ でそのペインの下に入力欄が出て、打つたびにカーソルがマッチへ飛ぶ。
 -- Enter で確定(n / N で次・前のマッチへ)、入力中の Esc で取り消し、通常時の Esc で検索を消す

@@ -128,6 +128,7 @@ namespace miata {
         static int lua_private_paths_of(lua_State* L);
         static int lua_private_open_paths(lua_State* L);
         static int lua_private_reveal_paths(lua_State* L);
+        static int lua_private_spawn_shell(lua_State* L);
 
         static int lua_color_index(lua_State* L);
         static int lua_color_newindex(lua_State* L);

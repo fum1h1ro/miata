@@ -339,7 +339,7 @@ vim の `/` のような、ファイル名の**インクリメンタル検索**�
 何が上書きされるか:
 
 - **キーバインド**（`Miata.command.bind(mode, keys, fn)`）：同じモード・同じキーの割り当ては、後から登録したもので置き換わる。既定のキーを外すには `Miata.command.unbind(mode, keys)`
-- **色・フォント・履歴の件数・アイコンの表示**（`Miata.config.*`）：後から代入・設定した値になる
+- **色・フォント・履歴の件数・アイコンの表示・エディタ**（`Miata.config.*`）：後から代入・設定した値になる
 
 エラーが起きたとき:
 
@@ -517,6 +517,7 @@ Miata.command.open_with(app, target)   -- アプリを指定して開く
 Miata.command.reveal(target)           -- Finder で表示する
 Miata.command.copy_path(target)        -- パスをクリップボードへ（複数は改行区切り）
 Miata.command.set_clipboard(text)      -- 文字列をクリップボードへ
+Miata.command.edit(target [, command]) -- エディタで開く（エディタは Miata.config.set_editor）
 ```
 
 ファイルを開く・Finder で表示する・パスをコピーする。**対象（`target`）は、いつも明示する**。次のどれか:
@@ -529,12 +530,13 @@ Miata.command.set_clipboard(text)      -- 文字列をクリップボードへ
 
 - **`open`**: Finder のダブルクリックと同じ。ファイルごとの既定のアプリで開く（フォルダは Finder、`.app` は起動）。複数は、ファイルごとに開く。**10 件を超えると、確認する**（「N 件を開きますか？」。既定は「いいえ」。全マークなどで、誤って何百ものウィンドウを開かないため）
 - **`open_with(app, target)`**: `app` で、全部をまとめて開く。`app` は、アプリの名前（`"Visual Studio Code"`。`.app` は付けても省いてもよく、大文字小文字は区別しない）、Bundle ID（`"com.apple.TextEdit"`）、絶対パス（`"/Applications/Foo.app"`）のどれか。名前は、`~/Applications`、`/Applications`、`/Applications/Utilities`、`/System/Applications`、`/System/Applications/Utilities`、`/System/Library/CoreServices` の順に探す（ほかの場所のアプリは、Bundle ID か絶対パスで指定する）。10 件を超えると、確認する。エディタなら `open_with("Visual Studio Code", …)`、ターミナルなら `open_with("Terminal", Miata.command.pane_path())`
+- **`edit(target [, command])`**: 対象を、エディタで開く（下の「エディタ」）
 - **`reveal`**: Finder で、対象を選択した状態で表示する（複数は 1 つのウィンドウにまとめる）
 - **`copy_path`**: 対象のパスを、改行区切りでクリップボードに置く。名前だけ・フォルダのパスだけ、などは `set_clipboard` で組む（`set_clipboard(Miata.command.cursor_entry().name)`）。UTF-8 として不正なバイトは、`�` に置き換えて置く
 - **戻り値**: 要求を出せたら `true`。対象が空・確認で「いいえ」・アプリが見つからないときは `false`。**開けたかどうかは、あとで分かる**: 要求のあとで分かる失敗（開くアプリが無い、ファイルが無いなど）は、ダイアログで知らせる（複数の失敗は 1 回にまとめる）。アプリが見つからないときも、ダイアログで知らせる
 - 対象が正しくない（`nil`、相対パス、NUL を含む文字列、`path` が文字列でないエントリ、入れ子の配列など）と、Lua のエラー。設定ファイルの読み込み中に呼んでも、エラー
-- **シェルを通らない**（`NSWorkspace` を直接呼ぶ）ので、クォートは要らない。`$()` や空白、改行を含む名前でも、そのまま渡る。UTF-8 として不正な名前も、元のバイト列のまま渡す
-- `open` / `open_with` は、確認のダイアログを待つので、キーに割り当てた関数の中から呼ぶ
+- **`open` / `open_with` / `reveal` は、シェルを通らない**（`NSWorkspace` を直接呼ぶ）ので、クォートは要らない。`$()` や空白、改行を含む名前でも、そのまま渡る。UTF-8 として不正な名前も、元のバイト列のまま渡す（`edit` は、シェルを通る。下の「エディタ」）
+- `open` / `open_with` / `edit` は、確認のダイアログを待つので、キーに割り当てた関数の中から呼ぶ
 
 `resources/test.lua` の既定のキー:
 
@@ -544,6 +546,7 @@ Miata.command.set_clipboard(text)      -- 文字列をクリップボードへ
 | `o` | 対象（マーク済み。無ければカーソル下）を、既定のアプリで開く。フォルダも `.app` も開ける |
 | `<S-o>` | 対象を Finder で表示する |
 | `yy` | 対象のパスをクリップボードへ |
+| `e` | 対象を、エディタで開く（`edit`）。エディタは `Miata.config.set_editor` で決める（未設定なら、システムの既定のテキストエディタ）。10 件を超えると確認する |
 
 ```lua
 -- ~/.config/miata/init.lua の例
@@ -558,15 +561,12 @@ local function targets()
     return list
 end
 
--- e: 対象をエディタで開く / t: このフォルダをターミナルで開く
-Miata.command.bind("n", "e", function()
-    Miata.command.open_with("Visual Studio Code", targets())
-end)
+-- t: このフォルダをターミナルで開く（e は、既定で、エディタで開く。上の「エディタ」）
 Miata.command.bind("n", "t", function()
     Miata.command.open_with("Terminal", Miata.command.pane_path())
 end)
 
--- Enter: 拡張子ごとに、開くアプリを変える（フォルダは、これまでどおり入る）
+-- Enter: 拡張子ごとに、開くものを変える（フォルダは、これまでどおり入る）
 Miata.command.bind("n", "<enter>", function()
     local e = Miata.command.cursor_entry()
     if not e then return end
@@ -576,7 +576,7 @@ Miata.command.bind("n", "<enter>", function()
     end
     local ext = (e.name:match("%.([^.]+)$") or ""):lower()
     if ext == "md" or ext == "lua" or ext == "txt" then
-        Miata.command.open_with("Visual Studio Code", e)
+        Miata.command.edit(e)
     else
         Miata.command.open(e)
     end
@@ -584,6 +584,35 @@ end)
 ```
 
 - 外部のコマンドを実行したいときは、`os.execute` を使う。**終わるまで Miata が止まる**ので、時間のかかるものは、末尾に `&` を付けて待たない。`io.popen` は使えない（このビルドの Lua は、POSIX の機能を有効にしていない）ので、出力が要るときは、ファイルにリダイレクトして `io.open` で読む。パスは、シェルに渡す前に、必ずクォートする（`'` で囲み、中の `'` は `'\''` にする）
+
+#### エディタ（`edit` と `Miata.config.set_editor`）
+
+```lua
+Miata.config.set_editor('open -a "Visual Studio Code" %f')   -- エディタを決める（%f を含む一行のコマンド）
+Miata.command.edit(target)             -- 設定したエディタで開く
+Miata.command.edit(target, command)    -- 設定の代わりに、この command で開く（キーごとに、別のエディタにするとき）
+```
+
+エディタは、**`%f` を含む一行のコマンド**で決める。`%f` が、対象のファイルに置き換わる。未設定なら `open -t %f`（システムの既定のテキストエディタ。通常は TextEdit）。
+
+- **`%f`**: 対象のパスを、1 件ずつ `'…'` でクォートして、空白でつないだものに置き換わる。空白・`'`・`$()`・改行を含む名前でも、そのまま 1 つの引数としてエディタに届く（シェルに解釈されない）。UTF-8 として不正な名前も、元のバイト列のまま渡る。**`%f` は、クォートの外に書く**（`"%f"` や `'%f'` と書くと、クォートが二重になって、名前によっては壊れる）
+- **`%f` を書かなければ**、パスを末尾に足す（`set_editor("/opt/homebrew/bin/zed")` だけでも動く）。`%f` は何度書いてもよい。`%%` は `%` そのもの。**それ以外の `%x`（`%d` など）は、`set_editor` のときに Lua のエラー**（設定の読み込み中なら、起動時のダイアログに出る。値は変わらない）。空・空白だけ・文字列でない・NUL を含む値も、同じ
+- **`/bin/sh -c` で、待たずに起動する**（Miata は止まらない）。エディタの CLI（`code` / `zed` など）が、すぐ終わるものでも、ターミナルのアプリのように、閉じるまで動き続けるものでもよい。**起動できなかったとき、と、エディタが非 0 で終わったとき**（実行ファイルが見つからない、アプリの名前が違う、など）は、ダイアログで知らせる（終了コードと、標準エラーの先頭の数行）
+- **PATH**: Finder / Dock から起動した Miata の PATH は最小なので、`/opt/homebrew/bin` と `/usr/local/bin` を足して実行する（`code %f` や `zed %f` が、名前だけで動く）。ほかの場所のものは、絶対パスで書く
+- 10 件を超えると、確認する（`open` と同じ）。対象が空なら、何もしない（`false`）。`command` が正しくない（`set_editor` と同じ検査）と、確認の前に、Lua のエラー
+- `Miata.config.get_editor()` で、いまのコマンドを読める（未設定なら `open -t %f`）。`set_editor` は、**実行中に呼んでもよい**（次の `edit` から使う。画面は変わらない。保存はしない）
+- ターミナルのエディタ（nvim・vim など）は、ターミナルのアプリ経由で起動する（アプリによって、引数の書き方は違う）。下の例は、kitty のもの（動作は、実機では確かめていない）
+
+```lua
+-- ~/.config/miata/init.lua の例
+Miata.config.set_editor('open -a "Visual Studio Code" %f')      -- VS Code（既定のキー e が使う）
+-- Miata.config.set_editor('/opt/homebrew/bin/zed %f')          -- CLI を絶対パスで
+
+-- E: ターミナルの nvim で開く（キーごとに、別のコマンドを渡す。targets() は、上の例と同じ）
+Miata.command.bind("n", "<S-e>", function()
+    Miata.command.edit(targets(), '/Applications/kitty.app/Contents/MacOS/kitty /opt/homebrew/bin/nvim %f')
+end)
+```
 
 ### ダイアログ
 
@@ -1176,6 +1205,8 @@ Miata.config.get_show_hidden()        -- 隠しファイルを出しているか
 Miata.config.set_show_statusbar(false) -- ステータスバー（ウィンドウの下端）を出すか。true / false だけ。既定は出す
 Miata.config.get_show_statusbar()     -- ステータスバーを出しているか（いまの状態。true / false）。set_show_statusbar の値と、zs での切り替えを反映する
 Miata.config.set_statusbar(fn)        -- ステータスバーの内容を決める関数（nil で解除）。ステータスバーの内容を参照。実行中にも差し替えられる
+Miata.config.set_editor('open -a "Visual Studio Code" %f') -- エディタ（e / edit が使う）。%f を含む一行のコマンド。未設定なら 'open -t %f'（システムの既定のテキストエディタ）。ファイルを開くの「エディタ」を参照
+Miata.config.get_editor()             -- いまのエディタのコマンド（未設定なら 'open -t %f'）
 ```
 
 色は `"#rrggbb"` か `"#rrggbbaa"`（16 進）で書く。
@@ -1185,7 +1216,7 @@ Miata.config.set_statusbar(fn)        -- ステータスバーの内容を決め
 - **タイトルバーと、ダイアログ（`dialog_*`）は、これまでどおり OS のテーマに従う**（`Miata.config.color` は効かない）。
 - 既定の設定（`resources/test.lua`）は、暗い背景に明るい文字の配色。背景を明るくするときは、`normal_text` と `normal_file` も暗い色にする（検索の一致部分の背景 `search_match` / `search_current` と、絞り込みの `filter_match` も、既定は暗い背景用の暗い色なので、明るい色に変える。札の文字 `symlink` / `alias` は、既定が暗い背景用の明るい色なので、暗い色に変える。ステータスバーの `statusbar_background` / `statusbar_text` は、`background` / `normal_text` とは独立した設定なので、これも合わせて変える）。
 
-これらは、[`~/.config/miata/init.lua`](#設定ファイルinitlua) に書いて、組み込みの既定の設定を上書きできる。設定は起動時にだけ読み込む（変えたら、起動し直す）。**例外は、アイコンの表示・隠しファイルの表示・ステータスバーの表示と、ステータスバーの関数**で、実行中に `set_show_icons` / `set_show_hidden` / `set_show_statusbar` / `set_statusbar` を呼ぶと、値が変わったときは、すぐ反映される（既定のキーは、`.` と `zh` と `zs`。保存はしない。下記と、[ステータスバーの内容](#ステータスバーの内容)）。
+これらは、[`~/.config/miata/init.lua`](#設定ファイルinitlua) に書いて、組み込みの既定の設定を上書きできる。設定は起動時にだけ読み込む（変えたら、起動し直す）。**例外は、アイコンの表示・隠しファイルの表示・ステータスバーの表示と、ステータスバーの関数**で、実行中に `set_show_icons` / `set_show_hidden` / `set_show_statusbar` / `set_statusbar` を呼ぶと、値が変わったときは、すぐ反映される（既定のキーは、`.` と `zh` と `zs`。保存はしない。下記と、[ステータスバーの内容](#ステータスバーの内容)）。エディタ（`set_editor`）は、`edit` を呼ぶたびに読むので、実行中に呼んでも、次の `edit` から使われる（画面は変わらない）。
 
 #### 実行中の切り替え（`set_show_icons` / `set_show_hidden` / `set_show_statusbar`）
 

@@ -312,6 +312,7 @@ namespace miata {
             { "paths_of", lua_private_paths_of },
             { "open_paths", lua_private_open_paths },
             { "reveal_paths", lua_private_reveal_paths },
+            { "spawn_shell", lua_private_spawn_shell },
         };
         script.RegisterFunctions(
             "Miata._private",
@@ -1954,6 +1955,72 @@ namespace miata {
 
         // ここから先はluaL_errorを呼ばない(vectorを作るため)
         pl_reveal_paths(ReadPathArray(L, 1));
+        lua_pushboolean(L, true);
+        return 1;
+    }
+
+    // 起動したコマンドが、非0で終わったときの、ダイアログに出す説明: 「終了コード N」に、標準エラーの先頭(空でない
+    // 最初の数行)を添える。標準エラーに、UTF-8として不正なバイトや、途中で切れた文字があっても、表示の前に直される
+    // (View::ReportFileError)
+    static std::string SpawnFailureMessage(int exit_code, const std::string& error_output)
+    {
+        constexpr int kMaxLines = 3;
+        constexpr size_t kMaxBytes = 400;
+        std::string detail;
+        int lines = 0;
+        size_t pos = 0;
+        while (pos < error_output.size() && lines < kMaxLines) {
+            size_t end = error_output.find_first_of("\r\n", pos);
+            if (end == std::string::npos) end = error_output.size();
+            const std::string line = error_output.substr(pos, end - pos);
+            pos = end + 1;
+            if (line.find_first_not_of(" \t") == std::string::npos) continue; // 空行
+            detail += (lines == 0 ? "" : "\n") + line;
+            ++lines;
+        }
+        if (detail.size() > kMaxBytes) detail = detail.substr(0, kMaxBytes) + "...";
+        return detail.empty() ? std::format("終了コード {}", exit_code) : std::format("終了コード {}\n{}", exit_code, detail);
+    }
+
+    // Miata._private.spawn_shell(command, [what]) -> boolean
+    // commandは、シェルのコマンドライン(1行。/bin/sh -c で実行する。空でなく、NULを含まないこと)。待たずに起動する
+    // (pl_spawn_shell_command)。起動の要求を出せたらtrue。起動できなかったとき、と、あとで非0の終了コードで終わった
+    // ときは、whatを見出し(省略・nilなら「コマンドが失敗しました」)にして、ダイアログで知らせる(終了コードと、標準エラーの先頭)。
+    // 権限の案内は付けない(エディタが失敗したのは、Miataの権限の問題ではない)。
+    // %f の展開と、パスのクォートは、呼ぶ側の Lua(edit)の仕事: これは、できあがったコマンドを起動するだけ。
+    int Application::lua_private_spawn_shell(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        Script::CheckArgType(L, 1, LUA_TSTRING);
+        size_t length = 0;
+        const char* raw = lua_tolstring(L, 1, &length);
+        // luaL_errorの前なので、std::stringを作らない(NULを含むと、シェルには、その手前までしか届かない)
+        if (length == 0 || std::strlen(raw) != length) {
+            luaL_error(L, "spawn_shell: expected a non-empty command line without NUL characters");
+            return 0;
+        }
+        const bool has_what = lua_gettop(L) >= 2 && !lua_isnil(L, 2);
+        if (has_what) Script::CheckArgType(L, 2, LUA_TSTRING);
+
+        // ここから先はluaL_errorを呼ばない(std::stringなどを作るため)
+        const std::string command(raw, length);
+        std::string what = "コマンドが失敗しました";
+        if (has_what) {
+            size_t what_length = 0;
+            const char* what_raw = lua_tolstring(L, 2, &what_length);
+            what.assign(what_raw, what_length);
+        }
+
+        auto result = pl_spawn_shell_command(command, [what](int exit_code, const std::string& error_output) {
+            // メインスレッドで呼ばれる(終了を待っていたスレッドから戻される)
+            if (exit_code == 0) return;
+            Application::Instance().view_->ReportFileError(what, FileError{.message = SpawnFailureMessage(exit_code, error_output)});
+        });
+        if (!result) {
+            app.view_->ReportFileError(what, FileError{.message = result.error()});
+            lua_pushboolean(L, false);
+            return 1;
+        }
         lua_pushboolean(L, true);
         return 1;
     }

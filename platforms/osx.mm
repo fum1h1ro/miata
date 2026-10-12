@@ -427,6 +427,120 @@ std::expected<ProcessRunResult, std::string> pl_run_process(
     return result;
 }
 
+namespace {
+    // PATH の値(コロン区切り)に、dir が要素として入っているか
+    bool PathHasElement(const std::string& path_value, const std::string& dir)
+    {
+        size_t start = 0;
+        while (start <= path_value.size()) {
+            size_t end = path_value.find(':', start);
+            if (end == std::string::npos) end = path_value.size();
+            if (path_value.compare(start, end - start, dir) == 0) return true;
+            start = end + 1;
+        }
+        return false;
+    }
+
+    // 子に渡す環境変数: 継承したものに、PATH の後ろへ Homebrew などの bin を足す(pl_find_executable と同じ場所と順序。
+    // GUIアプリは、ログインシェルのPATHを継承しないことが多い)。PATH が無ければ、システムの既定 + それらを作る
+    std::vector<std::string> EnvironmentWithToolPaths()
+    {
+        const char* const tool_dirs[] = { "/opt/homebrew/bin", "/usr/local/bin" };
+        std::vector<std::string> environment;
+        bool has_path = false;
+        for (char** entry = *_NSGetEnviron(); entry && *entry; ++entry) {
+            std::string variable = *entry;
+            if (variable.rfind("PATH=", 0) == 0) {
+                has_path = true;
+                std::string value = variable.substr(5);
+                for (const char* dir : tool_dirs) {
+                    if (PathHasElement(value, dir)) continue;
+                    if (!value.empty()) value += ':';
+                    value += dir;
+                }
+                variable = "PATH=" + value;
+            }
+            environment.push_back(std::move(variable));
+        }
+        if (!has_path) environment.push_back("PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin");
+        return environment;
+    }
+}
+
+std::expected<void, std::string> pl_spawn_shell_command(
+    const std::string& command,
+    std::function<void(int exit_code, const std::string& error_output)> on_exit)
+{
+    // 標準エラーの受け皿は、名前を消した一時ファイル。パイプだと、子が長く動くとき、読み手のスレッドを終わりまで
+    // 抱えるか、読まないと子の書き込みが詰まる(デッドロック)。ファイルなら、子が終わってから、先頭だけ読めばよい
+    std::error_code ec;
+    const auto temp_dir = std::filesystem::temp_directory_path(ec);
+    if (ec) return std::unexpected(ec.message());
+    std::string temp_name = (temp_dir / "miata-spawn-XXXXXX").string();
+    const int err_fd = mkstemp(temp_name.data());
+    if (err_fd < 0) return std::unexpected(std::string(std::strerror(errno)));
+    unlink(temp_name.c_str());
+    fcntl(err_fd, F_SETFD, FD_CLOEXEC);
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    posix_spawn_file_actions_adddup2(&actions, err_fd, STDERR_FILENO);
+
+    // 0 / 1 / 2 以外のファイル記述子は、子に渡さない。シグナルのマスクと、無視の設定は、既定に戻す。
+    // 子は、自分のプロセスグループに入れる(ターミナルから起動したときの Ctrl-C が、エディタに届かないように)
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    sigset_t no_signals, all_signals;
+    sigemptyset(&no_signals);
+    sigfillset(&all_signals);
+    posix_spawnattr_setsigmask(&attr, &no_signals);
+    posix_spawnattr_setsigdefault(&attr, &all_signals);
+    posix_spawnattr_setpgroup(&attr, 0);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETPGROUP);
+
+    std::vector<std::string> environment = EnvironmentWithToolPaths();
+    std::vector<char*> envp;
+    envp.reserve(environment.size() + 1);
+    for (auto& variable : environment) envp.push_back(variable.data());
+    envp.push_back(nullptr);
+
+    std::string command_line = command; // argv は const でない char*
+    char shell_name[] = "sh";
+    char shell_flag[] = "-c";
+    char* argv[] = { shell_name, shell_flag, command_line.data(), nullptr };
+
+    pid_t pid = 0;
+    const int spawn_result = posix_spawn(&pid, "/bin/sh", &actions, &attr, argv, envp.data());
+    posix_spawn_file_actions_destroy(&actions);
+    posix_spawnattr_destroy(&attr);
+    if (spawn_result != 0) {
+        close(err_fd);
+        return std::unexpected(std::string(std::strerror(spawn_result)));
+    }
+
+    // 子の終了を、別のスレッドで待つ(メインスレッドを止めない)。終わったら、標準エラーの先頭を読んで、
+    // メインスレッドで知らせる。waitpid が使えなかったとき(SIGCHLD を無視している等)は、終了コードを 0 とみなす
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        int status = 0;
+        bool reaped = false;
+        for (;;) {
+            if (waitpid(pid, &status, 0) == pid) { reaped = true; break; }
+            if (errno != EINTR) break;
+        }
+        std::string error_output(kSpawnErrorOutputLimit, '\0');
+        const ssize_t read_size = pread(err_fd, error_output.data(), error_output.size(), 0);
+        close(err_fd);
+        error_output.resize(read_size > 0 ? (size_t)read_size : 0);
+        const int exit_code = !reaped ? 0 : WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (on_exit) on_exit(exit_code, error_output);
+        });
+    });
+    return {};
+}
+
 std::filesystem::path pl_find_font_filename(const std::string& font_name)
 {
     @autoreleasepool {

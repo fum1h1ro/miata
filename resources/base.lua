@@ -6,6 +6,55 @@ local function confirm_open(count)
     return Miata.command.dialog_yes_no(count .. " 件を開きますか？", false)
 end
 
+-- エディタのコマンド(edit が使う)。%f を含む一行のコマンドで、Miata.config.set_editor で決める。
+-- 既定は、システムの既定のテキストエディタで開く(open -t。通常は TextEdit)
+local DEFAULT_EDITOR = "open -t %f"
+local editor_command = DEFAULT_EDITOR
+
+-- エディタのコマンドの検査。正しければ nil、正しくなければ理由(文字列)を返す。
+-- 空白だけでない文字列で、NUL を含まず、% の後ろが f か % だけ(%f = 対象のパス、%% = % そのもの)
+local function editor_command_problem(command)
+    if type(command) ~= "string" or command:find("^%s*$") then
+        return "expected a command line such as 'open -a \"Visual Studio Code\" %f' (a non-empty string)"
+    end
+    if command:find("\0", 1, true) then
+        return "the command line must not contain NUL characters"
+    end
+    -- 左から、% と次の1文字を組にして読む(%%x は、% そのものと x。%x ではない)
+    local unknown
+    command:gsub("%%(.?)", function(c)
+        if unknown == nil and c ~= "f" and c ~= "%" then unknown = c end
+    end)
+    if unknown == "" then
+        return "the command line must not end with a single '%' (write '%%' for a literal %)"
+    end
+    if unknown then
+        return "unknown placeholder '%" .. unknown .. "' (use %f for the target files, %% for a literal %)"
+    end
+    return nil
+end
+
+-- command の %f を、paths(絶対パスの文字列の配列)に置き換えた、シェルのコマンドラインを返す。
+-- パスは、1件ずつ '…' でクォートして(中の ' は '\'' に)、空白でつなぐ(空白・$()・改行を含む名前も、そのまま1つの引数になる)。
+-- %% は % になる。%f が無ければ、末尾に足す。command は、editor_command_problem を通ったもの
+local function expand_editor_command(command, paths)
+    local quoted = {}
+    for i, path in ipairs(paths) do
+        quoted[i] = "'" .. (path:gsub("'", "'\\''")) .. "'"
+    end
+    local files = table.concat(quoted, " ")
+    local has_files = false
+    local expanded = command:gsub("%%(.)", function(c)
+        if c == "f" then
+            has_files = true
+            return files
+        end
+        return "%"
+    end)
+    if not has_files then expanded = expanded .. " " .. files end
+    return expanded
+end
+
 Miata = {
     command = {
         dialog_confirm = function(message, button_text)
@@ -110,6 +159,25 @@ Miata = {
             if not confirm_open(#paths) then return false end
             return Miata._private.open_paths(paths, app)
         end,
+        -- エディタで開く。targetは open と同じ(パスの文字列・エントリ・それらの配列。いつも明示する)。
+        -- commandは、%f を含む一行のコマンド(省略したら、Miata.config.set_editor で決めたもの。未設定なら "open -t %f" =
+        -- システムの既定のテキストエディタ)。/bin/sh -c で、待たずに起動する。%f は、対象のパスを1件ずつ '…' で
+        -- クォートして空白でつないだものに置き換わる(%f はクォートの外に書く。%f が無ければ、末尾に足す。%% は %)。
+        -- 10件を超えるときは、確認する(ダイアログ)。対象が空なら、何もせずfalse。ほかは、起動の要求を出せたらtrue
+        -- (起動できなかったとき・エディタが非0で終わったときは、あとでダイアログで知らせる)。
+        -- commandが正しくない(文字列でない・空・NULを含む・%f と %% 以外の %x)と、Luaのエラー(確認の前に起きる)
+        edit = function(target, command)
+            if command == nil then
+                command = editor_command
+            else
+                local problem = editor_command_problem(command)
+                if problem then error("edit: " .. problem, 2) end
+            end
+            local paths = Miata._private.paths_of(target)
+            if #paths == 0 then return false end
+            if not confirm_open(#paths) then return false end
+            return Miata._private.spawn_shell(expand_editor_command(command, paths), "エディタを起動できませんでした")
+        end,
         -- Finderで、対象を選択した状態で表示する
         reveal = function(target)
             local paths = Miata._private.paths_of(target)
@@ -170,6 +238,19 @@ Miata = {
     },
     config = {
         color = {},
+        -- エディタ(edit)のコマンドを決める。%f を含む一行のコマンドで、%f が、対象のファイルに置き換わる。
+        -- 例: set_editor('open -a "Visual Studio Code" %f') / set_editor('/opt/homebrew/bin/zed %f')。
+        -- 正しくない値(文字列でない・空・NULを含む・%f と %% 以外の %x)は、設定を変えずに、エラーにする
+        -- (設定の読み込みのエラーとして、起動時のダイアログに出る)。実行中に呼んでもよい(次の edit から使う)
+        set_editor = function(command)
+            local problem = editor_command_problem(command)
+            if problem then error("set_editor: " .. problem, 2) end
+            editor_command = command
+        end,
+        -- いまのエディタのコマンド(未設定なら、既定の "open -t %f")
+        get_editor = function()
+            return editor_command
+        end,
     },
 }
 
