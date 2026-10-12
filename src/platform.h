@@ -134,6 +134,29 @@ std::expected<ProcessRunResult, std::string> pl_run_process(
     double timeout_seconds = 10.0
 );
 
+// pl_spawn_shell_command が、標準エラーから読む量の上限(バイト)
+constexpr size_t kSpawnErrorOutputLimit = 2048;
+// シェルのコマンドライン(1行。/bin/sh -c command)を、待たずに起動する(エディタなど、いつまで動いていてもよいもの用。
+// 期限も、出力の回収もしない。pl_run_process と違い、呼び出し元のスレッドを止めない)。
+// arguments は、シェルの位置パラメータ($1 $2 …。command の中の "$@" で参照する)として、別の引数で渡す:
+// **シェルの構文としては、解釈されない**(名前の中の $() やバッククォート、引用符、; が、コマンドとして実行されることは無い。
+// ファイル名を、command の文字列に埋め込まないために、この形にしてある)。$0 は "sh"。
+// 標準入力と標準出力は /dev/null、標準エラーは、プロセスが終わるまで取っておく。環境変数は継承するが、PATH には、
+// Homebrew などの bin(/opt/homebrew/bin と /usr/local/bin。無ければ足す)を加える(GUIアプリは、ログインシェルのPATHを
+// 継承しないことが多いため。pl_find_executable と同じ)。子は、自分のプロセスグループに入れる(ターミナルから起動したときの
+// Ctrl-C が、届かないように)。
+// 起動できたら成功を返し、そのプロセスが終わったときに、on_exit を、メインスレッドで呼ぶ:
+// exit_code は終了コード(シグナルで終わったときは 128 + シグナル番号。終了を調べられなかったときは 0)、
+// error_output は標準エラーの先頭(kSpawnErrorOutputLimit バイトまで。UTF-8 として不正なバイトを含みうる)。
+// 起動そのものに失敗したら(コマンドと引数と環境の合計が ARG_MAX を超えたときなど)unexpected を返し、on_exit は呼ばない。
+// command と arguments の各要素は NUL を含まないこと(呼ぶ側が検査する)。
+// 終わるまで、待つためのスレッドを 1 つ使う(エディタ本体を前面で動かし続けるコマンドは、そのあいだ)。
+std::expected<void, std::string> pl_spawn_shell_command(
+    const std::string& command,
+    const std::vector<std::string>& arguments,
+    std::function<void(int exit_code, const std::string& error_output)> on_exit
+);
+
 struct CustomDialogCheckbox {
     std::string label;
     bool checked;

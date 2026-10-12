@@ -63,7 +63,7 @@ paths:
 
 ## 外部コマンドの起動（`pl_run_process`）
 
-`pl_run_process(executable, args, stdin_file, timeout_seconds = 10)`（`platform.h` / `osx.mm`）。標準入力をファイルから読ませて、標準出力を回収する（標準エラーは捨てる。環境変数は継承する）。使うのは `FzfFilter` だけ（`dialog_filter_list` と、絞り込みのあいまい一致）。
+`pl_run_process(executable, args, stdin_file, timeout_seconds = 10)`（`platform.h` / `osx.mm`）。標準入力をファイルから読ませて、標準出力を回収する（標準エラーは捨てる。環境変数は継承する）。使うのは `FzfFilter` だけ（`dialog_filter_list` と、絞り込みのあいまい一致）。**エディタを起動する `pl_spawn_shell_command`（待たない。期限が無い。標準エラーの先頭を取っておく）は、別の関数**で、こちらを流用しなかった（10 秒の期限で `SIGKILL` するので、閉じるまで動き続けるエディタが殺される）。`.claude/rules/lua-commands.md` の「エディタで開く」。
 
 - **`NSTask` を使わない**：`waitUntilExit` が、待つ間に**実行ループを回す**。実測（fzf を 100 回、5 ms のタイマーを置いて）：1 回 **84 ms**（入力が 1 万行。fzf 自体は 6 ms）、**78 ms**（入力が 10 行）かかり、タイマーが呼び出しの最中に 100 回で 1420 回ほど発火した（本番では、0.05 秒のタイマー=`Application::Update()` が、呼び出し元の更新の途中に再入する。再スキャンやバーの整合処理が、`list_` を作り直している最中に走りうる）。`posix_spawn` + 自前の待ちにして、1 回 **5〜6 ms**、発火 0 回、出力は同一になった。`dialog_filter_list` は、これまで打鍵ごとに 80 ms ほど待たされていた（入力の大きさによらない）
 - **作り**：`posix_spawn` のファイル操作で、標準入力=ファイル、標準出力=パイプ、標準エラー=`/dev/null`。`POSIX_SPAWN_CLOEXEC_DEFAULT` で、0/1/2 以外の記述子は子に渡さない。シグナルのマスクは空に、シグナルの処理は既定に戻す（呼び出し元が `SIGPIPE` を無視していても、子に引き継がない）。標準出力は EOF まで読む（先に子の終了を待つと、出力がパイプのバッファを超えたとき、子と親が互いを待って止まる）。`poll` で期限を見て、期限を過ぎたら `SIGKILL`。EOF の後の終了待ちも期限つき（`waitpid(WNOHANG)` を 0.2 ms 刻みで。標準出力を閉じても終わらない子で、`waitpid` のブロックに固まらないため）。期限切れは `unexpected("timed out")`（`FzfFilter` は部分一致にフォールバック）。終了コードは、シグナルで終わったときは 128 + シグナル番号。起動の失敗（実行ファイルが無い・入力ファイルを開けない）は `unexpected`
