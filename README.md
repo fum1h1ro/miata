@@ -28,6 +28,12 @@ rake icon             # アプリアイコン(assets/AppIcon.png → resources/A
 
 成果物: `_build/debug/Miata.app` / `_build/release/Miata.app`
 
+ウィンドウのタイトルには、**ビルドの版**が出る（例: `Miata  615ad1e  master  Debug`）。コミットの短い SHA（未コミットの変更つきでビルドしたときは、末尾に `-dirty`）・ブランチ名（HEAD が切り離されていれば `detached`）・`Debug` / `Release`。worktree ごとに `_build` があるので、**いま動かしているのが、どのビルドか**（古いブランチのビルドではないか）を見分けるためのもの。
+
+- CMake の構成時に git から取って、`Info.plist` に入れる: `CFBundleVersion` = HEAD までのコミット数、`CFBundleShortVersionString` = SHA、`CFBundleLongVersionString` = タイトルの文字列。Finder の「情報を見る」やクラッシュレポートにも出る
+- `rake build:*` は、ビルドのたびに構成し直すので、そのつど最新になる。**`make` を直接使うと、構成が走らず、前回の値のまま**になる
+- git が無い・リポジトリでない環境では `unknown`。`Info.plist` に入っていない（古いビルドなど）ときは、タイトルは `Miata` のまま。起動時の標準出力にも `build: …` が出る
+
 `.app` は単体で動く。Lua の既定の設定（`resources/base.lua`・`resources/test.lua`）とアイコンは `Contents/Resources/` にコピーされていて、実行時に読むのはそこだけ（リポジトリのソースツリーは見ない）。`/Applications` などにコピーして使える。`resources/test.lua` を直したときは、ビルドし直すと反映される。ビルドし直さずに設定を変えたいときは、[`~/.config/miata/init.lua`](#設定ファイルinitlua)に書く。
 
 ### 署名してビルドする（任意）

@@ -155,8 +155,14 @@ namespace miata {
 
     void Application::InitializeImpl()
     {
-        pl_create_main_window(1024, 768, "Miata");
+        // タイトルには、ビルドの版(コミット・ブランチ・Debug/Release)を添える: どのビルドを動かしているかが分かる。
+        // CMake の構成時に Info.plist へ入れたもの(CMakeLists.txt の MIATA_BUILD_LABEL)。入っていないとき
+        // (古いビルド・テスト用の模擬アプリ)は、これまでどおり "Miata"
+        const std::string build_label = pl_get_build_label();
+        const std::string window_title = build_label.empty() ? std::string("Miata") : "Miata  " + build_label;
+        pl_create_main_window(1024, 768, window_title.c_str());
 
+        if (!build_label.empty()) std::print("build: {}\n", build_label);
         std::print("config_dir: {}\n", pl_get_config_dir().c_str());
 
         auto config_errors = InitializeScript();

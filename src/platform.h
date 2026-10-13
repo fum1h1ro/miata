@@ -316,6 +316,11 @@ std::map<std::string, std::string> pl_load_string_map(const std::string& key);
 std::filesystem::path pl_find_font_filename(const std::string& font_name);
 std::filesystem::path pl_get_home_dir();
 std::filesystem::path pl_get_config_dir();
+// ビルドの版を表す文字列(例: "615ad1e  master  Debug"=コミットの短い SHA(未コミットの変更つきなら -dirty)・ブランチ名・
+// Debug/Release)。CMake の構成時に git から取って、Info.plist の CFBundleLongVersionString に入れたものを読む
+// (CMakeLists.txt の MIATA_BUILD_LABEL)。キーが無い(Info.plist に入っていない=古いビルド・テスト用の模擬アプリ)ときは空。
+// ウィンドウのタイトルに添える(Application::InitializeImpl)。
+std::string pl_get_build_label();
 std::string pl_read_file(const char* path);
 std::expected<std::string, std::string> pl_read_resource_file(const char* path);
 
