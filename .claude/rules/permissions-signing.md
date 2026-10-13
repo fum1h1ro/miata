@@ -7,7 +7,7 @@ paths:
   - "assets/**/*"
 ---
 
-# 権限エラーの案内（macOS の保護）・署名・アプリアイコン
+# 権限エラーの案内（macOS の保護）・署名・アプリアイコン・ビルドの版
 
 > 機能別の設計メモ。上の `paths:` のファイルを触ると自動で読み込まれる。`Application.cc` など複数の機能が同居するファイルでは載らないので、そのときは CLAUDE.md の「設計メモの索引」から、該当するファイルを自分で読むこと。
 > テスト・実測・実機未確認の記録は `.claude/notes/permissions-signing.md`（自動では読み込まれない。テストを書く・直す・検証するときに読む）。
@@ -55,3 +55,14 @@ paths:
 - **新しい `resources/` のファイルは cmake の再生成が要る**：`GLOB_RECURSE` は構成時にしか評価されない。`rake build:debug`/`build:release` は cmake を再生成するので、ふつうは気にしなくてよい。直接 `make` するときだけ注意。
 - **macOS のアイコンの作法**：角丸の形と余白（1024 の枠に 824 の角丸四角）は画像の側に含める。システムは形を整えない。
 - **確認のしかた**：`NSWorkspace iconForFile:` に `.app` のパスを渡すと、システムが返すアイコンが分かる（ビルドしたバンドルで、仮のアイコンが返ることを確認済み）。Dock/Finder のキャッシュで古い絵が残る場合は、この方法で `.app` 側が正しいかを切り分けられる。
+
+## ビルドの版（ウィンドウのタイトル）
+
+ウィンドウのタイトルに、`Miata  <SHA[-dirty]>  <ブランチ>  <Debug|Release>` を出す（ユーザーの依頼 2026-10-13。ユーザー向けの仕様は README の「ビルド」）。目的は「いま動かしているのが、どのビルドか」：worktree ごとに `_build` があり、メインの checkout が古いブランチのままのとき、関数が無くて起動時にエラーになる、という経験があった。
+
+- **何を出すか**（提案をユーザーが了承）：コミットの短い SHA（`git describe --always --dirty --abbrev=7`）・ブランチ名（`git symbolic-ref --short -q HEAD`。切り離しは `detached`）・`CMAKE_BUILD_TYPE`。**バージョン番号は採らない**（git のタグが無く、手で上げる番号は古くなる）。**ビルド日時も採らない**（`__DATE__` は、そのファイルを再コンパイルした時刻で、ビルドした時刻ではない。古いまま残る）
+- **入れ方**：`CMakeLists.txt` が、構成時に `execute_process` で git を呼び、`MACOSX_BUNDLE_SHORT_VERSION_STRING`（SHA）・`MACOSX_BUNDLE_BUNDLE_VERSION`（`git rev-list --count HEAD`。数字だけ）・`MACOSX_BUNDLE_LONG_VERSION_STRING`（タイトルの文字列 `MIATA_BUILD_LABEL`）に入れる。`cmake/Info.plist.in` は、もともと、この 3 つの変数を使っている（テンプレートは変えていない）。**`CFBundleLongVersionString` を運び屋にした**のは、テンプレートに新しいキーを足さずに済む（`MACOSX_BUNDLE_*` 以外の変数が、テンプレートに渡るかは未確認）ため。実行時は `pl_get_build_label()`（`osx.mm`。`NSBundle` の `infoDictionary`）が読み、`Application::InitializeImpl` がタイトルを組む。キーが無ければ空 → タイトルは `Miata`（古いビルド・テスト用の模擬アプリ）
+- **コンパイルオプション・ヘッダーにしなかった理由**：SHA が変わるたびに、全ファイル（コンパイルオプション）か、そのヘッダーを include する翻訳単位が、再コンパイルされる。Info.plist なら、再コンパイルは起きない（`make` は、変わった Info.plist をコピーするだけ。署名は、`rake` が `make` のあとに毎回付ける）
+- **更新のタイミング**：構成時。`rake build:*` は毎回 `cmake` を再実行する（`Rakefile`）ので、ビルドのたびに最新。**`make` を直接使うと、構成が走らず、前回の値のまま**。`.git/HEAD` を `CMAKE_CONFIGURE_DEPENDS` に足す案は、採っていない（worktree では git ディレクトリの場所が違い、ブランチの参照ファイルも別。表示だけなので手抜き）
+- **罠**：(1) ブランチ名に `&` `<` `>` `"` `'` が入りうる（git の参照名は許す）ので、`_` に置き換える（Info.plist は XML）。(2) CMake の `if(<変数> STREQUAL "")` は、未定義の変数を、変数名の文字列として扱う（`CMAKE_BUILD_TYPE` が未定義だと、"CMAKE_BUILD_TYPE" になる）。`if (CMAKE_BUILD_TYPE)` で見る。ブランチ名には、これを使えない（`no`・`off`・`n` などの名前が、偽の定数として扱われる）ので、ブランチは文字列の比較。(3) `-dirty` は、追跡しているファイルの変更だけ（未追跡のファイルは数えない。`compile_flags.txt` と `_build` は ignore）。ビルドしたあとに編集しても、`-dirty` は変わらない（ビルドした時点の状態）
+- **限界**：Xcode（`rake cmake:xcode`）は、構成が実行時に決まるので、`Debug`/`Release` が付かない（SHA とブランチだけ）。コミットしたあとに `make` だけしても、更新されない（上）。タイトルが長くなる（長いブランチ名）。`NSWindow.subtitle`（タイトルの下に小さく出す案）は、標準のタイトルバーでの描かれ方を確かめていない

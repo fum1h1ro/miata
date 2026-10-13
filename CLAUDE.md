@@ -119,7 +119,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 |---|---|---|
 | `dialog.md` | ダイアログの仕組み／選択リスト（`dialog_custom` の `select`）／ダイアログ項目のショートカット（`&x`） | `views/Dialog.*`・`views/FilterListDialog.*`・`views/Mnemonic.*`、`Application.cc`（`lua_private_dialog_*`）、`resources/base.lua`（`dialog_*`） |
 | `file-operations.md` | ファイル操作（始める前の断り・コピーの中身・進捗パネル） | `FileOperation.*`・`FileOperationProgress.h`・`views/Progress*`、`Application.cc`（`StartTransfer` / `CheckTransfer`）、`osx.mm`（`pl_copy_file`） |
-| `permissions-signing.md` | 権限エラーの案内（TCC・Finder 経由のゴミ箱・署名）／アプリアイコン | `FileError.h`、`View::ReportFileError`、`osx.mm`（`pl_trash_file*`）、`Rakefile`（`sign_app` / `icon`）、`cmake/Info.plist.in` |
+| `permissions-signing.md` | 権限エラーの案内（TCC・Finder 経由のゴミ箱・署名）／アプリアイコン／ビルドの版（タイトルバー。git から取って Info.plist へ） | `FileError.h`、`View::ReportFileError`、`osx.mm`（`pl_trash_file*` / `pl_get_build_label`）、`Rakefile`（`sign_app` / `icon`）、`CMakeLists.txt`（`MIATA_BUILD_LABEL`）、`cmake/Info.plist.in` |
 | `search-filter.md` | ファイル名の検索／絞り込み（部分一致・あいまい一致）／外部コマンドの起動（`pl_run_process`） | `views/SearchState.*`・`FilterState.*`・`NameMatcher.*`・`QueryBar.*`、`FzfFilter.*`、`FileListView.mm`・`BrowserView.mm`、`Application.cc`（`lua_command_search*` / `lua_command_filter*`） |
 | `quicklook.md` | プレビュー（Quick Look。倍率・ピンチ・スクロール） | `views/QuickLookView.*`、`BrowserView.mm`（覆いの配置）、`Application.cc`（`lua_command_quick_look*`） |
 | `history-panes.md` | フォルダの履歴／ペインの状態の保存／ウィンドウ位置・サイズの保存 | `models/PathHistory.*`・`PaneState.*`・`BrowserModel.*`、`View.mm`（`RestorePanes` ほか）、`osx.mm`（`pl_create_main_window`） |

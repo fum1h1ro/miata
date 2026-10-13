@@ -594,6 +594,18 @@ std::filesystem::path pl_get_config_dir()
     }
 }
 
+std::string pl_get_build_label()
+{
+    @autoreleasepool {
+        // Info.plist の CFBundleLongVersionString(CMakeLists.txt の MACOSX_BUNDLE_LONG_VERSION_STRING)。
+        // キーが無い・文字列でないときは空(古いビルド・テスト用の模擬アプリ)
+        id value = [NSBundle mainBundle].infoDictionary[@"CFBundleLongVersionString"];
+        if (![value isKindOfClass:[NSString class]]) return std::string();
+        const char* utf8 = ((NSString*)value).UTF8String;
+        return utf8 ? std::string(utf8) : std::string();
+    }
+}
+
 void pl_save_string_list(const std::string& key, const std::vector<std::string>& values)
 {
     @autoreleasepool {
