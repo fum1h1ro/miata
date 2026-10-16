@@ -5,7 +5,8 @@
 #include <cmath>
 #include "../Config.h"
 
-// 一覧(FileListView)と、各ペインの下の入力バー(QueryBar)・進捗パネル(ProgressOverlay)が共有する、フォントと寸法。
+// 一覧(FileListView)・各ペインの下の入力バー(QueryBar)・進捗パネル(ProgressOverlay)・ステータスバー(StatusBar)・
+// コンソール(ConsoleView)が共有する、フォントと寸法。
 // AppKit依存のヘルパーなので.mmファイルからのみincludeする(NSColorUtil.hと同じ規約)。
 namespace miata::views {
     // 一覧の行・ヘッダーと、入力バーの、左右の余白(pt)
@@ -43,6 +44,15 @@ namespace miata::views {
     inline CGFloat HeaderHeight()
     {
         return SingleLineBarHeight(Config::FontSize());
+    }
+
+    // ファイル一覧の行の高さ。フォントサイズに応じて動的に決める(固定値のままだとフォントサイズを上げた時に行同士が重なってしまうため)。
+    // 一覧とコンソールが共有する(コンソールの行が、一覧の行と同じ高さにそろう)。
+    // (一覧の中の別の名前 RowHeight にしない: ProgressOverlay.mm の BarHeight の例のように、無名名前空間の同名の関数に隠される)
+    inline constexpr CGFloat kRowVerticalMargin = 8; // 行の上下に確保する余白の合計
+    inline CGFloat ListRowHeight()
+    {
+        return Config::FontSize() + kRowVerticalMargin;
     }
 }
 

@@ -10,6 +10,7 @@
 #include <vector>
 #include "Dialog.h"
 #include "BrowserView.h"
+#include "ConsoleView.h"
 #include "ProgressOverlay.h"
 #include "ProgressState.h"
 #include "StatusBar.h"
@@ -145,6 +146,19 @@ namespace miata::views {
         // ブラウザ領域を全面に広げる(出すときは、バーの高さを空ける)。ダイアログの表示中でも動く
         void RefreshStatusBarVisibility();
 
+        // コンソール(ブラウザ領域とステータスバーの間の、全幅のログのペイン)を、ログ(models::ConsoleLog)に合わせる。
+        // 毎ティックと、KeyDown の出口から呼ぶ。隠している間(Config::ShowConsole が偽)は、何もしない(ログは貯まり続ける)。
+        // 世代が同じなら、AppKit に触らない。Lua も呼ばない(ログの中身を描くだけ)
+        void UpdateConsole();
+        // コンソールの出入り(Config::ShowConsole。実行中の set_show_console)が変わった後に呼ぶ。出すときは、ブラウザ領域に
+        // 高さを空け、コンソールの内容を作り直して、いちばん下を見せる(次の UpdateConsole で)。隠すときは、ブラウザ領域が全面に戻る。
+        // ダイアログの表示中でも動く
+        void RefreshConsoleVisibility();
+        // コンソールを lines 行ぶんスクロールする(正で下=新しい方、負で上)。隠しているときは、何もしない
+        void ScrollConsole(int64_t lines);
+        // コンソールのビュー(テスト用)
+        ConsoleView& GetConsoleView();
+
     private:
         void OpenNextDialogIfNeeded();
         // 親ディレクトリ/pathへ移動する。読めない場合(権限が無い等)は、移動せずに、ダイアログで知らせる
@@ -158,6 +172,8 @@ namespace miata::views {
         std::unique_ptr<BrowserView> browser_;
         // ステータスバー(contentView の直下の縦の並びの、ブラウザ領域の下)
         std::unique_ptr<StatusBar> status_bar_;
+        // コンソール(縦の並びの、ブラウザ領域とステータスバーの間)
+        std::unique_ptr<ConsoleView> console_view_;
         // 縦の並び(_MiataMainLayout)。AppKit 型を .h に持ち込まないための、素のポインタ(保持は、contentView が持つ)
         void* main_layout_ = nullptr;
         // 進捗パネルの、表示の状態と、画面(contentView の、ブラウザの上に足す)
