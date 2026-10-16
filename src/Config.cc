@@ -5,6 +5,18 @@
 
 
 namespace miata {
+    namespace {
+        // 引数 index が min〜max の整数なら、n に入れて true。数値だけ(文字列の "3" は不可)。3.0 は整数として受け付け、
+        // 3.5・NaN・無限大は受け付けない。Lua のエラーにはしない: luaL_error は longjmp なので、呼ぶ側が、C++ のオブジェクトを
+        // 作る前に、これで検証して、エラーを投げる
+        bool ReadIntegerArg(lua_State* L, int index, lua_Integer min, lua_Integer max, lua_Integer& n)
+        {
+            int is_integer = 0;
+            n = lua_type(L, index) == LUA_TNUMBER ? lua_tointegerx(L, index, &is_integer) : 0;
+            return is_integer && n >= min && n <= max;
+        }
+    }
+
     Config* Config::_instance = nullptr;
 
     const char* Config::Color::names_[] = {
@@ -20,9 +32,6 @@ namespace miata {
 
         for (std::underlying_type_t<Type> i = 0; i < sz; ++i) {
             table_[names_[i]] = (Type)i;
-        }
-        for (auto t : table_) {
-            std::printf("%s: %d\n", t.first.c_str(), (int)t.second);
         }
     }
     std::string Config::Color::ToString(const Color4f& v)
@@ -107,6 +116,10 @@ namespace miata {
             { "set_font_size", lua_set_font_size },
             { "set_statusbar_font_size", lua_set_statusbar_font_size },
             { "set_history_limit", lua_set_history_limit },
+            { "set_console_max_lines", lua_set_console_max_lines },
+            { "set_console_height", lua_set_console_height },
+            { "set_show_console", lua_set_show_console },
+            { "get_show_console", lua_get_show_console },
             { "set_show_icons", lua_set_show_icons },
             { "get_show_icons", lua_get_show_icons },
             { "set_show_hidden", lua_set_show_hidden },
@@ -143,16 +156,68 @@ namespace miata {
 
     // Miata.config.set_history_limit(n): 0〜kHistoryLimitMaxの整数。外れた値は、設定を変えずにエラーにする
     // (設定の読み込みのエラーとして、起動時のダイアログに出る)。3.0は整数として受け付け、3.5・NaN・無限大・
-    // 文字列は受け付けない。luaL_errorはlongjmpなので、C++のオブジェクトを作る前に検証する。
+    // 文字列は受け付けない(ReadIntegerArg)。
     int Config::lua_set_history_limit(lua_State* L)
     {
-        int is_integer = 0;
-        lua_Integer n = lua_type(L, 1) == LUA_TNUMBER ? lua_tointegerx(L, 1, &is_integer) : 0;
-        if (!is_integer || n < 0 || n > kHistoryLimitMax) {
+        lua_Integer n = 0;
+        if (!ReadIntegerArg(L, 1, 0, kHistoryLimitMax, n)) {
             return luaL_error(L, "set_history_limit: expected an integer from 0 to %d", kHistoryLimitMax);
         }
         Instance().history_limit_ = static_cast<size_t>(n);
         return 0;
+    }
+
+    // Miata.config.set_console_max_lines(n): コンソールが持つ行数の上限。1〜kConsoleMaxLinesMaxの整数。外れた値は、
+    // 設定を変えずにエラーにする(set_history_limitと同じ検証)。0 は受け付けない=「記録しない」とも「無制限」とも読めて
+    // 曖昧。起動時にだけ読む。
+    int Config::lua_set_console_max_lines(lua_State* L)
+    {
+        lua_Integer n = 0;
+        if (!ReadIntegerArg(L, 1, 1, kConsoleMaxLinesMax, n)) {
+            return luaL_error(L, "set_console_max_lines: expected an integer from 1 to %d", kConsoleMaxLinesMax);
+        }
+        Instance().console_max_lines_ = static_cast<size_t>(n);
+        return 0;
+    }
+
+    // Miata.config.set_console_height(n): コンソールを開いたときの高さ(行数)。kConsoleHeightMin〜kConsoleHeightMaxの整数
+    // (set_console_max_linesと同じ検証)。外れた値は、設定を変えずにエラー。起動時にだけ読む。
+    int Config::lua_set_console_height(lua_State* L)
+    {
+        lua_Integer n = 0;
+        if (!ReadIntegerArg(L, 1, kConsoleHeightMin, kConsoleHeightMax, n)) {
+            return luaL_error(L, "set_console_height: expected an integer from %d to %d", kConsoleHeightMin, kConsoleHeightMax);
+        }
+        Instance().console_height_ = static_cast<int>(n);
+        return 0;
+    }
+
+    // Miata.config.set_show_console(bool): コンソールを出すか(既定は出さない)。真偽値だけ受け付ける(set_show_statusbar と同じ。
+    // 型の違いは、設定を変えずにエラー)。実行中に値が変わったら、すぐ反映する(show_console_observer_)。
+    // ステータスバーの Lua の関数の中では、呼べない(画面を変えるので。set_show_statusbar と同じ)
+    int Config::lua_set_show_console(lua_State* L)
+    {
+        if (lua_type(L, 1) != LUA_TBOOLEAN) {
+            return luaL_error(L, "set_show_console: expected a boolean (true or false)");
+        }
+        auto& config = Instance();
+        if (config.view_change_guard_ && !config.view_change_guard_()) {
+            return luaL_error(L, "set_show_console: cannot be called from the status bar function (it must not change anything)");
+        }
+        const bool show = lua_toboolean(L, 1) != 0;
+        const bool changed = config.show_console_ != show;
+        config.show_console_ = show;
+        // 実行中(ビューがある)に、値が変わったときだけ、出入りを直す。検証の後なので、エラーは起きない
+        if (changed && config.show_console_observer_) config.show_console_observer_();
+        return 0;
+    }
+
+    // Miata.config.get_show_console() -> boolean: コンソールを出している(出す設定になっている)か。いまの状態
+    // (set_show_console の値と、実行中の切り替えを反映する)。読むだけで、状態は変えない。設定の読み込み中も呼べる
+    int Config::lua_get_show_console(lua_State* L)
+    {
+        lua_pushboolean(L, Instance().show_console_);
+        return 1;
     }
 
     // Miata.config.set_show_icons(bool): ファイル名の頭のアイコンを出すか。真偽値だけ受け付ける
@@ -216,7 +281,7 @@ namespace miata {
 
     // Miata.config.set_show_statusbar(bool): ステータスバーを出すか(既定は出す)。真偽値だけ受け付ける(set_show_icons と同じ。
     // 型の違いは、設定を変えずにエラー)。実行中に値が変わったら、すぐ反映する(show_statusbar_observer_)。
-    // ステータスバーの Lua の関数の中では、呼べない(画面を変えるので。set_show_icons / set_show_hidden と同じ)
+    // ステータスバーの Lua の関数の中では、呼べない(画面を変えるので。set_show_icons など、ほかの set_show_* と同じ)
     int Config::lua_set_show_statusbar(lua_State* L)
     {
         if (lua_type(L, 1) != LUA_TBOOLEAN) {

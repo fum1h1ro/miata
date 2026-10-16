@@ -37,6 +37,9 @@ namespace miata {
         // 設定の読み込みで起きたエラーを返す(Viewを作った後にReportConfigErrorsで画面に出す)
         std::vector<Script::ConfigError> InitializeScript();
         void ReportConfigErrors(const std::vector<Script::ConfigError>& errors);
+        // キー関数(コルーチン)の失敗を、ログ(コンソールの赤い行)に出す。画面のダイアログにはしない(キー入力を奪う。
+        // ステータスバーの Lua のエラーと同じ決め)
+        static void ReportThreadError(const Script::ThreadError& error);
         void Update(); // タイマーから定期的に呼ばれる(旧FrameImpl相当)
         // キー入力。本体は KeyDownImpl で、ここは、どの出口(早期の return を含む)の後でも、ステータスバーを合わせる
         void KeyDown(uint16_t key_code, uint16_t mods);
@@ -45,6 +48,10 @@ namespace miata {
         // 鍵(StatusBarState)が前回と同じなら、何もしない(Lua も lstat も呼ばない)。呼ぶのは、Lua も View の更新も走って
         // いない時点だけ(Lua の関数が、View の更新の途中に、入れ子で呼ばれないように)
         void UpdateStatusBar();
+        // コンソール(ブラウザ領域とステータスバーの間のログのペイン)を、ログに合わせる。毎ティック(Update)と、KeyDown の出口と、
+        // 起動時から呼ぶ。UpdateStatusBar の後に行う(ステータスバーの Lua の関数のエラーも、同じティックで見える)。
+        // 隠している間と、世代が同じ間は、AppKit に触らない
+        void UpdateConsole();
         void KeyUp(uint16_t key_code, uint16_t mods);
         void Resize(int width, int height);
         std::expected<KeyBindingMap, std::string> GetKeyBinding(const char map_c);
@@ -111,6 +118,9 @@ namespace miata {
         static int lua_command_history_list(lua_State* L);
         static int lua_command_jump_to(lua_State* L);
         static int lua_command_set_clipboard(lua_State* L);
+        static int lua_command_console_clear(lua_State* L);
+        static int lua_command_console_copy(lua_State* L);
+        static int lua_command_console_scroll(lua_State* L);
         static int lua_command_file_info(lua_State* L);
 
         // Viewを操作するコマンドの入口(Script::RegisterFunctionsのwrapper)。upvalue(1)に本来のC関数を持つ。

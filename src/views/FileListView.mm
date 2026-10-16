@@ -150,15 +150,7 @@ namespace miata::views {
 
 namespace {
     constexpr CGFloat kPadding = kListPadding;
-    constexpr CGFloat kRowVerticalMargin = 8; // 行の上下に確保する余白の合計
-
-    // ファイル一覧の行の高さは、フォントサイズに応じて動的に決める
-    // (固定値のままだとフォントサイズを上げた時に行同士が重なってしまうため)。
-    // ヘッダーの高さとフォントはViewMetrics.h(入力バーと共有)。
-    CGFloat RowHeight()
-    {
-        return Config::FontSize() + kRowVerticalMargin;
-    }
+    // 行の高さ(ListRowHeight)、ヘッダーの高さとフォントは、ViewMetrics.h(入力バー・コンソールと共有)。
 
     // ファイル名の頭のアイコン。大きさは行の高さに連動する(フォントサイズを上げれば、アイコンも大きくなる)。
     // 行の高さから、上下に2ptずつ空ける(カーソルの下線=行の下端の2ptと重ならない)。小数の行の高さでも、
@@ -684,7 +676,7 @@ void FileListView::Redraw()
     if (cursorIndex_ < 0) cursorIndex_ = 0;
     if (cursorIndex_ >= size) cursorIndex_ = std::max(0, size - 1);
 
-    CGFloat row_height = RowHeight();
+    CGFloat row_height = ListRowHeight();
     NSRect content_frame = impl_->content_view.frame;
     CGFloat needed_height = std::max((CGFloat)size * row_height, impl_->scroll_view.contentSize.height);
     CGFloat needed_width = impl_->scroll_view.contentSize.width;
@@ -737,7 +729,7 @@ void FileListView::JumpCursorTo(int row)
     }
     row = std::clamp(row, 0, (int)list_.size() - 1);
 
-    CGFloat row_height = RowHeight();
+    CGFloat row_height = ListRowHeight();
     NSRect row_rect = NSMakeRect(0, (CGFloat)row * row_height, 1, row_height);
     bool was_visible = NSContainsRect(impl_->content_view.visibleRect, row_rect);
 
@@ -1144,7 +1136,7 @@ void FileListView::Draw(double min_y, double max_y)
         auto match_color = ToNSColor(Config::Color().Get(Config::Color::Type::SearchMatch));
         auto current_color = ToNSColor(Config::Color().Get(Config::Color::Type::SearchCurrent));
         NSFont* font = MakeFont(Config::FontSize());
-        CGFloat row_height = RowHeight();
+        CGFloat row_height = ListRowHeight();
 
         // ファイル名の頭のアイコン。入り切りの設定は、描くたびに読む(実行中に set_show_icons で切り替わる。Config.h)。
         // 列の幅は、この描画の間は、全行で同じ

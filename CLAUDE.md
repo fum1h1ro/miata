@@ -37,8 +37,8 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 - 外部依存はすべて `packages/` に Git submodule として存在（実際にビルドされるのは `lua` のみ）
 
 **構成:**
-- `src/models/` — データモデル（`FileListModel`、`FileEntryModel`、`BrowserModel`）と、フォルダの履歴 `PathHistory`（AppKit 非依存。左右で 1 つを共有し、`BrowserModel` が持つ）と、ペインの保存用の状態 `PaneState`（AppKit 非依存。保存と復元は `View`）
-- `src/views/` — UI レイヤー。`View`（ダイアログキュー管理・ブラウザ操作の起点）、`BrowserView`（左右ペインの `NSSplitView` と、その上に被せるプレビューの覆い、各ペインの下の入力バー（検索・絞り込み）を持つコンテナ）、`FileListView`（ファイル一覧本体。`NSScrollView` + 自前 `NSView.drawRect` で描画）、`QuickLookView`（Quick Look のプレビューを載せる覆い）、`QueryBar`（各ペインの下の入力バー）、`ProgressOverlay`（ファイル操作の進捗を、ウィンドウの右上に重ねる半透明のパネル）、`ProgressState`（そのパネルに、何をいつ出すかの判断。AppKit 非依存）、`StatusBar`（ウィンドウの下端の全幅 1 行。カーソル下の属性・マークの要約・次のキー候補）、`StatusBarState`（その内容の判断。AppKit・Lua 非依存）、`SearchState`・`FilterState`（検索・絞り込みの状態。AppKit 非依存）、`NameMatcher`（名前に語が一致するかの判定=部分一致。検索と絞り込みが共用する）、`Dialog`（`IDialog`/`DialogPanel` によるダイアログ基盤）
+- `src/models/` — データモデル（`FileListModel`、`FileEntryModel`、`BrowserModel`）と、フォルダの履歴 `PathHistory`（AppKit 非依存。左右で 1 つを共有し、`BrowserModel` が持つ）と、ペインの保存用の状態 `PaneState`（AppKit 非依存。保存と復元は `View`）と、コンソールの行 `ConsoleLog`（AppKit・Lua・Config 非依存。`View` より前から存在する、解放しないシングルトン）
+- `src/views/` — UI レイヤー。`View`（ダイアログキュー管理・ブラウザ操作の起点）、`BrowserView`（左右ペインの `NSSplitView` と、その上に被せるプレビューの覆い、各ペインの下の入力バー（検索・絞り込み）を持つコンテナ）、`FileListView`（ファイル一覧本体。`NSScrollView` + 自前 `NSView.drawRect` で描画）、`QuickLookView`（Quick Look のプレビューを載せる覆い）、`QueryBar`（各ペインの下の入力バー）、`ProgressOverlay`（ファイル操作の進捗を、ウィンドウの右上に重ねる半透明のパネル）、`ProgressState`（そのパネルに、何をいつ出すかの判断。AppKit 非依存）、`StatusBar`（ウィンドウの下端の全幅 1 行。カーソル下の属性・マークの要約・次のキー候補）、`StatusBarState`（その内容の判断。AppKit・Lua 非依存）、`ConsoleView`（ブラウザ領域とステータスバーの間の、ログのペイン。`ConsoleLog` の行を描く）、`SearchState`・`FilterState`（検索・絞り込みの状態。AppKit 非依存）、`NameMatcher`（名前に語が一致するかの判定=部分一致。検索と絞り込みが共用する）、`Dialog`（`IDialog`/`DialogPanel` によるダイアログ基盤）
 - `src/widgets/` は存在しない（過去のドキュメントの残骸。汎用ウィジェットは今のところ `views/` 直下に個別実装されている）
 - `platforms/` — OS 固有実装（`.mm`）。現状 macOS 用の `osx.mm` と `main.mm` のみ
 
@@ -47,7 +47,8 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 | ファイル | 役割 |
 |---------|------|
 | `Application.cc/h` | `pl_start_timer` による 0.05 秒周期の更新処理（`Update()`。旧 `FrameImpl` 相当だが実際のフレームループではない）、キーイベント処理、`Miata.command.*`/`Miata._private.*` のコマンド登録（シングルトン） |
-| `Script.cc/h` | Lua VM 管理、C++ 関数登録（`RegisterFunctions`）、設定の読み込み（`PostInitialize`: 組み込みの既定の設定 → ユーザーの `init.lua`。後述）、コルーチン駆動（`InvokeRefFunctionOnThread`/`Update`） |
+| `Script.cc/h` | Lua VM 管理、C++ 関数登録（`RegisterFunctions`）、設定の読み込み（`PostInitialize`: 組み込みの既定の設定 → ユーザーの `init.lua`。後述）、コルーチン駆動（`InvokeRefFunctionOnThread`/`Update`。失敗は値（`ThreadError`）で返し、`Settle` が後始末する。Script はログを知らない）、警告の受け取り（`SetWarningHandler`）。後述「コンソール」 |
+| `StdioCapture.h/.cc` / `Log.h` / `models/ConsoleLog.h/.cc` / `views/ConsoleView.h/.mm` | コンソール（ログのペイン）。`StdioCapture` が C の stdout / stderr を `funopen` で差し替えて `ConsoleLog` に流し、`LogError`（`Log.h`）が診断を stderr へ出す。`ConsoleView` は行を描くだけ。詳細は `.claude/rules/console.md` |
 | `KeyBinding.h` | キーストローク解析、モード別（Normal/Dialog）キーマップ管理、キーコード → 英数字の逆引き（`KeyCodeToAscii`。ダイアログ項目のショートカットが使う）。割り当ての説明（`bind` の 4 番目）・次のキー候補（`Continuations`）・表示名（`KeyName`）も持つ（後述「ステータスバー」） |
 | `views/StatusBar.h/.mm` | ウィンドウの下端の、全幅のステータスバー（左: カーソル下のファイルの属性 / 右: マークの要約 / キー列の途中は、左を次のキー候補に）。渡された内容を描くだけ（pimpl・自前 `drawRect:`）。`View` が、ブラウザ領域の下に置く（`_MiataMainLayout`）。何を出すかは `StatusBarState`、Lua の関数との受け渡しは `StatusBarScript`、書式は `Format`（後述「ステータスバー」） |
 | `views/StatusBarState.h/.cc` | ステータスバーに何を出すかの判断（既定の書式 `DefaultStatusText`・整形・鍵の比較・Lua のエラーのラッチ）。AppKit にも Lua にも依存しない純ロジック（`ProgressState` と同じ作り）。`Application::UpdateStatusBar` が配線する |
@@ -64,7 +65,7 @@ macOS 専用のファイルブラウザアプリケーション「Miata」。**�
 | `views/NameMatcher.h/.mm` | 語がファイル名に一致するかの判定（いまは部分一致のみ。スマートケース）と、一致箇所（UTF-16 の範囲）。検索（`RebuildSearchHits`）と絞り込み（`ApplyFilter`）が共用する |
 | `views/QueryTypes.h` | 検索と絞り込みが共有する値の型（`QueryMode`・`MatchKind`=部分一致/あいまい一致・`MatchRange`・`ListPosition`）。AppKit 非依存 |
 | `views/Mnemonic.h/.cc` | ダイアログ項目のラベルの `&x`（ショートカット）の解析。AppKit 非依存の純関数 `ParseMnemonicLabel`（後述「ダイアログ項目のショートカット」） |
-| `views/ViewMetrics.h` | 一覧・入力バー・進捗パネル・ステータスバーが共有するフォント（`MakeFont`）・1 行の高さ（`LineHeight`）・1 行のバーの高さの式（`SingleLineBarHeight(font_size)`。ヘッダーの高さ `HeaderHeight` と、ステータスバーの高さが使う）。`.mm` 専用 |
+| `views/ViewMetrics.h` | 一覧・入力バー・進捗パネル・ステータスバー・コンソールが共有するフォント（`MakeFont`）・1 行の高さ（`LineHeight`）・1 行のバーの高さの式（`SingleLineBarHeight(font_size)`。ヘッダーの高さ `HeaderHeight` と、ステータスバーの高さが使う）・一覧の行の高さ（`ListRowHeight`。コンソールも共有）。`.mm` 専用 |
 | `views/FileIconCache.h` | ファイル名の頭のアイコン（Finder と同じ `iconForFile:`）を、パスごとに保持する（全ペインで共有。ディレクトリ移動と件数の上限で捨てる。クラウドストレージの中(`pl_is_in_cloud_storage`)・ダウンロード前の印が付いたもの・UTF-8 として不正なパスは、拡張子の種類のアイコン）。`FileListView::Draw` が使う。`.mm` 専用（後述「ファイル名の頭のアイコン」。入り切りは `Config::ShowIcons()` / 実行中の `Miata.config.set_show_icons`） |
 | `models/PaneState.h/.cc` | ペインの保存用の状態（いるフォルダ・ソートの名前・降順か）と、保存用の辞書との変換、保存してあった値の検査（`IsPlainAbsolutePath`）。AppKit・Lua・Config のどれも知らない純ロジック（`PathHistory` と同じ作り）。保存と復元は `View` が行う（後述「ペインの状態の保存」） |
 | `models/PathHistory.h/.cc` | フォルダの履歴（新しい順・重複なし・上限・現在地の除外・保存していない変更の有無）。AppKit・Lua・Config・Pane のどれも知らない純ロジック。左右のペインで 1 つを共有し、`BrowserModel` が持つ（左右の `FileListModel` は、そこへのポインタで記録する。後述「フォルダの履歴」） |
@@ -89,7 +90,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 複数の機能が同居するファイル（`Application.cc`・`osx.mm`・`FileListView.mm` ほか）を触るときも効く規則。根拠と細部は、括弧内のルール（食い違ったら、ルールが正）。
 
 - **`luaL_error` は longjmp**（Lua は C としてビルドされている）：デストラクタを持つオブジェクト（`std::string` など）を作った後に呼ばない。引数を検証して `luaL_error` を呼んでから、オブジェクトを作る。（`lua-commands.md`・`history-panes.md`）
-- **ユーザー操作の移動は `TryJumpTo` / `NavigateToParent`**：`JumpTo` は、読めないと例外を投げる（コードベースに `catch` は無い）ので、起動時（ホーム）とテスト専用。同じディレクトリを再スキャンするだけなら `View::ReloadDirectory(dir)`（`JumpTo(Path())` ではない。カーソルとマークが消える。パスで、そのフォルダを表示しているペインを引く）。（`permissions-signing.md`・`file-list.md`）
+- **ユーザー操作の移動は `TryJumpTo` / `NavigateToParent`**：`JumpTo` は、読めないと例外を投げ（その例外を受ける `catch` は無い。`catch (...)` は、`noexcept` の境界=FILE のコールバックと Lua の警告関数にだけある）、起動時（ホーム）とテスト専用。同じディレクトリを再スキャンするだけなら `View::ReloadDirectory(dir)`（`JumpTo(Path())` ではない。カーソルとマークが消える。パスで、そのフォルダを表示しているペインを引く）。（`permissions-signing.md`・`file-list.md`）
 - **ファイル操作・移動の失敗は、必ず `View::ReportFileError` に通す**（権限の失敗に、許可のしかたの案内が付く）。例外は、起動時のペインの復元（案内を出さず、黙ってホームのまま。直さない）。（`permissions-signing.md`・`history-panes.md`）
 - **マークを外して画面にも反映するなら `UnmarkPaths`**（モデルの `Mark()` はビューに通知しない）。コピー・移動・ゴミ箱・リネームの既定のキー（`resources/test.lua`）の対象は「見えているマーク」（`FileListView::MarkedEntries()` = Lua の `marked_entries`）で、完了後に外すのは、操作したファイルのマークだけ。（`file-list.md`・`search-filter.md`）
 - **ファイル操作は「部品（C++）+ 組み立て（Lua）」**：`trash` / `copy_to` / `move_to` / `rename_to` / `make_directory` は、明示した絶対パスへの、確認なしの操作（失敗は `ReportFileError`、操作の後は、関係するフォルダを**表示しているパスで引いた**ペインを更新）。対象の選び方・確認・流れは `resources/test.lua`。コマンドの先頭で `lua_settop(L, 引数の数)` を忘れない（`PushTargetPaths` が積む表が、省略された引数の位置に来る）。（`lua-commands.md`）
@@ -100,6 +101,7 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 - **新しいビューは、`acceptsFirstResponder` を YES にしない**：クリックで first responder を奪うと、キー入力（`MiataRootView::keyDown:`）が届かなくなる。入力欄（`NSTextField`）が first responder の間は `keyDown:` が呼ばれないので、Enter / Esc / ↑↓ は delegate の `doCommandBySelector:` で横取りする。（`dialog.md`・`search-filter.md`・`quicklook.md`）
 - **ダイアログは `NSAlert` / `runModal` を使わない**（非モーダルな `NSView`。`DialogPanel`）。Lua からは、コルーチンの中で `dialog_*` を呼び、結果を待つ。（`dialog.md`）
 - **色の名前（`Config::Color`）を足したら、描く側と `resources/test.lua` の既定値を同時に直す**（既定値が無いと、不透明な黒で描かれる。古いアプリが新しい `test.lua` を読むと、未知の色名のエラーで、後ろの設定が実行されない）。背景は `Config::Background()`（alpha 1）で、OS の色は使わない（ダイアログだけ OS の色のまま）。（`config.md`・`file-list.md`）
+- **診断（エラー・警告）は `LogError`（標準エラー）で出し、デバッグの `printf` を残さない**：標準出力・標準エラーは、コンソールに全部流れる（`StdioCapture`）。標準出力に書くと、赤くない通常の行になり、デバッグの出力が、毎回のログを埋める。Lua のエラーは、`Script` が値で返し、`Application` が文面を作って `LogError` に通す。`Application::InitializeImpl` の先頭の `StdioCapture::Install` は、Lua を開く（`Script` の構築）より前に置く。（`console.md`）
 - **新しい `resources/` のファイルは、cmake の再生成が要る**（`GLOB_RECURSE` は構成時にしか評価されない。`rake build:*` は再生成する。`make` を直接使うときだけ注意）。（`permissions-signing.md`）
 - **テストは、リポジトリの外（スクラッチ）に作る**：実物の `Application::Initialize()` を模擬 `.app` から起動し、合成した `NSEvent` を送る。実装を 1 か所ずつ壊して、検出できることも確かめる（変異テスト）。各機能の検証の記録とハーネスの罠は、`.claude/notes/`。
 
@@ -125,8 +127,9 @@ C++ 側は `Miata.command.*`（`Application.cc` の `InitializeScript()` 内の 
 | `history-panes.md` | フォルダの履歴／ペインの状態の保存／ウィンドウ位置・サイズの保存 | `models/PathHistory.*`・`PaneState.*`・`BrowserModel.*`、`View.mm`（`RestorePanes` ほか）、`osx.mm`（`pl_create_main_window`） |
 | `file-list.md` | 一覧の右側の札（`<DIR>` ほか）／ファイル名の頭のアイコン／隠しファイル（表示の入り切り。`zh`）／ドラッグ&ドロップ／再読み込み／ディレクトリ監視／空のディレクトリ／UTF-8 として不正な名前 | `models/FileListModel.*`・`FileEntryModel.*`、`Utf8.*`、`views/FileIconCache.h`、`FileListView.mm`、`osx.mm`（`pl_watch_directory` / `pl_is_alias_file` / `pl_is_dataless_file` ほか） |
 | `lua-commands.md` | Lua から状況を取る／ファイルを開く／エディタで開く（`edit` / `set_editor`。`%f` を含む一行のコマンド）／まとめてマークする／ファイルの操作（部品と組み立て）／先頭・末尾へ動く（`gg` / `G`） | `Application.cc`（`lua_command_*` / `lua_private_spawn_shell`）、`FileListView.mm`、`osx.mm`（`pl_open_paths` / `pl_spawn_shell_command` ほか）、`resources/base.lua`・`resources/test.lua` |
-| `config.md` | 設定の読み込み／キーバインド（`bind` / `unbind`）／色の設定（`Miata.config.color.*`）／その他の設定（`Miata.config.set_*` と、読み出しの `get_show_icons` / `get_show_hidden` / `get_show_statusbar`。実行中に切り替える `show_icons` / `show_hidden` / `show_statusbar` / `set_statusbar` の例外。`set_editor` / `get_editor` だけは `base.lua`（Lua）で定義） | `Script.*`・`Config.*`・`KeyBinding.*`、`resources/test.lua`、`Application.cc`（`InitializeScript` / `lua_command_bind`。`Config::SetShow*Observer` の登録） |
+| `config.md` | 設定の読み込み／キーバインド（`bind` / `unbind`）／色の設定（`Miata.config.color.*`）／その他の設定（`Miata.config.set_*` と、読み出しの `get_show_icons` / `get_show_hidden` / `get_show_statusbar` / `get_show_console`。実行中に切り替える `show_icons` / `show_hidden` / `show_statusbar` / `show_console` / `set_statusbar` の例外。`set_editor` / `get_editor` だけは `base.lua`（Lua）で定義） | `Script.*`・`Config.*`・`KeyBinding.*`、`resources/test.lua`、`Application.cc`（`InitializeScript` / `lua_command_bind`。`Config::SetShow*Observer` の登録） |
 | `status-bar.md` | ステータスバー（カーソル下の属性・マークの要約・次のキー候補・`set_statusbar` の Lua の関数・入り切り `set_show_statusbar` / `zs`。鍵・前置きの判定・関数の呼び方・描画・レイアウト） | `views/StatusBar*`・`views/StatusBarState.*`・`StatusBarScript.*`・`Format.*`、`Application.cc`（`UpdateStatusBar` / `KeyDownImpl` / `lua_view_query_trampoline`）、`KeyBinding.*`（`Continuations` / `KeyName`）、`FileListView.mm`（`ListEpoch` / `GetMarkSummary`）、`View.mm`（`_MiataMainLayout`） |
+| `console.md` | コンソール（ログのペイン。標準出力・標準エラーの取り込み `StdioCapture`・行の受け口 `ConsoleLog`・エラーの集約（`Script` が値で返す・`LogError`）・`ConsoleView`・レイアウト・設定 `set_console_*` / `set_show_console` / 色 `console_error`・コマンド `console_*`・`zc`） | `models/ConsoleLog.*`・`StdioCapture.*`・`Log.h`・`views/ConsoleView.*`（`Application.cc` の `InitializeImpl` / `UpdateConsole` / `ReportThreadError` / `lua_command_console_*`、`Script.*`、`View.mm`（`_MiataMainLayout`）、`Config.*`、`resources/test.lua` も関係する） |
 
 ## ドキュメントの同期
 

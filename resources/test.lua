@@ -20,9 +20,17 @@ Miata.config.color.cloud = "#7ec8ffff"
 -- これは動かない。合わせたいときは、こちらも書き換える)
 Miata.config.color.statusbar_background = "#112233ff"
 Miata.config.color.statusbar_text = "#aaff55ff"
+-- コンソール(ブラウザ領域とステータスバーの間のログのペイン)の、エラーの行(赤い行: Lua のエラー・警告・ファイル操作の失敗・標準エラー)の
+-- 文字色。背景とふつうの行の文字は、background / normal_text と同じ(フォントも、一覧と同じ)
+Miata.config.color.console_error = "#ff6b6bff"
 -- Miata.config.set_font("フォント名") / Miata.config.set_font_size(size) でファイル一覧のフォントを指定できる(未指定ならデフォルト)
 -- Miata.config.set_statusbar_font_size(size) でステータスバーの文字のサイズ(pt。1〜200。未指定なら 12。set_font_size とは独立。バーの高さも連動する)を指定できる(ファミリーは set_font と共通)
 -- Miata.config.set_history_limit(n) でフォルダの履歴の件数(左右のペイン合わせて)を指定できる(0〜10000。未指定なら 100。0 なら記録しない)
+-- Miata.config.set_console_max_lines(n) でコンソール(標準出力・標準エラー・print・エラーのログ)が持つ行数の上限を指定できる(1〜100000。未指定なら 1000。超えたら古い行から捨てる)
+-- Miata.config.set_console_height(n) でコンソールを開いたときの高さ(行数。1〜100。未指定なら 10。窓が低いときは縮む)を指定できる
+-- Miata.config.set_show_console(true/false) でコンソールを出すかを指定できる(未指定なら出さない。zc で実行中に切り替えられる。
+-- いまの状態は Miata.config.get_show_console() で読める)。console_clear() / console_copy() / console_scroll(n) は、Miata.command の中。
+-- キーで動かすなら、例えば: Miata.command.bind("n", "zj", function() Miata.command.console_scroll(5) end)
 -- Miata.config.set_show_icons(true/false) でファイル名の頭のアイコン(Finder と同じ)を出すかを指定できる(未指定なら出す。. で実行中に切り替えられる。いまの状態は Miata.config.get_show_icons() で読める。
 -- 実行中に set_show_icons を呼んでも、値が変わったら、すぐ描き直す)
 -- Miata.config.set_show_hidden(true/false) で隠しファイル(名前の頭が . のものと、Finder の「隠す」フラグが付いたもの。~/Library など)を
@@ -47,9 +55,6 @@ local function targets()
     end
     return list
 end
-
-Miata.util.pp("HOGE")
-Miata.util.pp(Miata)
 
 command.bind("nd", "j", function()
     Miata.command.navigate_down()
@@ -236,6 +241,12 @@ end, "隠しファイルの表示を切り替え")
 Miata.command.bind("n", "zs", function()
     Miata.config.set_show_statusbar(not Miata.config.get_show_statusbar())
 end, "ステータスバーの表示を切り替え")
+-- コンソール(ブラウザ領域とステータスバーの間の、ログのペイン)の表示を入り切りする(zc)。既定は出さない(起動時の状態は、
+-- set_show_console が決める)。標準出力・標準エラー・print・Lua のエラー・ファイル操作の失敗が、ここに流れる。
+-- set_show_console は、実行中に呼ぶと、値が変わったらすぐ反映される(一覧の高さは、コンソールの分だけ縮む)。切り替えは保存しない
+Miata.command.bind("n", "zc", function()
+    Miata.config.set_show_console(not Miata.config.get_show_console())
+end, "コンソールの表示を切り替え")
 -- プレビュー(Quick Look)。カーソル下のファイルを、引数なしなら両ペインに被せて表示する。もう一度押すか Esc で閉じる
 Miata.command.bind("n", "p", function()
     Miata.command.quick_look()

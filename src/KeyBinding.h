@@ -108,15 +108,6 @@ namespace miata {
             {
                 return keys_;
             }
-            std::string ToString() const
-            {
-                std::string s;
-                for (auto i = 0; i < index_; ++i) {
-                    s += keys_[(size_t)i].ToString();
-                    //if (i < index_ - 1) s += "-";
-                }
-                return s;
-            }
             bool operator==(const KeyStroke& rhs) const
             {
                 if (Size() != rhs.Size()) return false;
@@ -179,7 +170,6 @@ namespace miata {
         std::expected<bool, ErrorReason> Register(const KeyStroke& ks, int func_ref, std::string_view desc = {});
         std::expected<int, ErrorReason> Unregister(const char* key_string);
         std::expected<int, ErrorReason> Unregister(const KeyStroke& ks);
-        void DumpAll();
 
         // prefixの次に押せるキーの候補(次のキーごとに 1 つ)。bindings_ を全走査する(routes_ は、unbind した後も 0 のまま
         // 残るので使えない)。そのキーだけで割り当てが確定するなら leaf(その先の、より長い割り当ては、完全一致が先に
@@ -188,9 +178,9 @@ namespace miata {
         std::vector<Continuation> Continuations(const KeyStroke& prefix) const;
         // Keyの表示名。README の記法に揃える("g" "<S-g>" "<C-d>" "<enter>")。スペースは "Space"(README に書いたとおり、
         // "<space>" は bind では使えない。表示だけ)。表に無いキーは "<key:コード>"(bind できないキーなので、ふつうは出ない)。
-        // KeyStroke::ToString() はスレッドの名前用で区切りが無く、曖昧("sd" と "q" が同じ)なので、表示には使わない
         static std::string KeyName(const Key& key);
-        // キー列の表示名(KeyName の連結。"dd" "<C-q>s")
+        // キー列の表示名(KeyName の連結。"dd" "<C-q>s")。ステータスバーとログの表示に使うほか、キー関数のコルーチンの名前にもなる。
+        // キーコードの数字をつなぐだけの名前は、区切りが無く曖昧("sd" と "q" がどちらも "12")で、別のキーが同じ名前になってしまう
         static std::string StrokeName(const KeyStroke& ks);
 
 

@@ -392,16 +392,6 @@ namespace miata {
         return s;
     }
 
-    void KeyBinding::DumpAll()
-    {
-        std::println("-- DumpAll --");
-        for (auto& [ks, ref] : bindings_) {
-            std::println("key: {} ref: {}", ks.ToString(), ref);
-        }
-        for (auto& [ks, count] : routes_) {
-            std::println("route: {} count: {}", ks.ToString(), count);
-        }
-    }
     void KeyBinding::Dump(int& indent, std::map<Key, std::unique_ptr<Setting>>& bindings)
     {
         struct temp {
