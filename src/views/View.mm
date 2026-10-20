@@ -204,11 +204,20 @@ namespace miata::views {
         ));
     }
 
-    void View::MoveToParentOrReport(models::FileListModel& list)
+    void View::MoveToParentOrReport(constants::Pane pane)
     {
-        auto parent = list.Path().parent_path();
+        auto& list = GetList(pane);
+        const auto from = list.Path();
         auto result = list.NavigateToParent();
-        if (!result) ReportFileError(std::format("移動できませんでした ({})", parent.string()), result.error());
+        if (!result) {
+            ReportFileError(std::format("移動できませんでした ({})", from.parent_path().string()), result.error());
+            return;
+        }
+        // 親の一覧では、カーソルは先頭にある。出てきたフォルダ(from)の行へ合わせる。移動で検索と絞り込みは消えて、入力バーも
+        // 消え、一覧が下へ伸びるので、先にバーを整える(バーが出たままの高さで、行を画面の中央に出すと、バーが消えた後に、
+        // バーの高さの半分だけ、中央からずれる)
+        browser_->UpdateQueryBars();
+        GetFileListView(pane).MoveCursorToChild(from);
     }
 
     bool View::JumpToOrReport(models::FileListModel& list, const std::filesystem::path& path)
@@ -310,7 +319,7 @@ namespace miata::views {
         switch (dir) {
         case constants::Navigate::Left:
             if (browser_->IsLeft()) {
-                MoveToParentOrReport(browser_model.Left());
+                MoveToParentOrReport(constants::Pane::Left);
             }
             else {
                 browser_->FocusLeft();
@@ -318,7 +327,7 @@ namespace miata::views {
             break;
         case constants::Navigate::Right:
             if (browser_->IsRight()) {
-                MoveToParentOrReport(browser_model.Right());
+                MoveToParentOrReport(constants::Pane::Right);
             }
             else {
                 browser_->FocusRight();

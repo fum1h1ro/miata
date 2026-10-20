@@ -77,6 +77,12 @@ namespace miata::views {
         // 範囲への丸めと、カーソルの行へのスクロールは、MoveCursorと同じくRedraw()が行う
         void MoveCursorToTop();
         void MoveCursorToBottom();
+        // 親へ戻った直後に(いまのフォルダは、childの親)、出てきたフォルダchildの行へカーソルを合わせる。ディレクトリを
+        // 移るとカーソルは先頭になるので、その後に呼ぶ。childは、全体の並び(隠しファイルも含む)から、名前(NFC)で探す
+        // (ディスク上の名前がNFDでも見つかる)。隠しファイルを隠していて見えない行は、全体の並びで近い見える行へ。
+        // 見つからないとき(ルート・いまのフォルダの直下でない・消えた)は、何もしない。見えている範囲の外なら、
+        // 行を画面の中央に出す(JumpCursorToと同じ)。入力バーの出入りで一覧の高さが変わるので、バーを整えた後に呼ぶ
+        void MoveCursorToChild(const std::filesystem::path& child);
         // カーソル下のエントリ。一覧が空(カーソルが一覧の外)ならnullptr
         inline FileEntryView* CurrentOrNull() const
         {
