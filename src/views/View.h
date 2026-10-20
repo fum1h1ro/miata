@@ -161,9 +161,9 @@ namespace miata::views {
 
     private:
         void OpenNextDialogIfNeeded();
-        // 親ディレクトリ/pathへ移動する。読めない場合(権限が無い等)は、移動せずに、ダイアログで知らせる
-        // (例外で落とさない)。
-        void MoveToParentOrReport(models::FileListModel& list);
+        // paneのフォルダの親へ移動して、出てきたフォルダの行へカーソルを合わせる(FileListView::MoveCursorToChild)。
+        // 読めない場合(権限が無い等)は、移動せずに(カーソルもそのまま)、ダイアログで知らせる(例外で落とさない)。
+        void MoveToParentOrReport(constants::Pane pane);
         // 移れたらtrue。移れなければ、ダイアログで知らせてfalse
         bool JumpToOrReport(models::FileListModel& list, const std::filesystem::path& path);
         // paneの、いまのフォルダとソート(保存・復元する状態)

@@ -324,6 +324,7 @@ FileListView::FileListView(models::FileListModel& list) : model_(list), impl_(st
                 }
                 Fetch();
                 // Reload()経由の通知ならカーソルを復元する。ディレクトリ移動(JumpTo)は先頭から
+                // (hとlで親へ戻るときだけ、この後に、Viewが、出てきたフォルダの行へ寄せる: MoveCursorToChild)
                 cursorIndex_ = reload_memo_ ? RestoreCursor(*reload_memo_) : 0;
                 Redraw();
                 // 別のディレクトリへの移動なら、先頭から表示する。Redraw()がカーソルの行へスクロールするのはフォーカスの
@@ -403,6 +404,19 @@ void FileListView::MoveCursorToBottom()
 {
     cursorIndex_ = std::max(0, (int)list_.size() - 1);
     Redraw();
+}
+
+void FileListView::MoveCursorToChild(const std::filesystem::path& child)
+{
+    // いまのフォルダの直下でなければ、同じ名前の別のファイルに合わせてしまう(ルートでは、親が自分自身で、名前が空: 一致せずに戻る)
+    if (child.parent_path() != model_.Path()) return;
+
+    // 絞り込む前の全体の並び(sorted_)から、名前(NFC)で探す。隠しファイルを隠しているとき、隠れた子は list_ に無い。
+    // パス(Path())では比べない: Enterで入ったパスは、NFCの名前で組まれるが、ディスク上の名前がNFDだと、Path()は一致しない
+    const std::string name = pl_normalize_string(child.filename().string());
+    auto it = std::find_if(sorted_.begin(), sorted_.end(), [&](FileEntryView* entry) { return entry->Model().Name() == name; });
+    if (it == sorted_.end()) return;
+    JumpCursorTo(NearestShownRow(row_of_sorted_, (int)(it - sorted_.begin())));
 }
 
 std::optional<std::filesystem::path> FileListView::CurrentPath() const
