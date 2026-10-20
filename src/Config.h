@@ -25,6 +25,7 @@ extern "C" {
     X(Cloud, cloud) \
     X(StatusBarBackground, statusbar_background) \
     X(StatusBarText, statusbar_text) \
+    X(ConsoleError, console_error) \
 
 
 
@@ -120,6 +121,26 @@ namespace miata {
         // set_history_limitに指定できる最大(0〜この値の整数)
         static constexpr int kHistoryLimitMax = 10000;
 
+        // コンソールが持つ行数の上限。Miata.config.set_console_max_lines(n)で指定する(既定は1000。起動時にだけ読む)。
+        // 超えたら、古い行から捨てる。設定の読み込みの後に、Application が ConsoleLog::SetLimit に渡す(ConsoleLog は Config を知らない)
+        static inline size_t ConsoleMaxLines()
+        {
+            return Instance().console_max_lines_;
+        }
+        // set_console_max_linesに指定できる最大(1〜この値の整数。0は「記録しない」とも「無制限」とも読めて曖昧なので受け付けない)。
+        // ConsoleLog::kMaxLimit と同じ値(Application.cc の static_assert が確かめる。Config.h は ConsoleLog.h を include しない)
+        static constexpr int kConsoleMaxLinesMax = 100000;
+
+        // コンソールを開いたときの高さ(行数)。Miata.config.set_console_height(n)で指定する(既定は10。起動時にだけ読む:
+        // View の構築時に、高さ(pt)を決める)。行の高さは一覧と同じ。窓が低いときは、ブラウザ領域の最小の高さを残して、縮む
+        static inline int ConsoleHeight()
+        {
+            return Instance().console_height_;
+        }
+        // set_console_heightに指定できる範囲(行数の整数)
+        static constexpr int kConsoleHeightMin = 1;
+        static constexpr int kConsoleHeightMax = 100;
+
         // ファイル名の頭に、ファイルのアイコン(Finderと同じ)を出すか。既定は出す。Miata.config.set_show_icons(bool)で
         // 指定する。ほかの設定と違い、実行中にも変えられる(Miata.config.set_show_icons を、実行中に呼ぶ)ので、描くたびに読むこと
         // (構築時にキャッシュしない)。値を書くのは、Luaの set_show_icons だけ(下の通知が、ビューを描き直す)。
@@ -128,7 +149,7 @@ namespace miata {
             return Instance().show_icons_;
         }
 
-        // 実行中に、Luaの Miata.config.set_show_icons / set_show_hidden が、値を**変えた**ときに呼ぶ通知(同じ値を指定したときは、
+        // 実行中に、Luaの Miata.config.set_show_*(icons / hidden / statusbar / console)が、値を**変えた**ときに呼ぶ通知(同じ値を指定したときは、
         // 呼ばない)。値を書いた後に呼ぶ。Configはビューを知らないので、Applicationが、Viewを作った後に登録する。
         // 設定の読み込み中(登録前)の set_* は、値を書くだけ(ビューが無い。起動時の一覧は、その値で作られる)。
         static void SetShowIconsObserver(std::function<void()> observer)
@@ -143,6 +164,19 @@ namespace miata {
         {
             Instance().show_statusbar_observer_ = std::move(observer);
         }
+        static void SetShowConsoleObserver(std::function<void()> observer)
+        {
+            Instance().show_console_observer_ = std::move(observer);
+        }
+
+        // コンソール(ブラウザ領域とステータスバーの間のログのペイン)を出すか。既定は出さない。Miata.config.set_show_console(bool)で
+        // 指定する。show_statusbar と同じく、実行中にも変えられる(Miata.config.set_show_console を、実行中に呼ぶ。既定のキー zc)。
+        // 値を書くのは、Luaの set_show_console だけ(上の通知が、出入りと、ブラウザ領域の高さを、すぐ直す)。
+        // 隠している間は、View::UpdateConsole が、何もしない(ログは貯まり続ける)ので、毎ティックに読むこと(構築時にキャッシュしない)
+        static inline bool ShowConsole()
+        {
+            return Instance().show_console_;
+        }
 
         // ステータスバー(ウィンドウの下端)を出すか。既定は出す。Miata.config.set_show_statusbar(bool)で指定する。
         // show_icons / show_hidden と同じく、実行中にも変えられる(Miata.config.set_show_statusbar を、実行中に呼ぶ)。
@@ -154,7 +188,8 @@ namespace miata {
             return Instance().show_statusbar_;
         }
 
-        // 画面を変える設定(set_show_icons / set_show_hidden)を、いま Lua から呼んでよいかを返す関数(Application が登録する)。
+        // 画面を変える設定(set_show_icons / set_show_hidden / set_show_statusbar / set_show_console)を、いま Lua から呼んでよいかを
+        // 返す関数(Application が登録する)。
         // 偽を返す間は、これらの設定は、値を変えずに Lua のエラーになる(ステータスバーの Lua の関数は、何も変えない)。
         // 未登録(設定の読み込み中)なら、いつでも呼べる
         static void SetViewChangeGuard(std::function<bool()> allowed)
@@ -220,6 +255,10 @@ namespace miata {
         static int lua_set_font_size(lua_State* L);
         static int lua_set_statusbar_font_size(lua_State* L);
         static int lua_set_history_limit(lua_State* L);
+        static int lua_set_console_max_lines(lua_State* L);
+        static int lua_set_console_height(lua_State* L);
+        static int lua_set_show_console(lua_State* L);
+        static int lua_get_show_console(lua_State* L);
         static int lua_set_show_icons(lua_State* L);
         static int lua_get_show_icons(lua_State* L);
         static int lua_set_show_hidden(lua_State* L);
@@ -234,6 +273,10 @@ namespace miata {
         float font_size_ = 12.0f;
         float statusbar_font_size_ = 12.0f;
         size_t history_limit_ = 100;
+        size_t console_max_lines_ = 1000;
+        int console_height_ = 10;
+        bool show_console_ = false;
+        std::function<void()> show_console_observer_;
         bool show_icons_ = true;
         bool show_hidden_ = false;
         std::function<void()> show_icons_observer_;

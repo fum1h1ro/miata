@@ -16,10 +16,16 @@
 #include "Application.h"
 #include "Config.h"
 #include "misc.h"
+#include "Log.h"
 #include "StatusBarScript.h"
+#include "StdioCapture.h"
 #include "Utf8.h"
+#include "models/ConsoleLog.h"
 
 namespace miata {
+    // Config::kConsoleMaxLinesMax(set_console_max_lines の上限)と ConsoleLog の上限は、同じ値(Config.h は ConsoleLog.h を include しない)
+    static_assert(static_cast<size_t>(Config::kConsoleMaxLinesMax) == models::ConsoleLog::kMaxLimit);
+
     // tidx にあるテーブルの select(選択リスト)を検証する。不正なら luaL_error(Lua のエラー。ダイアログは開かない)。
     // luaL_error は longjmp なので、スタックにあるデストラクタ付きのオブジェクト(std::string など)のデストラクタが走らない。
     // だから、C++ のオブジェクトを作る前に呼ぶこと。この関数自身も、Lua の C API と整数だけを使い、メッセージの書式は固定で、
@@ -155,6 +161,11 @@ namespace miata {
 
     void Application::InitializeImpl()
     {
+        // 標準出力・標準エラーに書かれるもの(printf・Lua の print / io.write など)を、コンソールの受け口にも流す。
+        // 最初に行う: Lua を開く(Script の構築=InitializeScript)より前でないと、io.write が拾えない。この後の std::print
+        // (build: など)から、コンソールの最初の行になる。設定の読み込み中の print も、View より前に、受け口に入る
+        StdioCapture::Install(models::ConsoleLog::Instance());
+
         // タイトルには、ビルドの版(コミット・ブランチ・Debug/Release)を添える: どのビルドを動かしているかが分かる。
         // CMake の構成時に Info.plist へ入れたもの(CMakeLists.txt の MIATA_BUILD_LABEL)。入っていないとき
         // (古いビルド・テスト用の模擬アプリ)は、これまでどおり "Miata"
@@ -167,6 +178,10 @@ namespace miata {
 
         auto config_errors = InitializeScript();
 
+        // コンソールが持つ行数の上限。設定を読み終えた後に渡す(それまでの出力は、最大の上限で持っているので、詰めても、
+        // 最初から同じ上限で持っていたのと同じ中身になる)。設定の読み込みが途中で失敗しても、値は既定か、失敗の前に決めたもの
+        models::ConsoleLog::Instance().SetLimit(Config::ConsoleMaxLines());
+
         // 設定を読み終えたので、ウィンドウ自体の背景色を決める(ペインやヘッダーは、自分で塗る)。
         // ウィンドウを作った時点では設定が読まれていないので、ここで設定する
         pl_set_window_background_color(Config::Background());
@@ -176,7 +191,7 @@ namespace miata {
 
         view_ = std::make_unique<views::View>();
 
-        // 実行中の Miata.config.set_show_icons / set_show_hidden(キーの関数の中など)が、値を変えたときに、すぐ画面へ反映する
+        // 実行中の Miata.config.set_show_*(キーの関数の中など)が、値を変えたときに、すぐ画面へ反映する
         // (実行中の切り替えは、これだけ=set(not get)。専用の toggle コマンドは無い)。設定の読み込み中は、ここより前なので、
         // 値だけが変わる(起動時の一覧は、その値で作られる)。同じ値を指定したときは、呼ばれない
         Config::SetShowIconsObserver([this]() { view_->RefreshShowIcons(); });
@@ -188,7 +203,10 @@ namespace miata {
             view_->RefreshStatusBarVisibility();
             status_state_.Invalidate();
         });
-        // ステータスバーの Lua の関数の中では、画面を変える設定(上の 3 つ)を呼べない(関数は、何も変えない)
+        // コンソールの出入り(set_show_console)。ブラウザ領域の高さを直し、出すときは内容を作り直す。ここでは同期しない
+        // (Lua のキー関数の中から呼ばれる)。同期は、キー入力の出口(KeyDown)と、毎ティックが行う
+        Config::SetShowConsoleObserver([this]() { view_->RefreshConsoleVisibility(); });
+        // ステータスバーの Lua の関数の中では、画面を変える設定(上の set_show_*)を呼べない(関数は、何も変えない)
         Config::SetViewChangeGuard([this]() { return !in_status_function_; });
 
         // フォルダの履歴に、設定の上限を渡して、前回までの記録を復元する。設定の読み込みの後で、最初の移動より前
@@ -204,6 +222,8 @@ namespace miata {
 
         // ステータスバーの最初の内容(タイマーの最初のティックより前に、空のバーを見せない)
         UpdateStatusBar();
+        // コンソールの最初の内容(起動時から出す設定のとき、空のペインを見せない)
+        UpdateConsole();
 
         file_operations_.SetCallback([this](FileOperationCompleted& e) {
             OnFileOperationCompleted(e);
@@ -222,9 +242,6 @@ namespace miata {
             Update();
         });
 
-        key_binding_map_[(int)KeyBindingMap::Normal]->DumpAll();
-        key_binding_map_[(int)KeyBindingMap::Dialog]->DumpAll();
-
         // 設定の読み込みで起きたエラーは、Viewとタイマーが動き出してから画面に出す
         ReportConfigErrors(config_errors);
     }
@@ -232,7 +249,9 @@ namespace miata {
     std::vector<Script::ConfigError> Application::InitializeScript()
     {
         auto& script = miata::Script::Instance();
-        script.Initialize();
+        // Lua の警告(warn() など)は、ログ(赤い行)に出す。最初に入れる: base.lua の読み込みの中の警告も拾う
+        script.SetWarningHandler([](const std::string& text) { LogError("warning: " + text); });
+        if (auto error = script.Initialize()) LogError("error: base.lua: " + *error);
 
         // 設定ファイルの読み込み中(Viewを作る前)にも使えるコマンド
         static luaL_Reg config_commands[] = {
@@ -285,6 +304,9 @@ namespace miata {
             { "filter_clear", lua_command_filter_clear },
             { "jump_to", lua_command_jump_to },
             { "set_clipboard", lua_command_set_clipboard },
+            { "console_clear", lua_command_console_clear },
+            { "console_copy", lua_command_console_copy },
+            { "console_scroll", lua_command_console_scroll },
         };
         script.RegisterFunctions(
             "Miata.command",
@@ -328,7 +350,11 @@ namespace miata {
 
         Config::ScriptInitialize();
 
-        return script.PostInitialize();
+        auto errors = script.PostInitialize();
+        // 設定の読み込みのエラーは、ログにも出す(ダイアログは、View を作った後に ReportConfigErrors が出す)。
+        // 読み込みの途中の print より後に並ぶ(エラーは、読み終えてから、まとめて受け取る)
+        for (const auto& e : errors) LogError("error: " + e.Describe());
+        return errors;
     }
 
     void Application::ReportConfigErrors(const std::vector<Script::ConfigError>& errors)
@@ -337,9 +363,7 @@ namespace miata {
 
         std::string message = "設定ファイルの読み込みでエラーが起きました。エラーが起きた行より前の設定は有効です。";
         for (auto& e : errors) {
-            // Luaのエラーメッセージは、ふつうファイル名を含む("ファイル名:行番号: ...")。含まないもの
-            // (error({}) など)は、どのファイルか分かるように足す
-            message += std::format("\n\n{}{}", e.message.find(e.file) == std::string::npos ? e.file + ": " : "", e.message);
+            message += "\n\n" + e.Describe();
         }
         view_->RequestDialog(std::make_shared<views::ConfirmDialog>(
             [](views::IDialog&) {},
@@ -372,10 +396,16 @@ namespace miata {
         return lua_tocfunction(L, lua_upvalueindex(1))(L);
     }
 
+    void Application::ReportThreadError(const Script::ThreadError& error)
+    {
+        LogError(std::format("error: key {}: {}", error.label, error.message));
+    }
+
     void Application::Update()
     {
         file_operations_.Update();
-        Script::Instance().Update();
+        // ダイアログなどで待っていたキー関数を進める。その後の区間の失敗(確認のダイアログの後が、ほとんど)も、ここでログに出る
+        for (const auto& error : Script::Instance().Update()) ReportThreadError(error);
         view_->CheckDialogState();
         // Luaのコルーチン(Script::Update)とダイアログの後始末(CheckDialogState)の後に行う。
         // リネームなど、ダイアログの結果を受けて一覧のカーソルに作用する処理が終わってから反映するため。
@@ -389,6 +419,8 @@ namespace miata {
         // (Lua の関数を、それらの途中で、入れ子に呼ばないため。リロードで動いたカーソルと、変わったマークを、同じティックで反映する)。
         // 検索・絞り込みの入力中は、キー関数を通らずにカーソルが動くので、キー入力の出口だけでは足りない(ここが拾う)
         UpdateStatusBar();
+        // コンソールを、ログに合わせる。ステータスバーの後(その Lua の関数のエラーも、同じティックで見える)
+        UpdateConsole();
         // 進捗パネル(右上)を、実行中の操作に合わせる。完了は、上の file_operations_.Update() のコールバック
         // (OnFileOperationCompleted)が、View::FinishProgress で伝えている(失敗のダイアログと同じティックで、パネルが消える)
         view_->UpdateProgress(std::chrono::steady_clock::now(), file_operations_.Running());
@@ -405,6 +437,8 @@ namespace miata {
         // どの出口(早期の return も含む)の後でも、ステータスバーを合わせる: 前置きの出入りと、キー関数が動かしたカーソル・
         // マークを、次のティックを待たずに見せる(鍵が同じなら、何もしない)
         UpdateStatusBar();
+        // コンソールも合わせる: キー関数の print・エラー・zc での出入りを、次のティックを待たずに見せる(世代が同じなら、何もしない)
+        UpdateConsole();
     }
 
     void Application::KeyDownImpl(uint16_t key_code, uint16_t mods)
@@ -424,12 +458,11 @@ namespace miata {
         }
         auto key_setting = kb->Has(key_stroke_);
         if (key_setting) {
-            //printf("match key stroke: %d\n", key_setting.value());
-            auto result = script.InvokeRefFunctionOnThread(key_stroke_.ToString(), key_setting.value());
+            // コルーチンの名前は、キー列の表示名(キーコードの数字をつなぐだけの名前は、区切りが無く、"sd" と "q" が同じになる)。
+            // ログの「どのキーか」にも使う。Clear の前に取る
+            auto error = script.InvokeRefFunctionOnThread(KeyBinding::StrokeName(key_stroke_), key_setting.value());
             key_stroke_.Clear();
-            if (!result) {
-                printf("error: %s\n", result.error().c_str());
-            }
+            if (error) ReportThreadError(*error);
         }
         else if (key_setting.error() == KeyBinding::ErrorReason::MaybeTooShort) {
             // キー列の途中(前置き)。次のキー候補を控える(ステータスバーが出す)。Has が MaybeTooShort を返すのは、
@@ -1272,6 +1305,11 @@ namespace miata {
         return 1;
     }
 
+    void Application::UpdateConsole()
+    {
+        if (view_) view_->UpdateConsole();
+    }
+
     void Application::UpdateStatusBar()
     {
         if (!view_) return;
@@ -1331,8 +1369,8 @@ namespace miata {
             in_status_function_ = true;
             auto result = CallStatusBarFunction(ref, snapshot, defaults);
             in_status_function_ = false;
-            // エラーは、バーに出す(StatusBarState がラッチして、左に出し続ける)。標準出力にも、1 回だけ出す
-            if (!result) printf("statusbar: %s\n", result.error().c_str());
+            // エラーは、バーに出す(StatusBarState がラッチして、左に出し続ける)。ログ(赤い行)にも、1 回だけ出す
+            if (!result) LogError(std::format("statusbar: {}", result.error()));
             return result;
         };
 
@@ -1899,6 +1937,36 @@ namespace miata {
         return 1;
     }
 
+    // Miata.command.console_clear(): コンソールの行を、全部捨てる(通し番号は続く)。引数は見ない。
+    // 画面は、次の同期(KeyDown の出口か、ティック)で直る
+    int Application::lua_command_console_clear(lua_State*)
+    {
+        models::ConsoleLog::Instance().Clear();
+        return 0;
+    }
+
+    // Miata.command.console_copy() -> boolean: コンソールの全行を、クリップボードへ(行を改行でつなぐ。種類は失われる)。
+    // コピーする文字列が空(行が無い・空行だけ)のときは、何もせず false(クリップボードの中身を、空で上書きしない)。コピーできたら true
+    int Application::lua_command_console_copy(lua_State* L)
+    {
+        const std::string text = models::ConsoleLog::Instance().Text();
+        lua_pushboolean(L, !text.empty() && pl_set_clipboard_text(text));
+        return 1;
+    }
+
+    // Miata.command.console_scroll(n): コンソールを n 行ぶんスクロールする(正で下=新しい方、負で上)。整数だけ。端で止まる
+    // (巨大な値でもよい)。コンソールを出していないときは、何もしない。キーで動かしたいときは、init.lua に bind を書く
+    int Application::lua_command_console_scroll(lua_State* L)
+    {
+        int is_integer = 0;
+        const lua_Integer n = lua_type(L, 1) == LUA_TNUMBER ? lua_tointegerx(L, 1, &is_integer) : 0;
+        if (!is_integer) {
+            return luaL_error(L, "console_scroll: expected an integer number of lines (positive = down, negative = up)");
+        }
+        Application::Instance().view_->ScrollConsole(n);
+        return 0;
+    }
+
     // Miata._private.paths_of(target) -> string[]
     // open などのコマンドの対象を、絶対パスの文字列の配列にする。targetは、パスの文字列、エントリ({ path = 文字列 }。
     // cursor_entry の戻り値など)、またはそれらの配列(marked_entries の戻り値など)。空の配列は、空の配列になる。
@@ -2068,15 +2136,7 @@ namespace miata {
             auto no_text = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "no_text", "NO");
 
             auto dialog = std::make_shared<views::YesNoDialog>(
-                [](views::IDialog& dialog) {
-                    auto& yes_no_dialog = dynamic_cast<views::YesNoDialog&>(dialog);
-                    if (yes_no_dialog.Result()) {
-                        std::print("yes\n");
-                    }
-                    else {
-                        std::print("no\n");
-                    }
-                },
+                [](views::IDialog&) {},
                 views::YesNoDialog::arguments{
                     .message_ = message,
                     .default_select_ = default_focus,

@@ -32,7 +32,7 @@ rake icon             # アプリアイコン(assets/AppIcon.png → resources/A
 
 - CMake の構成時に git から取って、`Info.plist` に入れる: `CFBundleVersion` = HEAD までのコミット数、`CFBundleShortVersionString` = SHA、`CFBundleLongVersionString` = タイトルの文字列。Finder の「情報を見る」やクラッシュレポートにも出る
 - `rake build:*` は、ビルドのたびに構成し直すので、そのつど最新になる。**`make` を直接使うと、構成が走らず、前回の値のまま**になる
-- git が無い・リポジトリでない環境では `unknown`。`Info.plist` に入っていない（古いビルドなど）ときは、タイトルは `Miata` のまま。起動時の標準出力にも `build: …` が出る
+- git が無い・リポジトリでない環境では `unknown`。`Info.plist` に入っていない（古いビルドなど）ときは、タイトルは `Miata` のまま。起動時の[コンソール](#コンソール)（と標準出力）にも `build: …` が出る
 
 `.app` は単体で動く。Lua の既定の設定（`resources/base.lua`・`resources/test.lua`）とアイコンは `Contents/Resources/` にコピーされていて、実行時に読むのはそこだけ（リポジトリのソースツリーは見ない）。`/Applications` などにコピーして使える。`resources/test.lua` を直したときは、ビルドし直すと反映される。ビルドし直さずに設定を変えたいときは、[`~/.config/miata/init.lua`](#設定ファイルinitlua)に書く。
 
@@ -85,10 +85,12 @@ src/
 ├── Utf8.cc/h             # UTF-8 の検証と修復（ファイル名を UTF-8 として正しい形にする。AppKit 非依存）
 ├── Format.cc/h           # 表示用の書式（サイズ・権限・日時。一覧とステータスバーが共有する。AppKit 非依存）
 ├── StatusBarScript.cc/h  # ステータスバーの Lua の関数との受け渡し（ctx の組み立てと、戻り値の読み取り。Lua の C API だけ）
+├── StdioCapture.cc/h     # C の stdout / stderr を、コンソールの受け口にも流す FILE に差し替える（funopen）。Application の起動の先頭で入れる
+├── Log.h                 # LogError: エラー・警告を 1 行、標準エラーへ出す唯一の入口（コンソールでは赤い行になる）
 ├── FileOperation.cc/h    # コピー・移動（別スレッドで実行。始める前の確認 FileOperationGuard と、進捗の写し FileOperationProgress。AppKit 非依存）
 ├── platform.h            # OS 依存処理の抽象化（`pl_*` 関数。色・フォント・ファイル操作・ディレクトリ監視・プロセス起動等）
-├── models/               # データモデル（ファイルリスト・ブラウザ状態。フォルダの履歴は PathHistory、ペインの保存用の状態は PaneState。どちらも AppKit 非依存）
-└── views/                # UI レイヤー（View・BrowserView・FileListView・QuickLookView・QueryBar・ProgressOverlay・StatusBar・Dialog。検索・絞り込みの状態は AppKit 非依存の SearchState・FilterState。進捗パネルに何を出すかは AppKit 非依存の ProgressState。ステータスバーに何を出すかは AppKit 非依存の StatusBarState。名前の照合は NameMatcher。ファイル名の頭のアイコンを引いて保持するのは FileIconCache）
+├── models/               # データモデル（ファイルリスト・ブラウザ状態。フォルダの履歴は PathHistory、ペインの保存用の状態は PaneState、コンソールの行は ConsoleLog。どれも AppKit 非依存）
+└── views/                # UI レイヤー（View・BrowserView・FileListView・QuickLookView・QueryBar・ProgressOverlay・StatusBar・ConsoleView・Dialog。検索・絞り込みの状態は AppKit 非依存の SearchState・FilterState。進捗パネルに何を出すかは AppKit 非依存の ProgressState。ステータスバーに何を出すかは AppKit 非依存の StatusBarState。名前の照合は NameMatcher。ファイル名の頭のアイコンを引いて保持するのは FileIconCache）
 
 platforms/
 └── osx.mm                # platform.h の macOS 実装。AppKit 型はここと views/*.mm にのみ閉じ込める
@@ -146,7 +148,7 @@ assets/
 - 絞り込みバーの「見えている行数 / 全行数」の全行数は、隠しファイルを隠しているときは、それを除いた数
 - **隠しファイルしか無いフォルダは、隠しているあいだ、空に見える**（隠したことを知らせる表示は無い。`zh` で出す）
 - **起動したときの状態**は、設定 `Miata.config.set_show_hidden(true / false)`（**既定は隠す**）で決める。`zh` での切り替えは保存しない（起動し直すと、設定の値になる）。いまの状態は `Miata.config.get_show_hidden()` で読める（[設定](#設定)）
-- **キー**は `zh`（`resources/test.lua`。`init.lua` で変えられる）。`z` を 1 打に束縛すると（[例](#例まとめてマークする)の `z`＝次のマークへ、など）、2 打目の `h` に届かず、`zh`（と、[ステータスバー](#ステータスバー)を切り替える `zs`）は効かなくなる（完全一致が先）
+- **キー**は `zh`（`resources/test.lua`。`init.lua` で変えられる）。`z` を 1 打に束縛すると（[例](#例まとめてマークする)の `z`＝次のマークへ、など）、2 打目の `h` に届かず、`zh`（と、[ステータスバー](#ステータスバー)を切り替える `zs`、[コンソール](#コンソール)を切り替える `zc`）は効かなくなる（完全一致が先）
 - 判定は、エントリごとに 1 回（名前の頭の `.` と、`lstat` のフラグ。再スキャンまで保持する）。外でフラグを変えたときは、次の再読み込み（`reload`・自動リロード）で反映される
 - 隠していても、**フォルダごとのコピー・移動・ゴミ箱の中身には影響しない**（フォルダの中のドットファイルも、そのまま運ばれる・移る。隠れるのは、いま開いているフォルダの一覧の行だけ）
 
@@ -216,12 +218,43 @@ d …  d マークをゴミ箱へ                                               
 
 - **左（カーソル下のファイル）**: 種類と権限（`-rw-r--r--`）・所有者:グループ・サイズ・更新日時。サイズは正確なバイト数で、1024 以上なら、一覧と同じ書式を添える（`12,345 B (12.1K)`）。**フォルダにはサイズを出さない**（子の数も出さない: クラウドのフォルダは、一覧すると中身の取得が起きるため）。シンボリックリンクは、サイズの代わりに、末尾に `-> リンク先`（更新日時は、リンクそのもののもの。一覧は、リンク先のもの）。ダウンロード前のファイルは末尾に `<CLOUD>`、Finder のエイリアスは `<ALIAS>`（一覧の札と同じ）。一覧が空（ファイルが無い、絞り込みで 0 件）なら空。属性が取れないときは「(情報を取得できません: 理由)」
 - **右（マークの要約）**: `マーク N 件`。フォルダがあれば `(フォルダ M)`、ファイルがあれば合計サイズ（一覧と同じ書式。**フォルダの中身は数えない**: 重い・クラウドで取得が起きるため。シンボリックリンクは、一覧と同じく、サイズを持たないものとして扱う）、[絞り込み](#絞り込み)や[隠しファイル](#隠しファイル)で見えなくなったマークがあれば `(隠れ K)`。数えるのは「見えているマーク」（コピー・移動・ゴミ箱の対象と同じ）。マークも隠れたマークも無ければ空
-- **キー入力の途中**: 左を、入力済みの前置きと、次に押せるキーに置き換える（`d …  d マークをゴミ箱へ`。右は、そのまま: `dd` で消える件数とサイズを見ながら、2 打目を選べる）。その先にも続きがあるキーは `s…`。説明は、`bind` の 4 番目の引数（[説明（`desc`）](#説明desc)）。`resources/test.lua` では、`gg` `dd` `yy` `zh` `zs` に付けてある。割り当てのないキーを押すか、確定すると、元の表示に戻る。スペースは `Space`、修飾キーは `<C-q>` のように、キーバインドの書き方に合わせて出す
+- **キー入力の途中**: 左を、入力済みの前置きと、次に押せるキーに置き換える（`d …  d マークをゴミ箱へ`。右は、そのまま: `dd` で消える件数とサイズを見ながら、2 打目を選べる）。その先にも続きがあるキーは `s…`。説明は、`bind` の 4 番目の引数（[説明（`desc`）](#説明desc)）。`resources/test.lua` では、`gg` `dd` `yy` `zh` `zs` `zc` に付けてある。割り当てのないキーを押すか、確定すると、元の表示に戻る。スペースは `Space`、修飾キーは `<C-q>` のように、キーバインドの書き方に合わせて出す
 - **色と文字のサイズは、バー専用の設定**（[設定](#設定)）: 背景は `Miata.config.color.statusbar_background`、文字は `statusbar_text`（右のマークの要約は、文字色の少し薄い色。上端の境目の線も、文字色から）、文字のサイズは `Miata.config.set_statusbar_font_size(n)`（pt。既定は 12）。一覧の `background` / `normal_text` / `set_font_size` とは**独立**（変えても、バーは動かない。ファミリーは `set_font` と共通）。**バーの高さは、バーの文字のサイズに連動する**（サイズ + 14 pt。ヘッダー・入力バーと同じ式なので、同じサイズなら同じ高さ）。長い内容は、右を先に確保（幅の半分まで）して、左は、末尾を「…」で切る
 - **クリックしても何も起きない**（キー入力の窓口を奪わない）。ダイアログが開いていても、更新される
 - 更新は、カーソル・マーク・一覧・キー入力の途中のどれかが変わったときだけ（毎ティック、軽い比較だけをして、変わったときに、`lstat` 1 回と、マークの集計をする）。マークの集計は、マークと一覧が変わらない間は、数え直さない（カーソルを動かしても、マークの数だけ `stat` しない）。**時計のような、時間で変わる表示はできない**
 - ウィンドウの下の分だけ、ブラウザ領域（左右のペイン・入力バー・プレビューの覆い）が縮む
 - **入り切りできる**: 設定 `Miata.config.set_show_statusbar(true / false)`（**既定は出す**）が、起動したときの状態を決める。実行中は、キー `zs`（`resources/test.lua` で、`set_show_statusbar(not get_show_statusbar())` に束縛）で切り替える。隠すと、バーが消えて、ブラウザ領域が全面になる（バーの内容の収集も、`set_statusbar` の関数の呼び出しも、しない）。出し直すと、**いまの状態で、すぐ組み直す**（隠している間にカーソルやマークが変わっていても、古いままにならない）。切り替えは保存しない（起動し直すと、設定の値になる）。いまの状態は `Miata.config.get_show_statusbar()` で読める（[設定](#設定)）
+
+## コンソール
+
+ブラウザ領域とステータスバーの間に、全幅の**ログのペイン**を出せる。**標準出力・標準エラーに書かれたもの**（Lua の `print` / `io.write` / `io.stderr:write`、C++ の `printf` など）と、**Lua のエラー・警告・ファイル操作の失敗**が、ここに貯まる。**ターミナルから起動しなくても、見える**（以前は、これらは標準出力に出るだけだった）。**既定は閉じていて、`zc` で開閉する**。
+
+```
+build: 4f8a2c1  feat/console-pane  Debug
+config_dir: /Users/me/.config
+Lua 5.5.1
+（init.lua の print が、ここに並ぶ）
+home: /Users/me
+error: key dd: init.lua:42: attempt to call a nil value (global 'foo')      ← 赤い行
+```
+
+- **ふつうの行**: 標準出力に書かれたもの。Lua の `print`（引数はタブ区切り）・`io.write`・`io.stdout:write`、C++ の `printf` / `std::print`。起動の情報（`build:`・`config_dir:`・`Lua 5.5.1`・`home:`）も、最初の行に並ぶ
+- **赤い行**（設定 `color.console_error`）: 標準エラーに書かれたもの（`io.stderr:write` など）と、次のもの
+  - **キーに割り当てた関数のエラー** `error: key <キー>: <メッセージ>`。**ダイアログの後（`dd` `c` `m` `K` `r` `e` などの、確認の後）で起きたエラーも出る**（以前は、画面にも標準出力にも出ずに、捨てられていた）
+  - 設定ファイルの読み込みのエラー `error: <ファイル>: <メッセージ>`（ダイアログにも出る）
+  - ステータスバーの関数のエラー `statusbar: <メッセージ>`（バーの左にも出る）
+  - Lua の警告 `warning: <メッセージ>`（`warn()` と、`__gc` のエラー）。`warn("@off")` / `warn("@on")` で、出力を切り替えられる
+  - ファイル操作などの失敗（コピー・移動・ゴミ箱・リネーム・開く・`edit` で起動したコマンドの失敗・フォルダへ移れない）。ダイアログと同じ文面（権限の案内は、ダイアログだけ）
+- **ターミナルにも、これまでどおり出る**（`rake run:*` のように、ターミナルから起動したとき。標準出力は標準出力へ、標準エラーは標準エラーへ）
+- **取れないもの**: 子プロセス（fzf・エディタ・`os.execute` で起動したもの）の出力と、macOS が出す `NSLog` など。標準出力・標準エラーの FILE を使わずに、fd へ直接書くもの
+- **未完の行は出ない**: 改行の無い出力（`io.write("…")` だけ）は、改行か `flush` が来るまで出ない。`print` が、`__tostring` のエラーで途中で失敗したときは、書きかけの先頭の引数が、次の行の頭にくっつく
+- **持つ行数に上限がある**: `Miata.config.set_console_max_lines(n)`（既定 1000。1〜100000）。超えたら、古い行から捨てる。設定の読み込み中の出力も、最後に、この上限で詰める。1 行は 2048 バイトまで（超えた分は「…」）。**表示用に整える**: タブは空白 4 個、制御文字（ESC など）は空白、UTF-8 として不正なバイトは `�`、行末の CR は除く
+- **見え方**: 背景・文字・フォントは、一覧と同じ設定（`background` / `normal_text` / `set_font` / `set_font_size`。行の高さも一覧と同じ）。エラーの行だけ `console_error`。**折り返さず**、長い行は末尾を「…」にする。テキストの選択はできない（全行のコピーは `console_copy`）
+- **高さは設定の行数で固定**（`Miata.config.set_console_height(n)`。既定 10 行）。窓が低いときは、ブラウザ領域に 120pt を残して縮み、1 行も出せなければ出さない。ドラッグでの高さの変更は無い
+- **スクロール**: ホイール・トラックパッドで動く。**いちばん下を見ているときは、ログが増えても最新の行が見え続ける**（自動で追従）。上へ戻って読んでいる間は動かさない（古い行が捨てられても、読んでいる行は同じ場所に見える）。開き直すと、いちばん下から。キーで動かすには、`console_scroll(n)`（[コンソール](#コンソール-1)の API）を、自分で `bind` する
+- **クリックしても何も起きない**（キー入力の窓口を奪わない）。ダイアログ・プレビュー（Quick Look）が出ていても、更新される（プレビューはブラウザ領域の中なので、コンソールは隠れない）。エラーが出ても、コンソールは自動では開かない
+- **入り切り**: 設定 `Miata.config.set_show_console(true / false)`（**既定は出さない**）が、起動したときの状態を決める。実行中は、キー `zc` で切り替える（`z` を押すと、ステータスバーの候補に「c コンソールの表示を切り替え」と出る）。隠している間も、ログは貯まり続ける。切り替えは保存しない
+- ステータスバーの関数の中では、コンソールの表示は切り替えられない（画面を変える設定なので。[ステータスバーの内容](#ステータスバーの内容)）
 
 ## ファイル名の検索
 
@@ -351,7 +384,8 @@ vim の `/` のような、ファイル名の**インクリメンタル検索**�
 
 - アプリは起動する。エラーのダイアログを出して、ファイル名と行番号を示す。**エラーが起きた行より前の設定は有効**で、それより後は実行されない（構文エラーのファイルは、1 行も実行されない）。組み込みの既定の設定でエラーが起きても、続けてユーザーの設定を読む
 - 読めないファイル（ディレクトリ、権限が無い、リンク切れ）もエラーとして示す。先頭の BOM や `#!` の行があっても読める
-- ダイアログに出るのは、起動時(設定の読み込み中)のエラーだけ。**キーに割り当てた関数を実行したときのエラーは、これまでどおり標準出力に出るだけ**（ターミナルから起動していないと見えない）
+- ダイアログに出るのは、起動時(設定の読み込み中)のエラーだけ（[コンソール](#コンソール)の赤い行にも出る）。**キーに割り当てた関数を実行したときのエラーは、ダイアログにはならず、コンソールの赤い行に出る**（`error: key dd: …`。確認のダイアログの後で起きたエラーも。ターミナルから起動したときは、標準エラーにも出る）。キー入力を奪わないため、ダイアログにはしない
+- **エラーが出たキーは、押し直すと、また実行される**（以前は、エラーの後の 1 回は、関数が実行されなかった）
 
 読み込み中に使えるもの:
 
@@ -703,7 +737,7 @@ local result = Miata.command.dialog_custom({
 - **最初のカーソル**: 選択リストがあれば `selected` の行。無ければ最初の項目（チェックボックス、無ければボタン）。
 - **`buttons` を省略したとき**: 選択リストがあれば、ボタンは出ない（閉じるのは、行の Enter か Esc）。選択リストが無ければ「OK」を 1 つ出す。`buttons = {}` は省略と同じ。選択リストがあるときは、先頭のボタンを「既定」の見た目（強調）にしない。
 - **行数**: 十数個まで。スクロールも高さの上限も無いので、多いと、ウィンドウからはみ出す（大量の候補は [`dialog_filter_list`](#dialog_filter_list) を使う）。長い選択肢は、末尾が「…」で省かれる。
-- **不正な引数はエラー**: ダイアログは開かず、Lua のエラーになる（キーに割り当てた関数の中なら、標準出力に出る）。`select` がテーブルでない、`options` がテーブルでない・空・文字列（数値も可）でない要素がある、`selected` が `1` 〜 `options` の数の整数でない（`2.0` は可、`2.5` と `"2"` は不可）。`select.label` など、使わないキーは無視する。`buttons` と `checkboxes` は、型の合わない要素を黙って捨てる。
+- **不正な引数はエラー**: ダイアログは開かず、Lua のエラーになる（キーに割り当てた関数の中なら、[コンソール](#コンソール)に出る）。`select` がテーブルでない、`options` がテーブルでない・空・文字列（数値も可）でない要素がある、`selected` が `1` 〜 `options` の数の整数でない（`2.0` は可、`2.5` と `"2"` は不可）。`select.label` など、使わないキーは無視する。`buttons` と `checkboxes` は、型の合わない要素を黙って捨てる。
 
 #### `dialog_filter_list`
 
@@ -1140,13 +1174,13 @@ Miata.config.set_statusbar(nil)              -- 解除（C++ の既定の表示�
 #### いつ呼ばれるか
 
 - **変わったときだけ**: **どちらかのペイン**のカーソルのファイル・一覧（再読み込み・ソート・絞り込み・隠しファイルの切り替え）、マーク、ダイアログの開閉、キー入力の途中、関数の差し替えのどれかが変わったときに、1 回（1 つのキー関数の中で何度動いても、1 回）。反対側のペインも見る（反対側を、読むだけのコマンドで読む関数が、反対側の変化で呼び直されるように）。何も変わらなければ、呼ばれない（アイドルの間は、毎ティックの比較だけ）。キーを押した直後（次のティックを待たずに）と、毎ティック（検索・絞り込みの入力中のカーソルの移動など、キー関数を通らない変化）に確かめる。**時間で変わる表示（時計）はできない**
-- **関数の中では、何も変えない**: 画面や状態を変えるコマンド（`navigate_*` `mark*` `reload` `jump_to` `trash` `dialog_*` など）と、画面を変える設定（`Miata.config.set_show_icons` / `set_show_hidden` / `set_show_statusbar`）は、Lua のエラーになる（状態を変えると、毎回、関数が呼び直されるため）。読むだけのコマンド（`current_pane` `pane_path` `cursor_entry` `marked_entries` `hidden_mark_count` `current_sort` `history_list` `exists` `check_transfer` `file_info`）と、それ以外の `Miata.config.*`（`get_*`・`set_statusbar`・フォント・色など）は呼べる。`ctx` に無い情報（反対側のペインのフォルダなど）は、読むだけのコマンドで読む
+- **関数の中では、何も変えない**: 画面や状態を変えるコマンド（`navigate_*` `mark*` `reload` `jump_to` `trash` `dialog_*` など）と、画面を変える設定（`Miata.config.set_show_icons` / `set_show_hidden` / `set_show_statusbar` / `set_show_console`）は、Lua のエラーになる（状態を変えると、毎回、関数が呼び直されるため）。読むだけのコマンド（`current_pane` `pane_path` `cursor_entry` `marked_entries` `hidden_mark_count` `current_sort` `history_list` `exists` `check_transfer` `file_info`）と、それ以外の `Miata.config.*`（`get_*`・`set_statusbar`・フォント・色など）は呼べる。`ctx` に無い情報（反対側のペインのフォルダなど）は、読むだけのコマンドで読む
 - メインの Lua の中で、**コルーチンの外**で呼ばれる（`dialog_*` のような、待つ関数は、yield がエラーになる）
 - 1 回の呼び出しは、**命令数の上限（500 万命令）**で打ち切られる（無限ループで、アプリが固まらないため）。`os.execute` のような、外のコマンドの待ちは、止められない（重い処理を書かないこと）
 
 #### エラー
 
-実行時のエラー・戻り値の型違い・命令数の上限は、**`set_statusbar` で関数を差し替える（または解除する）まで**、バーの左に `Lua: <理由>` と出し続け、関数は呼び直さない。右（マークの要約）は、既定のまま。キー列の入力の途中は、候補を優先する（壊れた関数のせいで、候補が見えなくならない）。標準出力にも 1 回出す。`set_statusbar` に、関数でも `nil` でもない値を渡すと、エラー（設定を変えない）。
+実行時のエラー・戻り値の型違い・命令数の上限は、**`set_statusbar` で関数を差し替える（または解除する）まで**、バーの左に `Lua: <理由>` と出し続け、関数は呼び直さない。右（マークの要約）は、既定のまま。キー列の入力の途中は、候補を優先する（壊れた関数のせいで、候補が見えなくならない）。[コンソール](#コンソール)にも、赤い行で 1 回出す（`statusbar: <理由>`）。`set_statusbar` に、関数でも `nil` でもない値を渡すと、エラー（設定を変えない）。
 
 #### 差し替え
 
@@ -1178,10 +1212,30 @@ Miata.config.set_statusbar(function(ctx)
 end)
 ```
 
+### コンソール
+
+[コンソール](#コンソール)（ブラウザ領域とステータスバーの間のログのペイン）を操作するコマンド。`Miata.command` の中。**画面を変えるコマンド**なので、設定の読み込み中（ファイルの最上位）と、ステータスバーの Lua の関数の中では、エラーになる（キーに割り当てた関数の中で使う）。表示の入り切りは、コマンドではなく設定 `set_show_console` / `get_show_console`（[設定](#設定)）。
+
+```lua
+Miata.command.console_clear()        -- 行を全部捨てる（引数は見ない）
+Miata.command.console_copy()         -- 全行を、クリップボードへ（行を改行でつなぐ。色の別は失われる）。戻り値: コピーできたか。コピーする文字列が空（行が無い・空行だけ）のときは、何もせず false（クリップボードを、空で上書きしない）
+Miata.command.console_scroll(n)      -- n 行ぶん、スクロールする。正で下（新しい方）、負で上。整数だけ（3.0 は可。1.5・"3"・nil・引数なしは、エラー）。端で止まる。閉じているときは、何もしない
+```
+
+`print` は、そのまま使える（コンソールに出る）。**専用の `log` 関数は無い**。`io.stderr:write("…\n")` と `warn("…")` は、赤い行になる。既定のキーは、開閉の `zc` だけ（`console_*` は、`quick_look_zoom` と同じく、使うなら、自分で `bind` する）。
+
+```lua
+-- ~/.config/miata/init.lua の例
+Miata.command.bind("n", "zj", function() Miata.command.console_scroll(5) end, "コンソールを下へ")
+Miata.command.bind("n", "zk", function() Miata.command.console_scroll(-5) end, "コンソールを上へ")
+Miata.command.bind("n", "zx", function() Miata.command.console_clear() end, "コンソールを消去")
+Miata.command.bind("n", "zy", function() Miata.command.console_copy() end, "コンソールの全行をコピー")
+```
+
 ### ユーティリティ
 
 ```lua
-Miata.util.pp(value)          -- デバッグ出力（pretty print）
+Miata.util.pp(value)          -- デバッグ出力（pretty print。print で出すので、コンソールに出る）
 Miata.util.path_join(dir, name) -- フォルダ dir の中の名前 name の絶対パス（[ファイル操作](#make_directory--rename_to--exists)）
 ```
 
@@ -1200,17 +1254,22 @@ Miata.config.color.alias          = "#ff8ad8ff"  -- 一覧の右側の札 <ALIAS
 Miata.config.color.cloud          = "#7ec8ffff"  -- 一覧の右側の札 <CLOUD>（ダウンロード前のファイル）の文字。札の部分だけ（サイズは行の色のまま）
 Miata.config.color.statusbar_background = "#112233ff"  -- ステータスバーの背景（alpha は使わない）。background とは独立
 Miata.config.color.statusbar_text = "#aaff55ff"  -- ステータスバーの文字。右のマークの要約と上端の線は、この色の薄い色。normal_text とは独立
+Miata.config.color.console_error  = "#ff6b6bff"  -- コンソールの、エラーの行（赤い行: Lua のエラー・警告・ファイル操作の失敗・標準エラー）の文字。背景とふつうの行の文字は、background / normal_text（独立した設定ではない）
 
 Miata.config.set_font("フォント名")   -- 未指定時はシステムデフォルトフォント
 Miata.config.set_font_size(14)        -- ファイル一覧の行の高さも連動して変わる
 Miata.config.set_statusbar_font_size(12) -- ステータスバーの文字のサイズ（pt）。1〜200 の数値、既定は 12（0 や "12" はエラー）。バーの高さも連動して変わる。set_font_size とは独立
 Miata.config.set_history_limit(300)   -- フォルダの履歴の件数（左右のペイン合わせて）。0〜10000 の整数、既定は 100。0 なら記録しない
+Miata.config.set_console_max_lines(2000) -- コンソールが持つ行数の上限。1〜100000 の整数、既定は 1000（0 や 3.5 や "10" はエラー）。超えたら、古い行から捨てる。起動時にだけ読む
+Miata.config.set_console_height(12)   -- コンソールを開いたときの高さ（行数）。1〜100 の整数、既定は 10。起動時にだけ読む。窓が低いときは、ブラウザ領域に 120pt を残して縮む
 Miata.config.set_show_icons(false)    -- ファイル名の頭のアイコンを出すか。true / false だけ（0 や "true" はエラー）。既定は出す
 Miata.config.get_show_icons()         -- ファイル名の頭のアイコンを出しているか（いまの状態。true / false）。set_show_icons の値と、. での切り替えを反映する
 Miata.config.set_show_hidden(true)    -- 隠しファイル（名前の頭が . のもの・Finder の「隠す」フラグ付き）を出すか。true / false だけ。既定は隠す
 Miata.config.get_show_hidden()        -- 隠しファイルを出しているか（いまの状態。true / false）。set_show_hidden の値と、zh での切り替えを反映する
 Miata.config.set_show_statusbar(false) -- ステータスバー（ウィンドウの下端）を出すか。true / false だけ。既定は出す
 Miata.config.get_show_statusbar()     -- ステータスバーを出しているか（いまの状態。true / false）。set_show_statusbar の値と、zs での切り替えを反映する
+Miata.config.set_show_console(true)   -- コンソール（ブラウザ領域とステータスバーの間のログのペイン）を出すか。true / false だけ。既定は出さない
+Miata.config.get_show_console()       -- コンソールを出しているか（いまの状態。true / false）。set_show_console の値と、zc での切り替えを反映する
 Miata.config.set_statusbar(fn)        -- ステータスバーの内容を決める関数（nil で解除）。ステータスバーの内容を参照。実行中にも差し替えられる
 Miata.config.set_editor('open -a "Visual Studio Code" %f') -- エディタ（e / edit が使う）。%f を含む一行のコマンド。未設定なら 'open -t %f'（システムの既定のテキストエディタ）。ファイルを開くの「エディタ」を参照
 Miata.config.get_editor()             -- いまのエディタのコマンド（未設定なら 'open -t %f'）
@@ -1218,23 +1277,24 @@ Miata.config.get_editor()             -- いまのエディタのコマンド（
 
 色は `"#rrggbb"` か `"#rrggbbaa"`（16 進）で書く。
 
-- **背景は、OS のテーマ（Light / Dark）に関わらず、設定した色で塗る**（ファイル一覧、ヘッダー、検索・絞り込みバー、ステータスバー（`statusbar_background`）、ウィンドウ、Quick Look の覆い）。**alpha は使わない**: `"#rrggbbaa"` と書いても、常に不透明に塗る（半透明にすると、後ろの OS のテーマの色が混ざるため）。**例外は、進捗パネルの背景だけ**で、背景色の RGB に、固定の透過度（0.85）を掛けて、下の一覧を透かす（設定の alpha ではない）。
+- **背景は、OS のテーマ（Light / Dark）に関わらず、設定した色で塗る**（ファイル一覧、ヘッダー、検索・絞り込みバー、ステータスバー（`statusbar_background`）、コンソール、ウィンドウ、Quick Look の覆い）。**alpha は使わない**: `"#rrggbbaa"` と書いても、常に不透明に塗る（半透明にすると、後ろの OS のテーマの色が混ざるため）。**例外は、進捗パネルの背景だけ**で、背景色の RGB に、固定の透過度（0.85）を掛けて、下の一覧を透かす（設定の alpha ではない）。
 - 背景の明るさに合わせて、ペインの境目の線やスクロールバー（OS が描く部品）は、暗い背景なら Dark 用、明るい背景なら Light 用の色になる。
 - **タイトルバーと、ダイアログ（`dialog_*`）は、これまでどおり OS のテーマに従う**（`Miata.config.color` は効かない）。
-- 既定の設定（`resources/test.lua`）は、暗い背景に明るい文字の配色。背景を明るくするときは、`normal_text` と `normal_file` も暗い色にする（検索の一致部分の背景 `search_match` / `search_current` と、絞り込みの `filter_match` も、既定は暗い背景用の暗い色なので、明るい色に変える。札の文字 `symlink` / `alias` は、既定が暗い背景用の明るい色なので、暗い色に変える。ステータスバーの `statusbar_background` / `statusbar_text` は、`background` / `normal_text` とは独立した設定なので、これも合わせて変える）。
+- 既定の設定（`resources/test.lua`）は、暗い背景に明るい文字の配色。背景を明るくするときは、`normal_text` と `normal_file` も暗い色にする（検索の一致部分の背景 `search_match` / `search_current` と、絞り込みの `filter_match` も、既定は暗い背景用の暗い色なので、明るい色に変える。札の文字 `symlink` / `alias` は、既定が暗い背景用の明るい色なので、暗い色に変える。ステータスバーの `statusbar_background` / `statusbar_text` は、`background` / `normal_text` とは独立した設定なので、これも合わせて変える。コンソールのエラーの行 `console_error` は、既定が暗い背景用の明るい赤なので、暗い赤に変える）。
 
-これらは、[`~/.config/miata/init.lua`](#設定ファイルinitlua) に書いて、組み込みの既定の設定を上書きできる。設定は起動時にだけ読み込む（変えたら、起動し直す）。**例外は、アイコンの表示・隠しファイルの表示・ステータスバーの表示と、ステータスバーの関数**で、実行中に `set_show_icons` / `set_show_hidden` / `set_show_statusbar` / `set_statusbar` を呼ぶと、値が変わったときは、すぐ反映される（既定のキーは、`.` と `zh` と `zs`。保存はしない。下記と、[ステータスバーの内容](#ステータスバーの内容)）。エディタ（`set_editor`）は、`edit` を呼ぶたびに読むので、実行中に呼んでも、次の `edit` から使われる（画面は変わらない）。
+これらは、[`~/.config/miata/init.lua`](#設定ファイルinitlua) に書いて、組み込みの既定の設定を上書きできる。設定は起動時にだけ読み込む（変えたら、起動し直す）。**例外は、アイコンの表示・隠しファイルの表示・ステータスバーの表示・コンソールの表示と、ステータスバーの関数**で、実行中に `set_show_icons` / `set_show_hidden` / `set_show_statusbar` / `set_show_console` / `set_statusbar` を呼ぶと、値が変わったときは、すぐ反映される（既定のキーは、`.` と `zh` と `zs` と `zc`。保存はしない。下記と、[ステータスバーの内容](#ステータスバーの内容)）。コンソールの行数の上限・高さ（`set_console_max_lines` / `set_console_height`）は、起動時にだけ読む（実行中に呼ぶと、値だけが変わって、いまのコンソールには効かない）。エディタ（`set_editor`）は、`edit` を呼ぶたびに読むので、実行中に呼んでも、次の `edit` から使われる（画面は変わらない）。
 
-#### 実行中の切り替え（`set_show_icons` / `set_show_hidden` / `set_show_statusbar`）
+#### 実行中の切り替え（`set_show_icons` / `set_show_hidden` / `set_show_statusbar` / `set_show_console`）
 
 ```lua
--- 反転して切り替える（既定のキー . と zh と zs は、これ）
+-- 反転して切り替える（既定のキー . と zh と zs と zc は、これ）
 Miata.config.set_show_icons(not Miata.config.get_show_icons())
 Miata.config.set_show_hidden(not Miata.config.get_show_hidden())
 Miata.config.set_show_statusbar(not Miata.config.get_show_statusbar())
+Miata.config.set_show_console(not Miata.config.get_show_console())
 ```
 
-アイコンの表示と、隠しファイルの表示と、ステータスバーの表示は、実行中に `set_*` を呼ぶと、**値が変わったとき、すぐ反映される**（アイコンは、両ペインを描き直す。隠しファイルは、両ペインの一覧を作り直す。カーソルは、同じファイルに留まる。隠れたら、近くの行へ。絞り込みバーの件数も更新される。ステータスバーは、バーが隠れて、ブラウザ領域が全面になる。出し直すと、いまの状態で、すぐ組み直す）。同じ値を指定したときは、何もしない。いまの状態は `get_show_icons()` / `get_show_hidden()` / `get_show_statusbar()` で読める（読むだけで、状態は変えない）。切り替えは保存しない（起動し直すと、設定の値になる）。ダイアログの表示中でも動く。専用の `toggle` コマンドは無い（`set(not get)` で足りる）。
+アイコンの表示と、隠しファイルの表示と、ステータスバーの表示と、コンソールの表示は、実行中に `set_*` を呼ぶと、**値が変わったとき、すぐ反映される**（アイコンは、両ペインを描き直す。隠しファイルは、両ペインの一覧を作り直す。カーソルは、同じファイルに留まる。隠れたら、近くの行へ。絞り込みバーの件数も更新される。ステータスバーは、バーが隠れて、ブラウザ領域が全面になる。出し直すと、いまの状態で、すぐ組み直す。コンソールは、出すと、ブラウザ領域が縮み、いちばん下から見せる）。同じ値を指定したときは、何もしない。いまの状態は `get_show_icons()` / `get_show_hidden()` / `get_show_statusbar()` / `get_show_console()` で読める（読むだけで、状態は変えない）。切り替えは保存しない（起動し直すと、設定の値になる）。ダイアログの表示中でも動く。専用の `toggle` コマンドは無い（`set(not get)` で足りる）。
 
 設定の読み込み中（`init.lua` の最上位）は、画面が無いので、値だけが変わる（起動時の一覧は、その値で作られる）。
 

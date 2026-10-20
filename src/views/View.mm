@@ -2,6 +2,7 @@
 #include <format>
 #include "View.h"
 #include "../Config.h"
+#include "../Log.h"
 #include "../platform.h"
 #include "../Utf8.h"
 
@@ -41,19 +42,29 @@ namespace {
     {
         return pane == miata::views::constants::Pane::Left ? kPaneKeyLeft : kPaneKeyRight;
     }
+
+    // コンソールを出すとき、ブラウザ領域に残す最小の高さ(pt)。窓が低いときは、コンソールのほうが縮む
+    constexpr CGFloat kMinBrowserHeight = 120;
 }
 
-// ウィンドウの内容(contentView)の直下に置く、縦の並び: 上がブラウザ領域、下がステータスバー(全幅の 1 行)。
+// ウィンドウの内容(contentView)の直下に置く、縦の並び: 上がブラウザ領域、その下がコンソール(全幅。出しているときだけ)、
+// 下端がステータスバー(全幅の 1 行)。
 // 子の位置は、明示的に計算する(isFlipped=YES なビューでは、autoresizingMask の Y 軸のマージンの意味が反転する癖があり、
 // このコードベースは、FileListView.mm の _MiataFileListLayoutContainer のように、フレーム変更時に計算し直す)。
 // ブラウザ領域の中(NSSplitView・Quick Look の覆い・入力バー)は、ブラウザの大きさに追従する
 @interface _MiataMainLayout : NSView
 @property (nonatomic, weak) NSView* browserView;
+@property (nonatomic, weak) NSView* consoleView;
 @property (nonatomic, weak) NSView* statusView;
 @property (nonatomic, assign) CGFloat statusHeight;
 // バーを隠すか。真なら、バーは隠れ(高さ 0)、ブラウザ領域が全面になる(設定 show_statusbar)。変えると、並べ直す。
 // 「隠す」側を持つのは、既定(未設定=NO)が「出す」になるため(並びの部品を直接作る場合も、バーが出る)
 @property (nonatomic, assign) BOOL statusHidden;
+// コンソールを出すか(設定 show_console)。既定(未設定=NO)が「出さない」なので、「出す」側を持つ。変えると、並べ直す
+@property (nonatomic, assign) BOOL consoleShown;
+// コンソールを開いたときの高さ(pt)と、これより低いなら出さない高さ(1 行ぶん)
+@property (nonatomic, assign) CGFloat consoleHeight;
+@property (nonatomic, assign) CGFloat consoleMinHeight;
 - (void)layoutChildren;
 @end
 @implementation _MiataMainLayout
@@ -63,13 +74,27 @@ namespace {
     _statusHidden = hidden;
     [self layoutChildren];
 }
+- (void)setConsoleShown:(BOOL)shown
+{
+    _consoleShown = shown;
+    [self layoutChildren];
+}
 - (void)layoutChildren
 {
     CGFloat w = self.bounds.size.width;
     CGFloat h = self.bounds.size.height;
     CGFloat bar = self.statusHidden ? 0 : MIN(self.statusHeight, h);
+    CGFloat available = h - bar;
+    // コンソールは、ブラウザ領域に最小の高さを残して、収まるだけ。窓が低くて、1 行も出せないなら、出さない(負の高さも作らない)
+    CGFloat console = 0;
+    if (self.consoleShown) {
+        console = MIN(self.consoleHeight, MAX((CGFloat)0, available - kMinBrowserHeight));
+        if (console < self.consoleMinHeight) console = 0;
+    }
     self.statusView.hidden = self.statusHidden;
-    self.browserView.frame = NSMakeRect(0, 0, w, h - bar);
+    self.consoleView.hidden = console <= 0;
+    self.browserView.frame = NSMakeRect(0, 0, w, available - console);
+    self.consoleView.frame = NSMakeRect(0, available - console, w, console);
     self.statusView.frame = NSMakeRect(0, h - bar, w, bar);
 }
 - (void)setFrameSize:(NSSize)newSize
@@ -86,21 +111,29 @@ namespace miata::views {
         // ダイアログ表示中はファイルのドラッグ開始を受け付けない。
         browser_->SetDragGuard([this] { return !IsAnyDialogOpened(); });
 
-        // ブラウザ領域とステータスバーの縦の並び。contentView の全面に、窓に合わせて広がる
+        // ブラウザ領域・コンソール・ステータスバーの縦の並び。contentView の全面に、窓に合わせて広がる
         // (中の位置は、_MiataMainLayout が、フレームが変わるたびに、明示的に計算する)
         NSView* content = (__bridge NSView*)pl_get_content_view();
         NSView* browser_view = (__bridge NSView*)browser_->NativeView();
+        console_view_ = std::make_unique<ConsoleView>(models::ConsoleLog::Instance());
+        NSView* console_view = (__bridge NSView*)console_view_->NativeView();
         status_bar_ = std::make_unique<StatusBar>();
         NSView* status_view = (__bridge NSView*)status_bar_->NativeView();
 
         browser_view.autoresizingMask = NSViewNotSizable; // 大きさは、_MiataMainLayout が決める
+        console_view.autoresizingMask = NSViewNotSizable;
         _MiataMainLayout* layout = [[_MiataMainLayout alloc] initWithFrame:content.bounds];
         layout.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         layout.browserView = browser_view;
+        layout.consoleView = console_view;
         layout.statusView = status_view;
         layout.statusHeight = (CGFloat)StatusBar::Height();
+        layout.consoleHeight = (CGFloat)ConsoleView::Height(Config::ConsoleHeight());
+        layout.consoleMinHeight = (CGFloat)ConsoleView::Height(1);
         layout.statusHidden = !Config::ShowStatusBar(); // 設定は、View を作る前に読み終えている
+        layout.consoleShown = Config::ShowConsole();
         [layout addSubview:browser_view];
+        [layout addSubview:console_view];
         [layout addSubview:status_view];
         [layout layoutChildren];
         [content addSubview:layout];
@@ -142,6 +175,9 @@ namespace miata::views {
         // 文面にはパスが入る(whatに埋め込まれる)。UTF-8として不正なバイトがあると(Luaのjump_toに渡したパスなど)、
         // NSStringにできず、ダイアログのラベル(labelWithString:)が例外で落ちるので、U+FFFDに置き換える
         auto reason = RepairUtf8(std::format("{}: {}", what, error.message));
+        // ログ(コンソールの赤い行)にも残す: ダイアログを閉じた後も読める。ファイル操作・ジャンプ・開く・edit の失敗は、
+        // 全部ここを通る。権限の案内の文面は、画面のダイアログだけ
+        LogError(reason);
         if (!error.permission_denied) {
             RequestDialog(std::make_shared<ConfirmDialog>(
                 [](IDialog&) {},
@@ -482,6 +518,33 @@ namespace miata::views {
         // バーの出入りに合わせて、ブラウザ領域の高さを直す(並べ直す)。バーの内容は、出し直したときの、次の組み立てが作る
         _MiataMainLayout* layout = (__bridge _MiataMainLayout*)main_layout_;
         layout.statusHidden = !Config::ShowStatusBar();
+    }
+
+    void View::UpdateConsole()
+    {
+        // 隠している間は、何もしない(ログは貯まり続ける)。出し直すとき(RefreshConsoleVisibility)に、作り直す
+        if (!Config::ShowConsole()) return;
+        console_view_->Sync();
+    }
+
+    void View::RefreshConsoleVisibility()
+    {
+        // 出入りに合わせて、ブラウザ領域の高さを直す(並べ直す)。出すときは、内容を作り直して、いちばん下を見せる(次の UpdateConsole で)。
+        // ここで同期しない: 呼ばれるのは、Lua のキー関数の中(zc など)で、同期は、KeyDown の出口と、毎ティックが行う
+        console_view_->Invalidate(); // 隠すときに立てても、出すときにまた立つ。出し直したときは、必ず作り直す
+        _MiataMainLayout* layout = (__bridge _MiataMainLayout*)main_layout_;
+        layout.consoleShown = Config::ShowConsole();
+    }
+
+    void View::ScrollConsole(int64_t lines)
+    {
+        if (!Config::ShowConsole()) return;
+        console_view_->ScrollLines(lines);
+    }
+
+    ConsoleView& View::GetConsoleView()
+    {
+        return *console_view_;
     }
 
     const StatusText& View::GetStatusText() const

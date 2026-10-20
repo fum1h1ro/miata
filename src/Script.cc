@@ -22,10 +22,12 @@ namespace miata {
     Script::Script()
     {
         L_ = lua_newstate(lua_Alloc, nullptr, 0);
+        // lua_newstate を直接呼ぶと、警告の関数が入らず、warn() と、VM が出す __gc のエラーの警告が、黙って捨てられる
+        lua_setwarnf(L_, &Script::WarnFunction, this);
         lua_gc(L_, LUA_GCINC, 150, 100, 13);
         luaL_openlibs(L_);
-        auto version = lua_version(L_);
-        printf("Lua Version: %f\n", version);
+        // コンソールの最初の方の行になる("Lua 5.5.1")
+        std::println("{}", LUA_RELEASE);
     }
 
     Script::~Script()
@@ -44,14 +46,44 @@ namespace miata {
         }
     }
 
-    void Script::Initialize()
+    std::optional<std::string> Script::Initialize()
     {
         auto r = DoResourceFile("base.lua");
-        if (!r) {
-            std::println("error: {}", r.error());
-            return;
-        }
+        if (!r) return r.error();
         SetupCommands();
+        return std::nullopt;
+    }
+
+    void Script::SetWarningHandler(std::function<void(const std::string&)> handler)
+    {
+        warning_handler_ = std::move(handler);
+    }
+
+    void Script::WarnFunction(void* ud, const char* message, int to_continue)
+    {
+        static_cast<Script*>(ud)->OnWarning(message, to_continue != 0);
+    }
+
+    void Script::OnWarning(const char* message, bool to_continue)
+    {
+        // コアの中(GC の最中を含む)から呼ばれる: Lua の API を呼ばず、C のフレームに例外を通さない
+        // (メモリ不足などで投げたら、その警告を捨てる)
+        try {
+            // 続きでなく、'@' で始まる(最後の)断片だけが、制御メッセージ("@on" / "@off"。lauxlib の標準の warn 関数と同じ)
+            if (!warning_continuing_ && !to_continue && message[0] == '@') {
+                if (std::strcmp(message, "@off") == 0) warning_enabled_ = false;
+                else if (std::strcmp(message, "@on") == 0) warning_enabled_ = true;
+                return;
+            }
+            // 出さない間も、断片の続きかどうかは追う(続きの断片が '@' で始まっても、制御メッセージにしない)
+            warning_continuing_ = to_continue;
+            warning_text_ += message;
+            if (to_continue) return;
+            if (warning_enabled_ && warning_handler_) warning_handler_(warning_text_);
+        }
+        catch (...) {
+        }
+        if (!warning_continuing_) warning_text_.clear();
     }
 
     std::filesystem::path Script::UserConfigFile()
@@ -77,24 +109,39 @@ namespace miata {
             }
         }
 
-        for (auto& e : errors) {
-            std::println("error: {}: {}", e.file, e.message);
+        // エラーを出すのは、呼び出し側(Application)の仕事(コンソールのログと、画面のダイアログ)
+        return errors;
+    }
+
+    std::vector<Script::ThreadError> Script::Update()
+    {
+        std::vector<ThreadError> errors;
+        for (auto& [name, param] : threads_) {
+            if (param->status_ != LUA_YIELD) continue;
+            const int status = lua_resume(param->L_, nullptr, 0, &param->nresult_);
+            if (auto error = Settle(name, *param, status)) errors.push_back(std::move(*error));
         }
         return errors;
     }
 
-    bool Script::Update()
+    std::optional<Script::ThreadError> Script::Settle(const std::string& name, ThreadParam& param, int status)
     {
-        bool any = false;
-        for (auto& [_, v] : threads_) {
-            auto& param = v;
-            if (param->status_ == LUA_YIELD) {
-                param->status_ = lua_resume(param->L_, nullptr, 0, &param->nresult_);
-                lua_pop(param->L_, param->nresult_);
-                any = true;
-            }
+        if (status == LUA_OK || status == LUA_YIELD) {
+            lua_pop(param.L_, param.nresult_);
+            param.nresult_ = 0;
+            param.status_ = status;
+            return std::nullopt;
         }
-        return any;
+
+        // 失敗: lua_resume は、スタックを巻き戻さず、エラーの値を先頭に残す。閉じる前に読む
+        ThreadError error{name, ErrorMessage(param.L_)};
+        // コルーチンを閉じて(__close の変数があれば、ここで走る。その失敗は、元のエラーを報告したので、見ない)、
+        // 再利用できる状態に戻す
+        lua_closethread(param.L_, nullptr);
+        lua_settop(param.L_, 0);
+        param.nresult_ = 0;
+        param.status_ = LUA_OK;
+        return error;
     }
 
     void Script::SetupCommands()
@@ -239,41 +286,29 @@ namespace miata {
         return {};
     }
 
-    std::expected<bool, std::string> Script::InvokeRefFunctionOnThread(std::string thread_key, int ref)
+    std::optional<Script::ThreadError> Script::InvokeRefFunctionOnThread(const std::string& name, int ref)
     {
-        auto it = threads_.find(thread_key);
-
-        if (it != threads_.end()) {
-            auto& param = it->second;
-            if (param->status_ == LUA_YIELD) {
-                return std::unexpected("thread is already running");
-            }
-            if (param->status_ != LUA_OK) {
-                if (lua_closethread(param->L_, nullptr)) {
-                    auto error = ErrorMessage(param->L_);
-                    lua_pop(param->L_, 1);
-                    return std::unexpected(error);
-                }
-            }
-        }
-        else {
+        auto it = threads_.find(name);
+        if (it == threads_.end()) {
+            // 新しいコルーチンは、レジストリに固定して(GC に回収されないように)、メインのスタックには残さない。残すと、新しい
+            // 名前のキー列のたびに 1 つ積み上がり、20 個(LUA_MINSTACK)を超えると、スタックの容量の契約違反になる
+            // (lua_newthread も lua_rawgeti も、空きを確かめない。配列の外へ書く)。参照は、プロセスの終わりまで解放しない
             auto thread = lua_newthread(L_);
-            threads_[thread_key] = std::make_unique<ThreadParam>(thread);
-            it = threads_.find(thread_key);
+            const int thread_ref = luaL_ref(L_, LUA_REGISTRYINDEX); // 値を取り出して、レジストリに固定する
+            it = threads_.emplace(name, std::make_unique<ThreadParam>(thread, thread_ref)).first;
         }
 
-        auto& param = it->second;
-        auto orig = lua_gettop(L_);
-        lua_rawgeti(L_, LUA_REGISTRYINDEX, ref);
-        lua_xmove(L_, param->L_, 1);
-        param->status_ = lua_resume(param->L_, nullptr, 0, &param->nresult_);
-        if (param->status_ != LUA_OK && param->status_ != LUA_YIELD) {
-            auto error = ErrorMessage(param->L_);
-            lua_pop(param->L_, 1);
-            return std::unexpected(error);
+        auto& param = *it->second;
+        if (param.status_ == LUA_YIELD) {
+            return ThreadError{name, "thread is already running"};
         }
-        lua_settop(L_, orig);
-        return true;
+
+        // ここに来るコルーチンは、新しいか、前の実行が終わった(LUA_OK)もの。失敗したものは、Settle が後始末をしてあるので、
+        // 同じキーを押し直しても、関数は実行される
+        lua_rawgeti(L_, LUA_REGISTRYINDEX, ref);
+        lua_xmove(L_, param.L_, 1);
+        const int status = lua_resume(param.L_, nullptr, 0, &param.nresult_);
+        return Settle(name, param, status);
     }
 
 
