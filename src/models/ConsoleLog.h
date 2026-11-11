@@ -59,6 +59,13 @@ namespace miata::models {
         // とき、書いた順に並ぶように)。任意のスレッドから呼べる。例外は投げない
         void Write(LogKind kind, std::string_view bytes) noexcept;
 
+        // 完結した 1 行(区切りを含まない、生のバイト列)を、kind の行として足す。Write と違い、持ち越している未完の行
+        // (標準出力・標準エラーの書きかけ)には、触れない: 続きにもしないし、確定もしない。別の書き手(起動したコマンドの
+        // 出力など。ShellJobManager)の行が、print の書きかけの行と、つながらないようにするため。行の組み立て(どこで
+        // 切れて届いてもよいバイト列を、行にする)は、呼ぶ側の仕事(LineAssembler)。整形(SanitizeLine)は Write と同じ。
+        // truncated は、呼ぶ側が、長すぎる行の残りを捨てたことを伝える印(「…」が付く)。任意のスレッドから呼べる。例外は投げない
+        void AppendLine(LogKind kind, std::string_view raw, bool truncated = false) noexcept;
+
         // 持ち越している未完の行を、1 行として確定する(テスト用。Write は、他方の種類の分を自分で確定する)
         void CommitPending() noexcept;
 
@@ -87,7 +94,8 @@ namespace miata::models {
         };
 
         // どれも、ロックを取ったまま呼ぶ
-        void CommitLocked(LogKind kind);                     // kind の未完の行を、(空でも)1 行にする。上限を超えた古い行は捨てる
+        void PushLineLocked(LogKind kind, std::string text); // 整形済みの 1 行を足す。上限を超えた古い行は捨てる
+        void CommitLocked(LogKind kind);                     // kind の未完の行を、(空でも)1 行にする(PushLineLocked)
         bool HasPendingLocked(LogKind kind) const;           // kind の未完の行に、中身があるか
         void AppendToPartialLocked(Partial& partial, std::string_view piece);
 
