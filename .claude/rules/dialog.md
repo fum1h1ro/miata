@@ -25,7 +25,7 @@ paths:
 |------------|------------|------|
 | `dialog_confirm(message, button_text)` | `"confirm"` | OK ボタンのみ |
 | `dialog_yes_no(message, default_focus, yes_text, no_text)` | `"yesno"` | YES/NO ボタン。最初のカーソルと「既定」の強調は、`default_focus` が true（省略時）なら YES、false なら NO（`YesNoDialog::OnOpen` が `SetInitialFocus` で揃える）。Esc は常に false |
-| `dialog_input(message, initial)` | `"inputtext"` | `NSTextField` 1つ。戻り値は文字列 or nil |
+| `dialog_input(message, initial, opts)` | `"inputtext"` | 1 行の入力欄と「キャンセル」「OK」。Enter は OK、Esc はキャンセル。`opts.caret` は開いた直後のキャレット（`"all"` = 全選択（既定）/ `"start"` = 先頭）。戻り値は文字列 or nil。後述「1 行の入力欄」 |
 | `dialog_custom(spec)` | `"custom"` | チェックボックス・選択リスト（縦の行。行で Enter すると即確定）・複数ボタン。詳細は後述「選択リスト」 |
 | `dialog_filter_list(spec)` | `"filterlist"` | 大量の文字列(`items`)から `fzf` 絞り込みで1件選択。戻り値は文字列 or nil。行の幅に収まらない文字列は先頭を「…」で省く（フォルダの履歴など、パスの一覧向け） |
 
@@ -44,7 +44,21 @@ paths:
 --         Esc                          → nil
 ```
 
-**注意（テキストフィールドとキー入力の関係）**：`NSTextField` がダイアログ内で first responder になっている間（`dialog_input`/`dialog_filter_list` 表示中など）、`MiataRootView::keyDown:`（`platforms/osx.mm`）は一切呼ばれない。つまり通常のキーバインド経路（`KeyBindingMap::Dialog` → `IDialog::Navigate()` → `DialogPanel::NavigateUp/Down/...`）はテキストフィールドには効かない。矢印キー/Enter/Escape をテキスト入力と共存させる必要がある場合は、`FilterListDialog.mm` のように `NSTextFieldDelegate` の `control:textView:doCommandBySelector:`（IME 変換中は呼ばれないため日本語入力と安全に共存できる）で個別に横取りする。
+**注意（テキストフィールドとキー入力の関係）**：`NSTextField` がダイアログ内で first responder になっている間（`dialog_input`/`dialog_filter_list` 表示中など）、`MiataRootView::keyDown:`（`platforms/osx.mm`）は一切呼ばれない。つまり通常のキーバインド経路（`KeyBindingMap::Dialog` → `IDialog::Navigate()` → `DialogPanel::NavigateUp/Down/...`）はテキストフィールドには効かない。矢印キー/Enter/Escape をテキスト入力と共存させる必要がある場合は、`FilterListDialog.mm` のように `NSTextFieldDelegate` の `control:textView:doCommandBySelector:`（IME 変換中は呼ばれないため日本語入力と安全に共存できる）で個別に横取りする。`dialog_input` は、`DialogPanel::AddInputField` が、その delegate を持つ（後述「1 行の入力欄」）。**delegate を付けない入力欄は、Esc で閉じない**（`cancelOperation:` を、誰も受けない。実測）。
+
+## 1 行の入力欄（`dialog_input` / `InputTextDialog` / `DialogPanel::AddInputField`）
+
+`dialog_input` の入力欄。リネーム（`r`）・フォルダ作成（`K`）・コマンドラインの入力（`x`）が使う。ユーザー向けの仕様は README の `dialog_input`。ここには、設計の決定と罠を書く。
+
+- **`AddInputField(initial, caret, enter_id, escape_id)` は、`AddTextField` に 3 つを足したもの**（1 行・キー・キャレット）。`dialog_filter_list` の欄（`AddTextField` + 自前の delegate）は、変えていない（この欄の範囲の外。折り返す設定のまま）
+- **Enter / Esc は、欄の delegate（`_MiataInputFieldDelegate`）が、ボタンを選んだことにする**（`on_button_(enter_id / escape_id)`）: ボタンのクリックと同じ道を通るので、「次のランループで閉じる」と、「閉じた後の通知を捨てる」（`IDialog` の `!is_opened_`）が、そのまま効く。OK ボタンの `keyEquivalent`（Return。ウィンドウが前面のとき、AppKit が押す）と delegate の両方が届いても、2 回目は捨てられる（テスト `double_fire`）。delegate は、`insertNewline:` に YES を返すので、ふつうは、既定ボタンには回らない。**ヘッドレス（表示しないウィンドウ）では、既定ボタンは働かない**ので、delegate が無いと、Enter の確定を再現できなかった
+- **握りつぶすキー（実測した既定の挙動）**: Tab / Shift+Tab は、欄の文字を全部選択する（次の 1 打で、全部消える）。Option+Return（`insertNewlineIgnoringFieldEditor:`）と Ctrl+Return（`insertLineBreak:`）は、欄に改行を入れる。どれも、delegate が YES を返して、何もしない
+- **1 行の設定は `QueryBar` の入力欄と同じ**（`usesSingleLineMode`・`scrollable`・`wraps = NO`・`NSLineBreakByClipping`）: 既定の `NSTextField` は、欄の幅（368pt）を超えると、欄の中で折り返し、2 行目から先が見えなくなる（実測: 240 文字で 6 行ぶん）。枠のある欄・システムフォントでは、文字の縦位置は変わらない（PNG で確認。`QueryBar` の「確定後に上へずれる」罠は、枠の無い欄を、ラベルとして描くときの話）。**初期値の中の改行・タブ・CR は、消えない**（プログラムから入れた文字列は、そのまま残り、戻り値にも入る=実測。打って入れることは、できない）
+- **キャレットは、`Layout()` の `makeFirstResponder:` の直後に決める**: first responder にした時点で、AppKit が全選択する（`TextCaret::SelectAll` は、何もしない）。`Start` は、その後で `currentEditor.selectedRange = {0, 0}`。前に書いても、全選択で上書きされる（エディタが付くのも、first responder にした後）。その後のランループでも、保たれる（実測）。`"end"` は、作っていない（呼ぶ側が無い。足すなら、列挙と `Layout()` に 1 つずつ）
+- **ボタンを、入力欄より先に作る**（`InputTextDialog::OnOpen`）: 欄に、ボタンの ID を渡すため。画面の位置は、変わらない（ボタンの行は、`Layout()` が最後に置く。並びは、登録順に左から=「キャンセル」「OK」）。入力欄があるので、ボタンにカーソル（枠）は付かない
+- **delegate は、`DialogPanel::Impl` が持つ**（`NSTextField` の delegate は weak 参照）。次のランループへ逃がしたブロックは、delegate を持ち続けるので、`Hide()` で `panel` を nullptr にする（閉じて、破棄した後に、ブロックが走っても、パネルに触れない。テスト `close_then_fire`）
+- **検証は、`std::string` を作る前**（`CheckInputTextOptions`。`CheckCustomDialogSelect` と同じ作り）: `message` / `initial_text` は文字列か nil、`caret` は `"all"` / `"start"` か nil。検証なしに `GetTableField` を並べて呼ぶと、1 つ目の `std::string` を持ったまま、2 つ目が `luaL_error`（longjmp）しうる。`opts` の形（表か・知らない項目が無いか）は、`base.lua` の `dialog_input` が見る（`error(msg, 2)` で、呼んだ側の行番号が付く）。値は、C++ が見る（層ごとに 1 つ）。`message` と `initial_text` は `RepairUtf8` に通す（`message` には、フォルダのパスなど、ファイルシステムから来た文字列が入る）
+- **限界**: ⌘V は効かないことがある（メインメニューに Edit が無い）。開いたキーを長押しすると、キーリピートの 2 打目から先が、入力欄に入る（`caret = "start"` なら、初期値の前に入る。全選択なら、初期値を置き換える）。実際のウィンドウでの Return（既定ボタンとの重なり）と、日本語入力の変換中の Enter / Esc は、実機未確認（notes）
 
 ## 選択リスト（`dialog_custom` の `select`）
 

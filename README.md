@@ -446,7 +446,7 @@ end)
 - `"N"` `"D"` のように大文字で書いても同じ
 - 空文字 `""` は何も登録しない（エラーにもならない）。`n` `d` 以外の文字を含めると `unknown map` のエラーになり、**どのモードにも登録しない**（`unbind` も同じ）
 - `"nd"` は、Normal と Dialog の両方に同じ関数を割り当てるが、割り当てはモードごとに別々に管理される。`unbind("n", …)` は Normal の割り当てだけを外し、Dialog の割り当ては残る（両方を外すには `unbind("nd", …)`）。割り当てが無いキーの `unbind` は、エラーになる
-- テキスト入力欄にフォーカスがある間（`dialog_input`、`dialog_filter_list`）は、Dialog モードのキーバインドも効かない（テキスト入力が優先される）
+- テキスト入力欄にフォーカスがある間（`dialog_input`、`dialog_filter_list`）は、Dialog モードのキーバインドも効かない（テキスト入力が優先される。Enter と Esc は、入力欄が受けて、確定・取り消しになる）
 - 検索バー・絞り込みバーの入力欄にフォーカスがある間（`search` / `filter` で語を入力中）は、Normal モードのキーバインドも効かない（[ファイル名の検索](#ファイル名の検索)、[絞り込み](#絞り込み)）
 
 #### キーの書き方（`keys`）
@@ -663,7 +663,7 @@ end)
 
 ダイアログは `NSAlert` ではなく、非モーダルな `NSView` オーバーレイ（`DialogPanel`）で表示される。テキスト入力欄は本物の `NSTextField` を使うため macOS IME（日本語入力）にそのまま対応する。
 
-ボタンやチェックボックスを持つダイアログ（`dialog_confirm`、`dialog_yes_no`、`dialog_custom`）の中には、**カーソル**（枠が付いた項目）が 1 つある。`resources/test.lua` の既定では、`j` `k` `h` `l` と矢印キー（`<down>` `<up>` `<left>` `<right>`）で動かし、Enter でカーソルの項目を実行し（ボタン = 押す、チェックボックス = 切り替える、`dialog_custom` の選択リストの行 = 選んで閉じる）、Esc で取り消す。「既定」の見た目（強調）のボタンがあっても、Enter が押すのは、カーソルのある項目（`dialog_yes_no` は、強調したボタンにカーソルを置いて開くので、結果として、強調されたボタンが押される。`dialog_custom` は、`select` があればその行から、無ければ最初の項目から始まる）。入力欄のあるダイアログ（`dialog_input`、`dialog_filter_list`）は、入力欄がキーを受けるので、ここに書いたキー操作は効かない（[モード](#モードmode)）。
+ボタンやチェックボックスを持つダイアログ（`dialog_confirm`、`dialog_yes_no`、`dialog_custom`）の中には、**カーソル**（枠が付いた項目）が 1 つある。`resources/test.lua` の既定では、`j` `k` `h` `l` と矢印キー（`<down>` `<up>` `<left>` `<right>`）で動かし、Enter でカーソルの項目を実行し（ボタン = 押す、チェックボックス = 切り替える、`dialog_custom` の選択リストの行 = 選んで閉じる）、Esc で取り消す。「既定」の見た目（強調）のボタンがあっても、Enter が押すのは、カーソルのある項目（`dialog_yes_no` は、強調したボタンにカーソルを置いて開くので、結果として、強調されたボタンが押される。`dialog_custom` は、`select` があればその行から、無ければ最初の項目から始まる）。入力欄のあるダイアログ（`dialog_input`、`dialog_filter_list`）は、入力欄がキーを受けるので、ここに書いたキー操作は効かない（[モード](#モードmode)）。Enter と Esc は、入力欄が受けて、確定・取り消しになる（[`dialog_input`](#dialog_input)、[`dialog_filter_list`](#dialog_filter_list)）。
 
 ラベルに `&x` と書くと、キー1つで項目を選べる（[項目のショートカット](#項目のショートカット)）。
 
@@ -707,8 +707,17 @@ local result = Miata.command.dialog_yes_no("メッセージ", default, "はい",
 
 ```lua
 local text = Miata.command.dialog_input("プロンプト", "初期値")
--- text: 入力文字列 または nil（キャンセル）
+local line = Miata.command.dialog_input("プロンプト", "初期値", { caret = "start" })
+-- 入力した文字列（OK）または nil（キャンセル）
 ```
+
+1 行の入力欄と、「キャンセル」「OK」のボタン。
+
+- **Enter は OK、Esc はキャンセル**（ボタンは、マウスでも押せる）。日本語入力の変換中の Enter / Esc は、変換の確定・取り消しになる（ダイアログは閉じない）
+- **戻り値**: OK なら、入力欄の文字列（空のまま OK すると `""`）。キャンセルなら `nil`
+- **`opts.caret`**（省略可）: 開いた直後のキャレット。`"all"`（既定）は、初期値を全部選択する（打つと、初期値を置き換える。リネーム向き）。`"start"` は、先頭に置いて、何も選択しない（初期値の前に、打ち足す）
+- 入力欄は 1 行で、長い文字列は、折り返さずに横へスクロールする。Tab は無視する。Option+Return / Ctrl+Return でも、改行は入らない
+- `opts` が表でない・知らない項目がある・`caret` が上の 2 つ以外・プロンプトや初期値が文字列でない（`nil` は可）と、Lua のエラー（ダイアログは開かない）。プロンプトと初期値の、UTF-8 として不正なバイトは、`�` に置き換える
 
 #### `dialog_custom`
 

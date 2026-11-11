@@ -109,9 +109,25 @@ Miata = {
             end
             return Miata._private.dialog_result(handle, "yesno")
         end,
-        dialog_input = function(message, initial_text)
+        -- 1 行の入力欄と「キャンセル」「OK」のボタン。Enter は OK、Esc はキャンセル。戻り値は入力した文字列(OK)、
+        -- キャンセルしたら nil。opts(省略可)は { caret = "all" | "start" }: 開いた直後のキャレット。"all"(既定)は
+        -- 全部を選択する(打つと、初めの値を置き換える)。"start" は先頭に置く(初めの値の前に、打ち足す)。
+        -- opts が表でない・知らない項目があると、Lua のエラー(値の検査は、dialog_open がする)
+        dialog_input = function(message, initial_text, opts)
+            local caret = nil
+            if opts ~= nil then
+                if type(opts) ~= "table" then
+                    error('dialog_input: opts must be a table such as { caret = "start" }', 2)
+                end
+                for key in pairs(opts) do
+                    if key ~= "caret" then
+                        error("dialog_input: unknown option '" .. tostring(key) .. "'", 2)
+                    end
+                end
+                caret = opts.caret
+            end
             local handle = Miata._private.dialog_open("inputtext", {
-                message = message, initial_text = initial_text or ""
+                message = message, initial_text = initial_text or "", caret = caret
             })
             coroutine.yield()
             coroutine.yield()

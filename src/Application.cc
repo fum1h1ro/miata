@@ -75,6 +75,36 @@ namespace miata {
         lua_pop(L, 2); // selected, select
     }
 
+    // tidx にあるテーブル(dialog_open の "inputtext" の options)を検証して、caret(開いた直後のキャレット)を返す。
+    // message / initial_text は、文字列か nil。caret は、"all"(全選択。nil も)か "start"(先頭)。不正なら luaL_error
+    // (Lua のエラー。ダイアログは開かない)。CheckCustomDialogSelect と同じく、C++ のオブジェクト(std::string)を作る前に呼ぶ:
+    // この後の読み取り(GetTableField)は、エラーにならない
+    static views::TextCaret CheckInputTextOptions(lua_State* L, int tidx)
+    {
+        tidx = lua_absindex(L, tidx);
+        for (const char* key : {"message", "initial_text"}) {
+            lua_getfield(L, tidx, key);
+            if (!lua_isnil(L, -1) && lua_type(L, -1) != LUA_TSTRING) {
+                luaL_error(L, "dialog_input: %s must be a string", key);
+            }
+            lua_pop(L, 1);
+        }
+
+        views::TextCaret caret = views::TextCaret::SelectAll;
+        lua_getfield(L, tidx, "caret");
+        if (!lua_isnil(L, -1)) {
+            const char* name = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "";
+            if (std::strcmp(name, "start") == 0) {
+                caret = views::TextCaret::Start;
+            }
+            else if (std::strcmp(name, "all") != 0) {
+                luaL_error(L, "dialog_input: caret must be \"all\" or \"start\"");
+            }
+        }
+        lua_pop(L, 1);
+        return caret;
+    }
+
     // tidx にあるテーブル(title/message/buttons/checkboxes/select)から CustomDialogSpec を組み立てる。
     // select は CheckCustomDialogSelect で検証済みの前提で、エラーを投げない読み取りにしてある。
     // 文字列は、UTF-8 として不正なバイトを U+FFFD に置き換える(そのままだと NSString にできず、ラベルの作成で例外になる)。
@@ -2149,14 +2179,18 @@ namespace miata {
             return 1;
         }
         else if (type_string == "inputtext") {
-            auto message = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "message", "");
-            auto initial_text = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "initial_text", "");
+            const views::TextCaret caret = CheckInputTextOptions(L, 2); // 検証してから、std::string を作る
+            // 文字列は、UTF-8 として不正なバイトを U+FFFD に置き換える(そのままだと NSString にできず、ラベルの作成で例外になる。
+            // message には、フォルダのパスなど、ファイルシステムから来た文字列が入りうる)
+            auto message = RepairUtf8(Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "message", ""));
+            auto initial_text = RepairUtf8(Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "initial_text", ""));
 
             auto dialog = std::make_shared<views::InputTextDialog>(
                 [](views::IDialog&) {},
                 views::InputTextDialog::arguments{
                     .message_ = message,
                     .initial_text_ = initial_text,
+                    .caret_ = caret,
                 }
             );
             auto dialog_ptr = Script::PushSharedUserdata<views::InputTextDialog>(L, dialog);
