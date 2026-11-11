@@ -39,7 +39,8 @@ namespace miata::models {
     std::string SanitizeLine(std::string_view raw, bool truncated = false);
 
     // コンソールに出す行を貯める受け口(純ロジック。AppKit・Lua・Config のどれも知らない。PathHistory と同じ作り)。
-    //  - 書く側: Write(stdout / stderr を差し替えた FILE から。StdioCapture)。断片でよい(改行で行が確定する)。任意のスレッドから呼べる
+    //  - 書く側: Write(stdout / stderr を差し替えた FILE から。StdioCapture)。断片でよい(改行で行が確定する)。任意のスレッドから呼べる。
+    //    完結した行を、そのまま足す入口は AppendLine(起動したコマンドの出力。ShellJobManager)
     //  - 読む側: メインスレッドが、毎ティック Epoch() を比べ、変わっていれば Range / Lines で見える行だけを写す(ConsoleView)
     //  - 行の上限: SetLimit。古い行から捨てる。設定(Config)は知らない: 呼び出し側(Application)が、設定の読み込みの後に渡す。
     //    それまでの間(設定の読み込み中の print も、ここに入る)は kMaxLimit で持つので、後から SetLimit で詰めても、
@@ -76,7 +77,7 @@ namespace miata::models {
         // 行を全部捨てる(未完の行も。通し番号は続く)
         void Clear() noexcept;
 
-        // 世代。見える内容(行)が変わるたびに進む: 行が確定した Write、中身のある Clear、行を捨てた SetLimit。
+        // 世代。見える内容(行)が変わるたびに進む: 行が確定した Write、AppendLine、中身のある Clear、行を捨てた SetLimit。
         // 未完の行だけを持ち越した Write や、変わらない SetLimit では進まない。ロックしない(毎ティックの比較が安い)
         uint64_t Epoch() const noexcept;
 

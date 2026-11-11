@@ -31,32 +31,29 @@ namespace miata {
             const std::string_view text = bytes.substr(0, end); // 区切りが無ければ、残り全部
             if (!text.empty()) {
                 Append(text);
-                after_cr_ = AfterCr::None;
+                cr_ended_line_ = false;
             }
             if (end == std::string_view::npos) break;
 
             const char separator = bytes[end];
             bytes.remove_prefix(end + 1);
             if (separator == '\n') {
-                // CR で出した行の、続きの LF(CRLF)は、何も出さない。それ以外(ふつうの LF・空の CRLF)は、行を出す
-                if (after_cr_ != AfterCr::Committed) Commit(emit);
-                after_cr_ = AfterCr::None;
+                // CR で出した行の、続きの LF(CRLF)は、何も出さない。それ以外は、行を出す(空でも: 空行)
+                if (!cr_ended_line_) Commit(emit);
+                cr_ended_line_ = false;
             }
-            else if (line_.empty()) {
-                // 行頭の CR。行にしない(次が LF なら空行、そうでなければ、何も出さない)。CR で行を出した直後なら、
-                // その区切りの続きのまま(CR CR LF は、1 つの区切り)
-                if (after_cr_ != AfterCr::Committed) after_cr_ = AfterCr::Empty;
-            }
-            else {
+            else if (!line_.empty()) {
+                // CR の時点で、すぐ出す(次のバイトを待たない: 進捗が、出たときに見える)
                 Commit(emit);
-                after_cr_ = AfterCr::Committed;
+                cr_ended_line_ = true;
             }
+            // 行頭の CR は、行にしない(行を出した CR の直後なら、その区切りの続きのまま)
         }
     }
 
     void LineAssembler::Flush(const Emit& emit)
     {
         if (!line_.empty()) Commit(emit);
-        after_cr_ = AfterCr::None;
+        cr_ended_line_ = false;
     }
 }

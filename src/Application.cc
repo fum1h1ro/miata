@@ -76,7 +76,7 @@ namespace miata {
     }
 
     // tidx にあるテーブル(dialog_open の "inputtext" の options)を検証して、caret(開いた直後のキャレット)を返す。
-    // message / initial_text は、文字列か nil。caret は、"all"(全選択。nil も)か "start"(先頭)。不正なら luaL_error
+    // message / initial_text は、文字列か nil。caret は、"select_all"(全選択。nil も)か "start"(先頭)。不正なら luaL_error
     // (Lua のエラー。ダイアログは開かない)。CheckCustomDialogSelect と同じく、C++ のオブジェクト(std::string)を作る前に呼ぶ:
     // この後の読み取り(GetTableField)は、エラーにならない
     static views::TextCaret CheckInputTextOptions(lua_State* L, int tidx)
@@ -97,8 +97,8 @@ namespace miata {
             if (std::strcmp(name, "start") == 0) {
                 caret = views::TextCaret::Start;
             }
-            else if (std::strcmp(name, "all") != 0) {
-                luaL_error(L, "dialog_input: caret must be \"all\" or \"start\"");
+            else if (std::strcmp(name, "select_all") != 0) {
+                luaL_error(L, "dialog_input: caret must be \"select_all\" or \"start\"");
             }
         }
         lua_pop(L, 1);
@@ -2090,17 +2090,18 @@ namespace miata {
         return detail.empty() ? std::format("終了コード {}", exit_code) : std::format("終了コード {}\n{}", exit_code, detail);
     }
 
-    // スタックの idx の、シェルのコマンドライン(文字列。空でなく、NUL を含まないこと)を検証して、その文字列と長さを返す。
-    // 不正なら Lua のエラー(function は、エラー文の頭に付ける名前)。luaL_error の前なので、std::string を作らない
-    // (NUL を含むと、シェルには、その手前までしか届かない)
-    static const char* CheckCommandLineArg(lua_State* L, int idx, const char* function, size_t* length)
+    // スタックの idx の、シェルのコマンドライン(文字列。空でなく、NUL を含まないこと)を検証して、返す(Lua が持つ文字列を指す)。
+    // 不正なら Lua のエラー(function は、エラー文の頭に付ける名前)。NUL を含むと、シェルには、その手前までしか届かない。
+    // luaL_error の前に呼べるよう、std::string は作らない(string_view は、デストラクタを持たない)
+    static std::string_view CheckCommandLineArg(lua_State* L, int idx, const char* function)
     {
-        const char* raw = lua_type(L, idx) == LUA_TSTRING ? lua_tolstring(L, idx, length) : nullptr;
-        if (!raw || *length == 0 || std::strlen(raw) != *length) {
+        size_t length = 0;
+        const char* raw = lua_type(L, idx) == LUA_TSTRING ? lua_tolstring(L, idx, &length) : nullptr;
+        if (!raw || length == 0 || std::strlen(raw) != length) {
             luaL_error(L, "%s: expected a non-empty command line without NUL characters", function);
-            return nullptr;
+            return {};
         }
-        return raw;
+        return std::string_view(raw, length);
     }
 
     // Miata._private.spawn_shell(command, paths, [what]) -> boolean
@@ -2111,18 +2112,18 @@ namespace miata {
     // 待たずに起動する(pl_spawn_shell_command)。起動の要求を出せたらtrue。起動できなかったとき、と、あとで非0の
     // 終了コードで終わったときは、whatを見出し(省略・nilなら「コマンドが失敗しました」)にして、ダイアログで知らせる
     // (終了コードと、標準エラーの先頭)。権限の案内は付けない(エディタが失敗したのは、Miataの権限の問題ではない)。
-    // %f を "$@" に置き換える仕事と、検査は、呼ぶ側の Lua(edit)の仕事: これは、できあがったコマンドを起動するだけ。
+    // %f を "$@" に置き換える仕事と、その検査は、呼ぶ側の Lua(edit)の仕事: これは、できあがったコマンドを起動するだけ
+    // (ここで見るのは、文字列か・空でないか・NUL を含まないか、だけ)。
     int Application::lua_private_spawn_shell(lua_State* L)
     {
         auto& app = Application::Instance();
-        size_t length = 0;
-        const char* raw = CheckCommandLineArg(L, 1, "spawn_shell", &length);
+        const std::string_view command_arg = CheckCommandLineArg(L, 1, "spawn_shell");
         CheckPathArray(L, 2, "spawn_shell");
         const bool has_what = lua_gettop(L) >= 3 && !lua_isnil(L, 3);
         if (has_what) Script::CheckArgType(L, 3, LUA_TSTRING);
 
         // ここから先はluaL_errorを呼ばない(std::stringなどを作るため)
-        const std::string command(raw, length);
+        const std::string command(command_arg);
         std::vector<std::string> arguments;
         for (const auto& path : ReadPathArray(L, 2)) arguments.push_back(path.string());
         std::string what = "コマンドが失敗しました";
@@ -2146,36 +2147,32 @@ namespace miata {
         return 1;
     }
 
-    // Miata._private.run_shell(command, paths, [label]) -> boolean
+    // Miata._private.run_shell(command, paths, label) -> boolean
     // spawn_shell と同じ起動のしかた(/bin/sh -c。paths は位置パラメータ)で、待たずに起動して、標準出力・標準エラーを、
     // コンソールに流す(ShellJobManager。標準出力は通常の行、標準エラーは赤い行。毎ティック、読める分だけ読む)。
-    // label(省略・nil なら command)は、コンソールに出す「実行した行」: 起動できたら「$ label」を 1 行足し、非 0 で終わったら、
+    // label(文字列)は、コンソールに出す「実行した行」: 起動できたら「$ label」を 1 行足し、非 0 で終わったら、
     // 赤い行「終了コード N: label」を出す。**ダイアログにはしない**(出力もエラーも、コンソールにある。grep の「一致なし」の
     // ような、失敗ではない非 0 でも、キー入力を奪わない)。0 で終わったら、何も出さない。
     // 起動できなかったとき(posix_spawn の失敗など)だけ、ダイアログで知らせて false。
-    // cd の前置きを付けるのと、コマンドラインの検査は、呼ぶ側の Lua(shell)の仕事: これは、できあがったコマンドを起動するだけ。
+    // cd の前置きを付けるのと、「空白だけ」の検査は、呼ぶ側の Lua(shell)の仕事: これは、できあがったコマンドを起動するだけ
+    // (ここで見るのは、文字列か・空でないか・NUL を含まないか、だけ)。
     int Application::lua_private_run_shell(lua_State* L)
     {
         auto& app = Application::Instance();
-        size_t length = 0;
-        const char* raw = CheckCommandLineArg(L, 1, "run_shell", &length);
+        const std::string_view command_arg = CheckCommandLineArg(L, 1, "run_shell");
         CheckPathArray(L, 2, "run_shell");
-        const bool has_label = lua_gettop(L) >= 3 && !lua_isnil(L, 3);
-        if (has_label && lua_type(L, 3) != LUA_TSTRING) {
+        if (lua_type(L, 3) != LUA_TSTRING) {
             luaL_error(L, "run_shell: label must be a string");
             return 0;
         }
 
         // ここから先はluaL_errorを呼ばない(std::stringなどを作るため)
-        const std::string command(raw, length);
+        const std::string command(command_arg);
         std::vector<std::string> arguments;
         for (const auto& path : ReadPathArray(L, 2)) arguments.push_back(path.string());
-        std::string label = command;
-        if (has_label) {
-            size_t label_length = 0;
-            const char* label_raw = lua_tolstring(L, 3, &label_length);
-            label.assign(label_raw, label_length);
-        }
+        size_t label_length = 0;
+        const char* label_raw = lua_tolstring(L, 3, &label_length);
+        std::string label(label_raw, label_length);
         // 1 行にする(複数行のコマンドでも、エコーと、終了の知らせは、1 行ずつ)。LogError は、改行で行が分かれる
         for (char& c : label) {
             if (c == '\n' || c == '\r') c = ' ';

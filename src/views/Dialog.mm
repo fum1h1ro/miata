@@ -32,8 +32,8 @@
 }
 @end
 
-// 1 行の入力欄(DialogPanel::AddInputField)の delegate。Enter / Esc を、ボタンを選んだことにして、Tab と Option+Return を
-// 握りつぶす。入力欄が first responder の間、キーは MiataRootView::keyDown: に届かない(Dialog モードの <enter> / <esc> の
+// 1 行の入力欄(DialogPanel::AddInputField)の delegate。Enter / Esc を、ボタンを選んだことにして、Tab を握りつぶす。
+// 入力欄が first responder の間、キーは MiataRootView::keyDown: に届かない(Dialog モードの <enter> / <esc> の
 // キーバインドが効かない)ので、欄の側で受ける。doCommandBySelector: は、IME の変換中は呼ばれない(変換の確定の Enter や、
 // 取り消しの Esc は、IME が受ける。FilterListDialog.mm・QueryBar.mm と同じ作法)。
 @interface _MiataInputFieldDelegate : NSObject <NSTextFieldDelegate>
@@ -64,9 +64,8 @@
         return YES;
     }
     // Tab / Shift-Tab: 既定では、欄の文字を全部選択する(次の 1 打で、全部消える)。
-    // Option+Return / Ctrl+Return: 既定では、欄に改行を入れる(1 行の入力欄なのに、複数行になる)
-    if (commandSelector == @selector(insertTab:) || commandSelector == @selector(insertBacktab:) ||
-        commandSelector == @selector(insertNewlineIgnoringFieldEditor:) || commandSelector == @selector(insertLineBreak:)) {
+    // (Option+Return / Ctrl+Return の改行は、欄の 1 行の設定(usesSingleLineMode)が、入れさせない)
+    if (commandSelector == @selector(insertTab:) || commandSelector == @selector(insertBacktab:)) {
         return YES;
     }
     return NO;
@@ -487,9 +486,7 @@ void DialogPanel::AddTextField(const std::string& initial)
     impl_->EnsureBackground();
     CGFloat avail = impl_->panel_width - kPadding * 2;
     NSTextField* field = [[NSTextField alloc] initWithFrame:NSMakeRect(kPadding, impl_->cursor_y, avail, kRowHeight)];
-    // UTF-8 として不正な文字列は、NSString にできない(nil)。nil を stringValue に入れると例外になるので、空にする
-    // (Lua からの文字列は、Application.cc が、先に修復している)
-    field.stringValue = @(initial.c_str()) ?: @"";
+    field.stringValue = @(initial.c_str()); // UTF-8 として正しい前提(Lua からの文字列は、Application.cc が修復する)
     [impl_->background addSubview:field];
     impl_->cursor_y += kRowHeight + kRowSpacing;
     impl_->text_field = field;
@@ -505,11 +502,10 @@ void DialogPanel::AddInputField(const std::string& initial, TextCaret caret, int
 {
     AddTextField(initial);
     NSTextField* field = impl_->text_field;
-    // 1 行のまま、横にスクロールする(QueryBar の入力欄と同じ設定)。既定では、欄の幅を超えた文字は、欄の中で折り返して、
-    // 2 行目から先が見えなくなる
-    field.lineBreakMode = NSLineBreakByClipping;
+    // 1 行のまま、横にスクロールする。既定では、欄の幅を超えた文字は、欄の中で折り返して、2 行目から先が見えなくなり、
+    // Option+Return / Ctrl+Return で、欄に改行が入る。スクロールにすると、折り返しは止まる(wraps と lineBreakMode も、
+    // それに合わせて変わる)。1 行のモードは、改行を入れさせない
     [field.cell setScrollable:YES];
-    [field.cell setWraps:NO];
     [field.cell setUsesSingleLineMode:YES];
 
     _MiataInputFieldDelegate* delegate = [[_MiataInputFieldDelegate alloc] init];

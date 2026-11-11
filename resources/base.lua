@@ -110,7 +110,7 @@ Miata = {
             return Miata._private.dialog_result(handle, "yesno")
         end,
         -- 1 行の入力欄と「キャンセル」「OK」のボタン。Enter は OK、Esc はキャンセル。戻り値は入力した文字列(OK)、
-        -- キャンセルしたら nil。opts(省略可)は { caret = "all" | "start" }: 開いた直後のキャレット。"all"(既定)は
+        -- キャンセルしたら nil。opts(省略可)は { caret = "select_all" | "start" }: 開いた直後のキャレット。"select_all"(既定)は
         -- 全部を選択する(打つと、初めの値を置き換える)。"start" は先頭に置く(初めの値の前に、打ち足す)。
         -- opts が表でない・知らない項目があると、Lua のエラー(値の検査は、dialog_open がする)
         dialog_input = function(message, initial_text, opts)
@@ -227,7 +227,8 @@ Miata = {
         -- コンソール(zc)に流れる(実行した行「$ …」、標準出力は通常の行、標準エラーは赤い行。非0で終わったら、赤い行
         -- 「終了コード N: …」)。dir は、フォルダの絶対パス(エントリ { path = … } でもよい)。省略したら、カーソルのある
         -- ペインのフォルダ。起動できたら true(起動できなかったときは、ダイアログで知らせて false)。
-        -- commandが、空白だけでない文字列でない・NULを含む、dir が 1 つのフォルダでないと、Luaのエラー。
+        -- commandが、文字列でない・空白だけ・NULを含む、または、dir が 1 つの絶対パスでないと、Luaのエラー
+        -- (dir が、フォルダとして無ければ、cd が失敗して、コンソールに出る。commandは、実行されない)。
         -- command は、そのまま、シェルが読む(~・環境変数・| ・&& が使える)。ファイル名を入れるときは、
         -- Miata.util.shell_quote で引用する。command の中の $1 $@ は、空
         shell = function(command, dir)

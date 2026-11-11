@@ -283,20 +283,25 @@ end)
 -- 出力は、コンソール(zc)に流れる(閉じていれば、開く)。非 0 で終わったら、赤い行で知らせる。
 -- 対象は、カーソル下の 1 件だけ(マークは見ない。フォルダの行でも同じ)。一覧が空なら、入力欄も空。
 -- 名前に、空白や記号があれば、シェルの引用符('…')で囲んで入れる(名前が、空白で分かれたり、シェルに解釈されたりしないように。
--- 入れた名前を、自分で "…" や sh -c "…" の中に書き直すと、中身が解釈される)
+-- 入れた名前を、自分で "…" や sh -c "…" の中に書き直すと、中身が解釈される)。
+-- 何も打ち足さずに確定したら(入力欄が、初めの値のまま)、何もしない(名前だけの行は、同じ名前のコマンドを、引数なしで実行してしまう)
 Miata.command.bind("n", "x", function()
     -- フォルダと名前は、ダイアログを開く前に決める(待つ間に、一覧が変わっても、押したときのもの)
     local dir = Miata.command.pane_path()
     local entry = Miata.command.cursor_entry()
     local initial = ""
     if entry then
-        local name = entry.name
-        -- "-" で始まる名前は、コマンドのオプションと読まれないように、"./" を付ける
-        if name:sub(1, 1) == "-" then name = "./" .. name end
+        -- ファイルシステム上の名前(パスの最後の部分)。UTF-8 として正しくない名前は、入力欄に入れられないので、表示用の名前
+        -- (その名前では、ファイルを指せない)
+        local name = entry.path:match("[^/]+$")
+        if not utf8.len(name) then name = entry.name end
+        -- "-" や "+" で始まる名前は、コマンドのオプションと読まれないように、"./" を付ける
+        if name:find("^[-+]") then name = "./" .. name end
         initial = Miata.util.shell_quote(name)
     end
     local line = Miata.command.dialog_input("コマンドライン (フォルダ: " .. dir .. ")", initial, { caret = "start" })
-    if not line or not line:find("%S") then return end -- キャンセル、または、空・空白だけ
+    -- キャンセル、空・空白だけ、初めの値のまま、のどれかなら、何もしない
+    if not line or not line:find("%S") or line == initial then return end
     Miata.config.set_show_console(true)
     Miata.command.shell(line, dir)
 end)

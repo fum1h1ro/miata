@@ -29,11 +29,11 @@ namespace miata {
 
         // 子が終わったときに、1 回だけ呼ばれる(Update の中から。メインスレッド)。exit_code は終了コード
         // (シグナルで終わったときは 128 + シグナル番号。終了を調べられなかったときは 0)。
-        // 呼ばれる時点で、そのコマンドの片付けは済んでいるので、中から Start を呼んでもよい
+        // Update は、コマンドの走査と整理を済ませてから呼ぶので、中から Start を呼んでもよい
         using ExitCallback = std::function<void(int exit_code)>;
 
         explicit ShellJobManager(models::ConsoleLog& log);
-        // 読み口を閉じる(動いている子は、止めない。次の書き込みで、SIGPIPE を受ける)
+        // 残っているコマンドの読み口を閉じる(動いている子は、止めない。次の書き込みで、SIGPIPE を受ける)
         ~ShellJobManager();
         ShellJobManager(const ShellJobManager&) = delete;
         ShellJobManager& operator=(const ShellJobManager&) = delete;
@@ -46,8 +46,8 @@ namespace miata {
         // 毎ティック呼ぶ。終わった子を回収し、出力を読んで、行を受け口に足し、終了を知らせる
         void Update();
 
-        // 抱えているコマンドの数(終わっていないもの、と、終わったが、出力の口を握った孫が残っているもの)
-        size_t Running() const { return jobs_.size(); }
+        // 抱えているコマンドの数(終わっていないもの、と、終わったが、出力の口を握った孫が残っているもの)。いまは、テストだけが使う
+        size_t JobCount() const { return jobs_.size(); }
 
     private:
         struct Job; // 起動した 1 つのコマンド(ShellJob.cc)
