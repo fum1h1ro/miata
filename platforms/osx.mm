@@ -482,7 +482,7 @@ namespace {
         }
 
         // 0 / 1 / 2 以外のファイル記述子は、子に渡さない。シグナルのマスクと、無視の設定は、既定に戻す。
-        // 子は、自分のプロセスグループに入れる(ターミナルから起動したときの Ctrl-C が、エディタに届かないように)
+        // 子は、自分のプロセスグループに入れる(ターミナルから起動したときの Ctrl-C が、起動したコマンドに届かないように)
         posix_spawnattr_t attr;
         posix_spawnattr_init(&attr);
         sigset_t no_signals, all_signals;
