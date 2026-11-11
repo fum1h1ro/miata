@@ -223,6 +223,30 @@ Miata = {
             if not confirm_open(#paths) then return false end
             return Miata._private.spawn_shell(expand_editor_command(command), paths, "エディタを起動できませんでした")
         end,
+        -- コマンドライン(一行。/bin/sh -c)を、dir を作業フォルダにして、待たずに実行する。標準出力・標準エラーは、
+        -- コンソール(zc)に流れる(実行した行「$ …」、標準出力は通常の行、標準エラーは赤い行。非0で終わったら、赤い行
+        -- 「終了コード N: …」)。dir は、フォルダの絶対パス(エントリ { path = … } でもよい)。省略したら、カーソルのある
+        -- ペインのフォルダ。起動できたら true(起動できなかったときは、ダイアログで知らせて false)。
+        -- commandが、空白だけでない文字列でない・NULを含む、dir が 1 つのフォルダでないと、Luaのエラー。
+        -- command は、そのまま、シェルが読む(~・環境変数・| ・&& が使える)。ファイル名を入れるときは、
+        -- Miata.util.shell_quote で引用する。command の中の $1 $@ は、空
+        shell = function(command, dir)
+            if type(command) ~= "string" or command:find("^%s*$") then
+                error("shell: expected a command line (a non-empty string)", 2)
+            end
+            if command:find("\0", 1, true) then
+                error("shell: the command line must not contain NUL characters", 2)
+            end
+            if dir == nil then dir = Miata.command.pane_path() end
+            local dirs = Miata._private.paths_of(dir)
+            if #dirs ~= 1 then
+                error("shell: expected one folder as dir (an absolute path)", 2)
+            end
+            -- フォルダは、コマンドラインの文字列に埋め込まず、位置パラメータ($1)で渡す(名前の中の空白・引用符・$() が、
+            -- シェルの構文として読まれない)。cd できなければ(フォルダが消えた、など)、command は実行しない。
+            -- shift で、command から見た位置パラメータを、空にする
+            return Miata._private.run_shell('cd -- "$1" || exit; shift; ' .. command, dirs, command)
+        end,
         -- Finderで、対象を選択した状態で表示する
         reveal = function(target)
             local paths = Miata._private.paths_of(target)
@@ -245,6 +269,19 @@ Miata = {
             if name:sub(1, 1) == "/" then return name end
             if dir:sub(-1) == "/" then return dir .. name end
             return dir .. "/" .. name
+        end,
+        -- text を、シェル(sh)のコマンドラインに、1 つの引数として書ける形にする(shell に渡すコマンドラインに、ファイル名を
+        -- 入れるとき)。英数字と . _ - + , : @ % / と、ASCII 以外の文字(日本語など)だけなら、そのまま。それ以外(空白・
+        -- 引用符・$ ・* など)を含むか、空なら、'…' で囲む(中の ' は '\'' にする)。
+        -- 引用した結果を、さらに "…" や sh -c "…" の中に書くと、中身がシェルに解釈される(そのまま、引数として置くこと)。
+        -- "-" で始まる名前を、オプションと読ませないための "./" は、付けない(パスかどうかは、呼ぶ側が知っている)
+        shell_quote = function(text)
+            if type(text) ~= "string" then
+                error("shell_quote: expected a string", 2)
+            end
+            -- %w は使わない(C のロケールで、範囲が変わる)。\128-\255 は、UTF-8 の、ASCII 以外の文字のバイト
+            if text ~= "" and not text:find("[^A-Za-z0-9%._%-%+,:@%%/\128-\255]") then return text end
+            return "'" .. text:gsub("'", "'\\''") .. "'"
         end,
         inspect = function(val, indent)
             -- インデントの初期化

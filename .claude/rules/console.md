@@ -42,7 +42,7 @@ paths:
 - **書き戻しは、毎回 `fflush` する**: `exit()` の flush は、FILE の並びの順に走るので、差し替えた FILE の最後の未完の行（改行の無い出力）は、元の FILE が先に flush された後に届きうる。flush しないと、その分が失われる。出力先がパイプやファイルのときは、1 行ごとに `write(2)` が 1 回
 - 差し替えた FILE と cookie は、**解放しない**（プロセスの終わりまで。`exit()` が flush するのは、静的破棄の後でもありうる）。`ConsoleLog::Instance()` も、同じ理由で、`new` して解放しない
 - `funopen` が失敗したら、何も変えずに `false`（コンソールは空のまま。端末への出力は、これまでどおり）。差し替えた FILE の `fileno()` は -1（コードベースに `fileno` / `isatty` の使用は無い）
-- **拾えないもの**: 子プロセスの出力（fd を継承したもの。`os.execute`・fzf・エディタ）、`NSLog`（fd 2 へ直接）、`write(1, ...)` の直叩き、`std::cout` / `std::cerr`（libc++ は、構築時の FILE* を握る。コードベースに使用は無い）
+- **拾えないもの**: 子プロセスの出力（fd を継承したもの。`os.execute`・fzf・エディタ。**`Miata.command.shell`（`x`）で起動したコマンドだけは、この仕組みとは別に、パイプで受けて、`AppendLine` で足す**=`.claude/rules/shell-command.md`）、`NSLog`（fd 2 へ直接）、`write(1, ...)` の直叩き、`std::cout` / `std::cerr`（libc++ は、構築時の FILE* を握る。コードベースに使用は無い）
 - **行バッファ**なので、改行の無い出力は、改行か `fflush` まで、コールバックに届かない。届いた分は、`ConsoleLog` が未完の行として持ち越す（出さない）
 
 ## 行の受け口（`ConsoleLog`）
@@ -58,7 +58,7 @@ paths:
 
 ## エラーの集約（`Script` と `LogError`）
 
-- **`Script` はログを知らない**。キー関数（コルーチン）の失敗を値（`ThreadError{label, message}`）で返し、`Application` が文面を作る: `error: key <キー>: <メッセージ>`（`ReportThreadError`）。設定の読み込みのエラーは `error: <ConfigError::Describe()>`（ダイアログと同じ文面。Lua は長いパスを `...` で縮めるので、メッセージに完全なパスが含まれないときは、ファイル名を足す）、ステータスバーの関数は `statusbar: <理由>`（ラッチは残す）、警告は `warning: <テキスト>`、ファイル操作などの失敗は `View::ReportFileError` の `reason` そのまま（ダイアログに加えて `LogError`。権限の案内は、ダイアログだけ）。**ダイアログにはしない**（キー入力を奪う。ステータスバーの Lua のエラーと同じ決め）
+- **`Script` はログを知らない**。キー関数（コルーチン）の失敗を値（`ThreadError{label, message}`）で返し、`Application` が文面を作る: `error: key <キー>: <メッセージ>`（`ReportThreadError`）。設定の読み込みのエラーは `error: <ConfigError::Describe()>`（ダイアログと同じ文面。Lua は長いパスを `...` で縮めるので、メッセージに完全なパスが含まれないときは、ファイル名を足す）、ステータスバーの関数は `statusbar: <理由>`（ラッチは残す）、警告は `warning: <テキスト>`、ファイル操作などの失敗は `View::ReportFileError` の `reason` そのまま（ダイアログに加えて `LogError`。権限の案内は、ダイアログだけ）、`shell`（`x`）で起動したコマンドの非 0 の終了は `終了コード N: <実行した行>`（`shell-command.md`）。**ダイアログにはしない**（キー入力を奪う。ステータスバーの Lua のエラーと同じ決め）
 - **`Script::Settle(name, param, status)` が、`lua_resume` の結果の扱いを 1 か所にまとめる**（最初の区間も、`Script::Update` が進めた後続の区間も同じ。確認のダイアログの後のコードは後続の区間なので、結果を必ず `Settle` に通す: 見ないと、エラーはどこにも出ない）。成功・待ち（`LUA_OK` / `LUA_YIELD`）: 積まれた戻り値を `lua_pop(nresult_)` で捨てる（積んだままにすると、同じコルーチンを使い回すたびに積み上がり、いつか `stack overflow` になる）。失敗: **スタックが生きているうちに**エラーを読み（`lua_resume` は巻き戻さず、エラーの値を先頭に残す）、`lua_closethread` で閉じ（`__close` の変数があれば、ここで走る）、`lua_settop(0)`・`status_ = LUA_OK` に戻す。**`status_` を戻さないと、後続の区間で失敗したコルーチンを、毎ティック再開し続ける**
 - **罠: 新しいコルーチンは、レジストリに固定する（`luaL_ref`）。メインスレッドのスタックに積んだままにしない**（`InvokeRefFunctionOnThread`）。`lua_newthread` も `lua_rawgeti` も、スタックの空きを確かめない（`api_incr_top` は、`LUA_USE_APICHECK` の時だけ検査する）。ホストの C++ から使えるのは、`LUA_MINSTACK`（20）個まで。新しい名前のキー列のたびに 1 つ積み上げると、20 個を超えたところで契約違反になり、スタックの配列（初期 40 + 5）を超えると、ヒープを壊す。コルーチンの寿命は、`threads_`（C++ の map）ではなく、レジストリの参照が保つ
 - **罠: 失敗したコルーチンを閉じ直さないと、同じキーを押し直したとき、関数が実行されない**（`lua_closethread` は、閉じる前の古いエラー状態をそのまま返す。実行されずに、古いエラーが返り、次の押下でやっと動く）。`Settle` が毎回閉じるので、押すたびに関数が実行され、エラーも毎回出る
@@ -84,7 +84,7 @@ paths:
 
 ## 限界・既知
 
-- 子プロセスの出力・`NSLog` は取れない。改行の無い出力は、改行か flush まで出ない。`print` の `__tostring` のエラーで、先頭の引数が次の行にくっつく
+- 子プロセスの出力（`shell` で起動したもの以外）・`NSLog` は取れない。改行の無い出力は、改行か flush まで出ない。`print` の `__tostring` のエラーで、先頭の引数が次の行にくっつく
 - 保護外の Lua のエラー（panic）は、いまも、メッセージ無しの `abort()`
 - 窓の高さがとても低いと、コンソールは出ない（ブラウザ領域に 120pt を残す）。高さをドラッグでは変えられない
 - 実行中に `set_console_max_lines` を縮める経路は無い（起動時だけ）。足すなら、観測者で `ConsoleLog::SetLimit` を呼ぶだけ
