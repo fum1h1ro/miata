@@ -465,6 +465,61 @@ namespace {
         if (!has_path) environment.push_back("PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin");
         return environment;
     }
+
+    // /bin/sh -c command sh arguments... を起動する(pl_spawn_shell_command と pl_spawn_shell_piped の、共通の部分)。
+    // 子の標準入力は /dev/null。標準出力・標準エラーは、stdout_fd / stderr_fd の複製(負なら /dev/null)。渡した記述子は、
+    // 閉じない(閉じるのは、呼ぶ側)。成功したら、子の pid。失敗したら、理由(strerror)
+    std::expected<pid_t, std::string> SpawnShell(
+        const std::string& command, const std::vector<std::string>& arguments, int stdout_fd, int stderr_fd)
+    {
+        posix_spawn_file_actions_t actions;
+        posix_spawn_file_actions_init(&actions);
+        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+        const int outputs[][2] = {{stdout_fd, STDOUT_FILENO}, {stderr_fd, STDERR_FILENO}};
+        for (const auto& [fd, target] : outputs) {
+            if (fd < 0) posix_spawn_file_actions_addopen(&actions, target, "/dev/null", O_WRONLY, 0);
+            else posix_spawn_file_actions_adddup2(&actions, fd, target);
+        }
+
+        // 0 / 1 / 2 以外のファイル記述子は、子に渡さない。シグナルのマスクと、無視の設定は、既定に戻す。
+        // 子は、自分のプロセスグループに入れる(ターミナルから起動したときの Ctrl-C が、エディタに届かないように)
+        posix_spawnattr_t attr;
+        posix_spawnattr_init(&attr);
+        sigset_t no_signals, all_signals;
+        sigemptyset(&no_signals);
+        sigfillset(&all_signals);
+        posix_spawnattr_setsigmask(&attr, &no_signals);
+        posix_spawnattr_setsigdefault(&attr, &all_signals);
+        posix_spawnattr_setpgroup(&attr, 0);
+        posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETPGROUP);
+
+        std::vector<std::string> environment = EnvironmentWithToolPaths();
+        std::vector<char*> envp;
+        envp.reserve(environment.size() + 1);
+        for (auto& variable : environment) envp.push_back(variable.data());
+        envp.push_back(nullptr);
+
+        // sh -c <command> sh <arguments...>: command の次の引数が $0("sh")、その次から $1 $2 …
+        // (arguments は、シェルが構文として読む文字列ではなく、引数として渡る)
+        std::vector<std::string> argument_strings;
+        argument_strings.reserve(arguments.size() + 4);
+        argument_strings.push_back("sh");
+        argument_strings.push_back("-c");
+        argument_strings.push_back(command);
+        argument_strings.push_back("sh");
+        for (const auto& argument : arguments) argument_strings.push_back(argument);
+        std::vector<char*> argv;
+        argv.reserve(argument_strings.size() + 1);
+        for (auto& argument : argument_strings) argv.push_back(argument.data());
+        argv.push_back(nullptr);
+
+        pid_t pid = 0;
+        const int spawn_result = posix_spawn(&pid, "/bin/sh", &actions, &attr, argv.data(), envp.data());
+        posix_spawn_file_actions_destroy(&actions);
+        posix_spawnattr_destroy(&attr);
+        if (spawn_result != 0) return std::unexpected(std::string(std::strerror(spawn_result)));
+        return pid;
+    }
 }
 
 std::expected<void, std::string> pl_spawn_shell_command(
@@ -483,52 +538,12 @@ std::expected<void, std::string> pl_spawn_shell_command(
     unlink(temp_name.c_str());
     fcntl(err_fd, F_SETFD, FD_CLOEXEC);
 
-    posix_spawn_file_actions_t actions;
-    posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
-    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
-    posix_spawn_file_actions_adddup2(&actions, err_fd, STDERR_FILENO);
-
-    // 0 / 1 / 2 以外のファイル記述子は、子に渡さない。シグナルのマスクと、無視の設定は、既定に戻す。
-    // 子は、自分のプロセスグループに入れる(ターミナルから起動したときの Ctrl-C が、エディタに届かないように)
-    posix_spawnattr_t attr;
-    posix_spawnattr_init(&attr);
-    sigset_t no_signals, all_signals;
-    sigemptyset(&no_signals);
-    sigfillset(&all_signals);
-    posix_spawnattr_setsigmask(&attr, &no_signals);
-    posix_spawnattr_setsigdefault(&attr, &all_signals);
-    posix_spawnattr_setpgroup(&attr, 0);
-    posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETPGROUP);
-
-    std::vector<std::string> environment = EnvironmentWithToolPaths();
-    std::vector<char*> envp;
-    envp.reserve(environment.size() + 1);
-    for (auto& variable : environment) envp.push_back(variable.data());
-    envp.push_back(nullptr);
-
-    // sh -c <command> sh <arguments...>: command の次の引数が $0("sh")、その次から $1 $2 …
-    // (arguments は、シェルが構文として読む文字列ではなく、引数として渡る)
-    std::vector<std::string> argument_strings;
-    argument_strings.reserve(arguments.size() + 4);
-    argument_strings.push_back("sh");
-    argument_strings.push_back("-c");
-    argument_strings.push_back(command);
-    argument_strings.push_back("sh");
-    for (const auto& argument : arguments) argument_strings.push_back(argument);
-    std::vector<char*> argv;
-    argv.reserve(argument_strings.size() + 1);
-    for (auto& argument : argument_strings) argv.push_back(argument.data());
-    argv.push_back(nullptr);
-
-    pid_t pid = 0;
-    const int spawn_result = posix_spawn(&pid, "/bin/sh", &actions, &attr, argv.data(), envp.data());
-    posix_spawn_file_actions_destroy(&actions);
-    posix_spawnattr_destroy(&attr);
-    if (spawn_result != 0) {
+    const auto spawned = SpawnShell(command, arguments, -1, err_fd); // 標準出力は捨てる
+    if (!spawned) {
         close(err_fd);
-        return std::unexpected(std::string(std::strerror(spawn_result)));
+        return std::unexpected(spawned.error());
     }
+    const pid_t pid = *spawned;
 
     // 子の終了を、別のスレッドで待つ(メインスレッドを止めない)。終わったら、標準エラーの先頭を読んで、
     // メインスレッドで知らせる。waitpid が使えなかったとき(SIGCHLD を無視している等)は、終了コードを 0 とみなす
@@ -549,6 +564,37 @@ std::expected<void, std::string> pl_spawn_shell_command(
         });
     });
     return {};
+}
+
+std::expected<PipedProcess, std::string> pl_spawn_shell_piped(const std::string& command, const std::vector<std::string>& arguments)
+{
+    // 標準出力・標準エラーのパイプ([0] が読み口、[1] が書き口)。どれも、ほかの子(os.execute など)に引き継がせない
+    int out_pipe[2] = {-1, -1};
+    int err_pipe[2] = {-1, -1};
+    const auto close_all = [&] {
+        for (const int fd : {out_pipe[0], out_pipe[1], err_pipe[0], err_pipe[1]}) {
+            if (fd >= 0) close(fd);
+        }
+    };
+    if (pipe(out_pipe) != 0 || pipe(err_pipe) != 0) {
+        const std::string reason = std::strerror(errno);
+        close_all();
+        return std::unexpected(reason);
+    }
+    for (const int fd : {out_pipe[0], out_pipe[1], err_pipe[0], err_pipe[1]}) fcntl(fd, F_SETFD, FD_CLOEXEC);
+    // 読み口だけ、非ブロッキングにする(読む側が、空のパイプで止まらないように)。書き口は、子の標準出力になるので、
+    // ブロッキングのまま(非ブロッキングにすると、パイプが詰まったとき、子の書き込みが、待たずにエラーになる)
+    for (const int fd : {out_pipe[0], err_pipe[0]}) fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+
+    const auto spawned = SpawnShell(command, arguments, out_pipe[1], err_pipe[1]);
+    if (!spawned) {
+        close_all();
+        return std::unexpected(spawned.error());
+    }
+    // 書き口は、子が持った。親の側を閉じる: 開けたままだと、子が終わっても、読み口に EOF が来ない
+    close(out_pipe[1]);
+    close(err_pipe[1]);
+    return PipedProcess{.pid = *spawned, .stdout_fd = out_pipe[0], .stderr_fd = err_pipe[0]};
 }
 
 std::filesystem::path pl_find_font_filename(const std::string& font_name)

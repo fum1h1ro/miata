@@ -371,6 +371,7 @@ namespace miata {
             { "open_paths", lua_private_open_paths },
             { "reveal_paths", lua_private_reveal_paths },
             { "spawn_shell", lua_private_spawn_shell },
+            { "run_shell", lua_private_run_shell },
         };
         script.RegisterFunctions(
             "Miata._private",
@@ -434,6 +435,9 @@ namespace miata {
     void Application::Update()
     {
         file_operations_.Update();
+        // 起動したコマンド(Miata.command.shell)の出力を読んで、コンソールの受け口に足す。終了の知らせ(赤い行)も、ここで出る。
+        // 画面への反映は、このティックの下の UpdateConsole
+        shell_jobs_.Update();
         // ダイアログなどで待っていたキー関数を進める。その後の区間の失敗(確認のダイアログの後が、ほとんど)も、ここでログに出る
         for (const auto& error : Script::Instance().Update()) ReportThreadError(error);
         view_->CheckDialogState();
@@ -2086,6 +2090,19 @@ namespace miata {
         return detail.empty() ? std::format("終了コード {}", exit_code) : std::format("終了コード {}\n{}", exit_code, detail);
     }
 
+    // スタックの idx の、シェルのコマンドライン(文字列。空でなく、NUL を含まないこと)を検証して、その文字列と長さを返す。
+    // 不正なら Lua のエラー(function は、エラー文の頭に付ける名前)。luaL_error の前なので、std::string を作らない
+    // (NUL を含むと、シェルには、その手前までしか届かない)
+    static const char* CheckCommandLineArg(lua_State* L, int idx, const char* function, size_t* length)
+    {
+        const char* raw = lua_type(L, idx) == LUA_TSTRING ? lua_tolstring(L, idx, length) : nullptr;
+        if (!raw || *length == 0 || std::strlen(raw) != *length) {
+            luaL_error(L, "%s: expected a non-empty command line without NUL characters", function);
+            return nullptr;
+        }
+        return raw;
+    }
+
     // Miata._private.spawn_shell(command, paths, [what]) -> boolean
     // commandは、シェルのコマンドライン(1行。/bin/sh -c で実行する。空でなく、NULを含まないこと)。pathsは、絶対パスの
     // 文字列の配列(空でもよい)で、シェルの位置パラメータ(command の中の "$@")として、別の引数で渡す。**シェルの構文
@@ -2098,14 +2115,8 @@ namespace miata {
     int Application::lua_private_spawn_shell(lua_State* L)
     {
         auto& app = Application::Instance();
-        Script::CheckArgType(L, 1, LUA_TSTRING);
         size_t length = 0;
-        const char* raw = lua_tolstring(L, 1, &length);
-        // luaL_errorの前なので、std::stringを作らない(NULを含むと、シェルには、その手前までしか届かない)
-        if (length == 0 || std::strlen(raw) != length) {
-            luaL_error(L, "spawn_shell: expected a non-empty command line without NUL characters");
-            return 0;
-        }
+        const char* raw = CheckCommandLineArg(L, 1, "spawn_shell", &length);
         CheckPathArray(L, 2, "spawn_shell");
         const bool has_what = lua_gettop(L) >= 3 && !lua_isnil(L, 3);
         if (has_what) Script::CheckArgType(L, 3, LUA_TSTRING);
@@ -2131,6 +2142,57 @@ namespace miata {
             lua_pushboolean(L, false);
             return 1;
         }
+        lua_pushboolean(L, true);
+        return 1;
+    }
+
+    // Miata._private.run_shell(command, paths, [label]) -> boolean
+    // spawn_shell と同じ起動のしかた(/bin/sh -c。paths は位置パラメータ)で、待たずに起動して、標準出力・標準エラーを、
+    // コンソールに流す(ShellJobManager。標準出力は通常の行、標準エラーは赤い行。毎ティック、読める分だけ読む)。
+    // label(省略・nil なら command)は、コンソールに出す「実行した行」: 起動できたら「$ label」を 1 行足し、非 0 で終わったら、
+    // 赤い行「終了コード N: label」を出す。**ダイアログにはしない**(出力もエラーも、コンソールにある。grep の「一致なし」の
+    // ような、失敗ではない非 0 でも、キー入力を奪わない)。0 で終わったら、何も出さない。
+    // 起動できなかったとき(posix_spawn の失敗など)だけ、ダイアログで知らせて false。
+    // cd の前置きを付けるのと、コマンドラインの検査は、呼ぶ側の Lua(shell)の仕事: これは、できあがったコマンドを起動するだけ。
+    int Application::lua_private_run_shell(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        size_t length = 0;
+        const char* raw = CheckCommandLineArg(L, 1, "run_shell", &length);
+        CheckPathArray(L, 2, "run_shell");
+        const bool has_label = lua_gettop(L) >= 3 && !lua_isnil(L, 3);
+        if (has_label && lua_type(L, 3) != LUA_TSTRING) {
+            luaL_error(L, "run_shell: label must be a string");
+            return 0;
+        }
+
+        // ここから先はluaL_errorを呼ばない(std::stringなどを作るため)
+        const std::string command(raw, length);
+        std::vector<std::string> arguments;
+        for (const auto& path : ReadPathArray(L, 2)) arguments.push_back(path.string());
+        std::string label = command;
+        if (has_label) {
+            size_t label_length = 0;
+            const char* label_raw = lua_tolstring(L, 3, &label_length);
+            label.assign(label_raw, label_length);
+        }
+        // 1 行にする(複数行のコマンドでも、エコーと、終了の知らせは、1 行ずつ)。LogError は、改行で行が分かれる
+        for (char& c : label) {
+            if (c == '\n' || c == '\r') c = ' ';
+        }
+
+        auto result = app.shell_jobs_.Start(command, arguments, [label](int exit_code) {
+            // メインスレッドで、Update(毎ティック)の中から呼ばれる。そのコマンドの出力の行は、もう足されている
+            if (exit_code != 0) LogError(std::format("終了コード {}: {}", exit_code, label));
+        });
+        if (!result) {
+            app.view_->ReportFileError("コマンドを起動できませんでした", FileError{.message = result.error()});
+            lua_pushboolean(L, false);
+            return 1;
+        }
+        // 実行した行。出力の行と同じ入口(AppendLine)で足す: 標準出力の書きかけの行(print の途中)と、つながらない。
+        // 出力を読むのは、次のティックからなので、必ず、出力の行より前になる
+        models::ConsoleLog::Instance().AppendLine(models::LogKind::Normal, "$ " + label);
         lua_pushboolean(L, true);
         return 1;
     }

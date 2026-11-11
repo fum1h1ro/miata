@@ -11,6 +11,7 @@
 #include "views/View.h"
 #include "views/StatusBarState.h"
 #include "FileOperation.h"
+#include "ShellJob.h"
 
 namespace miata {
     class Application {
@@ -139,6 +140,7 @@ namespace miata {
         static int lua_private_open_paths(lua_State* L);
         static int lua_private_reveal_paths(lua_State* L);
         static int lua_private_spawn_shell(lua_State* L);
+        static int lua_private_run_shell(lua_State* L);
 
         static int lua_color_index(lua_State* L);
         static int lua_color_newindex(lua_State* L);
@@ -168,6 +170,8 @@ namespace miata {
         std::vector<misc::SubscriptionGuard> subscriptions_;
 
         FileOperationManager file_operations_;
+        // 起動したコマンド(Miata.command.shell)の出力を、コンソールに流す。毎ティック Update する
+        ShellJobManager shell_jobs_{models::ConsoleLog::Instance()};
 
 
     };
