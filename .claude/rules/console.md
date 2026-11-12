@@ -42,22 +42,23 @@ paths:
 - **書き戻しは、毎回 `fflush` する**: `exit()` の flush は、FILE の並びの順に走るので、差し替えた FILE の最後の未完の行（改行の無い出力）は、元の FILE が先に flush された後に届きうる。flush しないと、その分が失われる。出力先がパイプやファイルのときは、1 行ごとに `write(2)` が 1 回
 - 差し替えた FILE と cookie は、**解放しない**（プロセスの終わりまで。`exit()` が flush するのは、静的破棄の後でもありうる）。`ConsoleLog::Instance()` も、同じ理由で、`new` して解放しない
 - `funopen` が失敗したら、何も変えずに `false`（コンソールは空のまま。端末への出力は、これまでどおり）。差し替えた FILE の `fileno()` は -1（コードベースに `fileno` / `isatty` の使用は無い）
-- **拾えないもの**: 子プロセスの出力（fd を継承したもの。`os.execute`・fzf・エディタ）、`NSLog`（fd 2 へ直接）、`write(1, ...)` の直叩き、`std::cout` / `std::cerr`（libc++ は、構築時の FILE* を握る。コードベースに使用は無い）
+- **拾えないもの**: 子プロセスの出力（fd を継承したもの。`os.execute`・fzf・エディタ。**`Miata.command.shell`（`x`）で起動したコマンドだけは、この仕組みとは別に、パイプで受けて、`AppendLine` で足す**=`.claude/rules/shell-command.md`）、`NSLog`（fd 2 へ直接）、`write(1, ...)` の直叩き、`std::cout` / `std::cerr`（libc++ は、構築時の FILE* を握る。コードベースに使用は無い）
 - **行バッファ**なので、改行の無い出力は、改行か `fflush` まで、コールバックに届かない。届いた分は、`ConsoleLog` が未完の行として持ち越す（出さない）
 
 ## 行の受け口（`ConsoleLog`）
 
 - **1 行 = `{seq, kind, text}`**。`seq` は通し番号（0 から。古い行を捨てても、`Clear` しても、振り直さない）。欠番が「捨てた」印になる（`ConsoleView` が、スクロール位置の補正に使う）。`kind` は、標準出力が Normal、標準エラーが Error。容器は `std::deque`
-- **世代 `Epoch()`**（atomic。ロックしない）: 見える内容が変わるたびに進む（行が確定した `Write`・中身のある `Clear`・行を捨てた `SetLimit`）。未完の行だけの書き込み・空の `Clear`・変わらない `SetLimit` では進まない。`ConsoleView::Sync` は、毎ティック、まずこれだけを比べる（ロックしない）。変わっていたときだけ、`Range` / `Lines` で（ロックして）読む
+- **世代 `Epoch()`**（atomic。ロックしない）: 見える内容が変わるたびに進む（行が確定した `Write`・`AppendLine`・中身のある `Clear`・行を捨てた `SetLimit`）。未完の行だけの書き込み・空の `Clear`・変わらない `SetLimit` では進まない。`ConsoleView::Sync` は、毎ティック、まずこれだけを比べる（ロックしない）。変わっていたときだけ、`Range` / `Lines` で（ロックして）読む
 - **整形は、確定のとき 1 回だけ**（`SanitizeLine`。純関数）: 末尾の CR を除く・不正な UTF-8 を U+FFFD にする（`RepairUtf8`。NSString にすると nil になって落ちるため）・NUL と C0 制御文字と DEL を空白にする・タブを空白 4 個にする・C1 制御文字（NEL を含む）と行区切り・段落区切り（U+2028 / 2029）を空白にする（画面に出すと、行を壊す）・2048 バイトを超えたら、文字の途中を避けて切って「…」を付ける。書き込みの境で、UTF-8 の文字が割れても、行が揃ってから直すので壊れない。`SanitizeBarText`（ステータスバー用。1024 バイトで切り、タブを 1 空白にする）は流用しない
 - **未完の行**（改行を待つ間）は、種類ごとに持つ。上限は `kMaxRawBytes` = `kMaxLineBytes + 1`（末尾の CR の分: 足さないと、ちょうど 2048 バイトの行が CRLF で終わるとき、CR のせいで「長すぎて捨てた」ことになり、要らない「…」が付く）。超えた分は捨てて、次の改行まで何も足さない（印 `truncated` は、確定のとき「…」になる。切った位置が文字の途中だと、欠けた文字は U+FFFD になるが、raw は上限いっぱいあるので、整形の後の切り詰めで落ちる。極端に縮む行=C1 制御文字や U+2028 だらけの行でだけ、「…」の前に U+FFFD が残りうる。許容している）
 - **他方の種類の未完の行は、先に 1 行として確定する**（標準出力の途中の行に、標準エラーの行が割り込んだとき、書いた順に並ぶように）。空の書き込みは、何もしない。`print('head', 壊れた __tostring)` は、標準の `print` が、先頭の引数だけを先に書いてしまうため、`head` が、次の標準出力の行の頭にくっつく（既知の限界。`print` は差し替えていない）
+- **`AppendLine(kind, raw, truncated)` は、完結した 1 行を足す、もう 1 つの入口**（起動したコマンドの出力の行。`ShellJobManager`）。**`Write` の未完の行には、触れない**（続きにもしないし、確定もしない）: 未完の行は、種類ごとに 1 つを、全部の書き手が共有するので、別の書き手の行を `Write` に渡すと、`print` の書きかけの行（`io.write("abc")` の後など）につながる。整形は、`Write` と同じ `SanitizeLine`（行の中の改行は、空白になる）。世代は、1 行ごとに進む。バイト列を行に分けるのは、呼ぶ側（`LineAssembler`。`.claude/rules/shell-command.md`）
 - **上限 `SetLimit`**: 1〜`kMaxLimit`（100000）に丸める。古い行から捨てる（広げても、捨てた行は戻らない）。**呼ばれるまで（設定の読み込み中）は `kMaxLimit` で持つ**ので、後から詰めても、最初から同じ上限で持っていたのと同じ中身になる（`PathHistory` のように、注入されるまで 0 にしてはいけない: `init.lua` の最上位の `print` が、設定を読む前に来る）。`Application` が、`InitializeScript()` の直後に `SetLimit(Config::ConsoleMaxLines())` を渡す（`ConsoleLog` は Config を知らない）。設定の読み込みがエラーでも、既定か、エラーの前に決めた値のまま
 - `Config::kConsoleMaxLinesMax` と `ConsoleLog::kMaxLimit` は同じ値（`Application.cc` の `static_assert`。`Config.h` は `ConsoleLog.h` を include しない）。最悪のメモリは、上限 × 2KB 程度
 
 ## エラーの集約（`Script` と `LogError`）
 
-- **`Script` はログを知らない**。キー関数（コルーチン）の失敗を値（`ThreadError{label, message}`）で返し、`Application` が文面を作る: `error: key <キー>: <メッセージ>`（`ReportThreadError`）。設定の読み込みのエラーは `error: <ConfigError::Describe()>`（ダイアログと同じ文面。Lua は長いパスを `...` で縮めるので、メッセージに完全なパスが含まれないときは、ファイル名を足す）、ステータスバーの関数は `statusbar: <理由>`（ラッチは残す）、警告は `warning: <テキスト>`、ファイル操作などの失敗は `View::ReportFileError` の `reason` そのまま（ダイアログに加えて `LogError`。権限の案内は、ダイアログだけ）。**ダイアログにはしない**（キー入力を奪う。ステータスバーの Lua のエラーと同じ決め）
+- **`Script` はログを知らない**。キー関数（コルーチン）の失敗を値（`ThreadError{label, message}`）で返し、`Application` が文面を作る: `error: key <キー>: <メッセージ>`（`ReportThreadError`）。設定の読み込みのエラーは `error: <ConfigError::Describe()>`（ダイアログと同じ文面。Lua は長いパスを `...` で縮めるので、メッセージに完全なパスが含まれないときは、ファイル名を足す）、ステータスバーの関数は `statusbar: <理由>`（ラッチは残す）、警告は `warning: <テキスト>`、ファイル操作などの失敗は `View::ReportFileError` の `reason` そのまま（ダイアログに加えて `LogError`。権限の案内は、ダイアログだけ）、`shell`（`x`）で起動したコマンドの非 0 の終了は `終了コード N: <実行した行>`（`shell-command.md`）。**ダイアログにはしない**（キー入力を奪う。ステータスバーの Lua のエラーと同じ決め）
 - **`Script::Settle(name, param, status)` が、`lua_resume` の結果の扱いを 1 か所にまとめる**（最初の区間も、`Script::Update` が進めた後続の区間も同じ。確認のダイアログの後のコードは後続の区間なので、結果を必ず `Settle` に通す: 見ないと、エラーはどこにも出ない）。成功・待ち（`LUA_OK` / `LUA_YIELD`）: 積まれた戻り値を `lua_pop(nresult_)` で捨てる（積んだままにすると、同じコルーチンを使い回すたびに積み上がり、いつか `stack overflow` になる）。失敗: **スタックが生きているうちに**エラーを読み（`lua_resume` は巻き戻さず、エラーの値を先頭に残す）、`lua_closethread` で閉じ（`__close` の変数があれば、ここで走る）、`lua_settop(0)`・`status_ = LUA_OK` に戻す。**`status_` を戻さないと、後続の区間で失敗したコルーチンを、毎ティック再開し続ける**
 - **罠: 新しいコルーチンは、レジストリに固定する（`luaL_ref`）。メインスレッドのスタックに積んだままにしない**（`InvokeRefFunctionOnThread`）。`lua_newthread` も `lua_rawgeti` も、スタックの空きを確かめない（`api_incr_top` は、`LUA_USE_APICHECK` の時だけ検査する）。ホストの C++ から使えるのは、`LUA_MINSTACK`（20）個まで。新しい名前のキー列のたびに 1 つ積み上げると、20 個を超えたところで契約違反になり、スタックの配列（初期 40 + 5）を超えると、ヒープを壊す。コルーチンの寿命は、`threads_`（C++ の map）ではなく、レジストリの参照が保つ
 - **罠: 失敗したコルーチンを閉じ直さないと、同じキーを押し直したとき、関数が実行されない**（`lua_closethread` は、閉じる前の古いエラー状態をそのまま返す。実行されずに、古いエラーが返り、次の押下でやっと動く）。`Settle` が毎回閉じるので、押すたびに関数が実行され、エラーも毎回出る
@@ -83,7 +84,7 @@ paths:
 
 ## 限界・既知
 
-- 子プロセスの出力・`NSLog` は取れない。改行の無い出力は、改行か flush まで出ない。`print` の `__tostring` のエラーで、先頭の引数が次の行にくっつく
+- 子プロセスの出力（`shell` で起動したもの以外）・`NSLog` は取れない。改行の無い出力は、改行か flush まで出ない。`print` の `__tostring` のエラーで、先頭の引数が次の行にくっつく
 - 保護外の Lua のエラー（panic）は、いまも、メッセージ無しの `abort()`
 - 窓の高さがとても低いと、コンソールは出ない（ブラウザ領域に 120pt を残す）。高さをドラッグでは変えられない
 - 実行中に `set_console_max_lines` を縮める経路は無い（起動時だけ）。足すなら、観測者で `ConsoleLog::SetLimit` を呼ぶだけ

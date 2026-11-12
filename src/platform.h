@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <cstdint>
+#include <sys/types.h>
 #include "FileError.h"
 
 struct Color4f {
@@ -156,6 +157,22 @@ std::expected<void, std::string> pl_spawn_shell_command(
     const std::vector<std::string>& arguments,
     std::function<void(int exit_code, const std::string& error_output)> on_exit
 );
+
+// pl_spawn_shell_piped が起動したプロセスと、その出力の読み口
+struct PipedProcess {
+    pid_t pid = -1;
+    // 子の標準出力・標準エラーにつないだパイプの、読み口。非ブロッキング(O_NONBLOCK: 空なら、read は EAGAIN)。
+    // 閉じるのは、受け取った側
+    int stdout_fd = -1;
+    int stderr_fd = -1;
+};
+// シェルのコマンドライン(/bin/sh -c command)を、待たずに起動して、標準出力・標準エラーを、パイプで受ける。
+// 起動のしかたは、pl_spawn_shell_command と同じ(arguments は位置パラメータ・標準入力は /dev/null・PATH に Homebrew などの
+// bin を足す・子は自分のプロセスグループ・0 / 1 / 2 以外の記述子は渡さない)。違うのは、出力の受け方だけ:
+// **出力を読むのも、終了を回収する(waitpid)のも、受け取った側の仕事**(ShellJobManager)。読まなければ、パイプが詰まって、
+// 子の書き込みが待つ。読み口を閉じると、子(と、出力の口を引き継いだ孫)は、次の書き込みで SIGPIPE を受ける。
+// 起動できなければ unexpected(パイプは、閉じてある)。
+std::expected<PipedProcess, std::string> pl_spawn_shell_piped(const std::string& command, const std::vector<std::string>& arguments);
 
 struct CustomDialogCheckbox {
     std::string label;

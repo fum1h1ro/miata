@@ -75,6 +75,36 @@ namespace miata {
         lua_pop(L, 2); // selected, select
     }
 
+    // tidx にあるテーブル(dialog_open の "inputtext" の options)を検証して、caret(開いた直後のキャレット)を返す。
+    // message / initial_text は、文字列か nil。caret は、"select_all"(全選択。nil も)か "start"(先頭)。不正なら luaL_error
+    // (Lua のエラー。ダイアログは開かない)。CheckCustomDialogSelect と同じく、C++ のオブジェクト(std::string)を作る前に呼ぶ:
+    // この後の読み取り(GetTableField)は、エラーにならない
+    static views::TextCaret CheckInputTextOptions(lua_State* L, int tidx)
+    {
+        tidx = lua_absindex(L, tidx);
+        for (const char* key : {"message", "initial_text"}) {
+            lua_getfield(L, tidx, key);
+            if (!lua_isnil(L, -1) && lua_type(L, -1) != LUA_TSTRING) {
+                luaL_error(L, "dialog_input: %s must be a string", key);
+            }
+            lua_pop(L, 1);
+        }
+
+        views::TextCaret caret = views::TextCaret::SelectAll;
+        lua_getfield(L, tidx, "caret");
+        if (!lua_isnil(L, -1)) {
+            const char* name = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "";
+            if (std::strcmp(name, "start") == 0) {
+                caret = views::TextCaret::Start;
+            }
+            else if (std::strcmp(name, "select_all") != 0) {
+                luaL_error(L, "dialog_input: caret must be \"select_all\" or \"start\"");
+            }
+        }
+        lua_pop(L, 1);
+        return caret;
+    }
+
     // tidx にあるテーブル(title/message/buttons/checkboxes/select)から CustomDialogSpec を組み立てる。
     // select は CheckCustomDialogSelect で検証済みの前提で、エラーを投げない読み取りにしてある。
     // 文字列は、UTF-8 として不正なバイトを U+FFFD に置き換える(そのままだと NSString にできず、ラベルの作成で例外になる)。
@@ -341,6 +371,7 @@ namespace miata {
             { "open_paths", lua_private_open_paths },
             { "reveal_paths", lua_private_reveal_paths },
             { "spawn_shell", lua_private_spawn_shell },
+            { "run_shell", lua_private_run_shell },
         };
         script.RegisterFunctions(
             "Miata._private",
@@ -404,6 +435,9 @@ namespace miata {
     void Application::Update()
     {
         file_operations_.Update();
+        // 起動したコマンド(Miata.command.shell)の出力を読んで、コンソールの受け口に足す。終了の知らせ(赤い行)も、ここで出る。
+        // 画面への反映は、このティックの下の UpdateConsole
+        shell_jobs_.Update();
         // ダイアログなどで待っていたキー関数を進める。その後の区間の失敗(確認のダイアログの後が、ほとんど)も、ここでログに出る
         for (const auto& error : Script::Instance().Update()) ReportThreadError(error);
         view_->CheckDialogState();
@@ -2056,6 +2090,20 @@ namespace miata {
         return detail.empty() ? std::format("終了コード {}", exit_code) : std::format("終了コード {}\n{}", exit_code, detail);
     }
 
+    // スタックの idx の、シェルのコマンドライン(文字列。空でなく、NUL を含まないこと)を検証して、返す(Lua が持つ文字列を指す)。
+    // 不正なら Lua のエラー(function は、エラー文の頭に付ける名前)。NUL を含むと、シェルには、その手前までしか届かない。
+    // luaL_error の前に呼べるよう、std::string は作らない(string_view は、デストラクタを持たない)
+    static std::string_view CheckCommandLineArg(lua_State* L, int idx, const char* function)
+    {
+        size_t length = 0;
+        const char* raw = lua_type(L, idx) == LUA_TSTRING ? lua_tolstring(L, idx, &length) : nullptr;
+        if (!raw || length == 0 || std::strlen(raw) != length) {
+            luaL_error(L, "%s: expected a non-empty command line without NUL characters", function);
+            return {};
+        }
+        return std::string_view(raw, length);
+    }
+
     // Miata._private.spawn_shell(command, paths, [what]) -> boolean
     // commandは、シェルのコマンドライン(1行。/bin/sh -c で実行する。空でなく、NULを含まないこと)。pathsは、絶対パスの
     // 文字列の配列(空でもよい)で、シェルの位置パラメータ(command の中の "$@")として、別の引数で渡す。**シェルの構文
@@ -2064,24 +2112,18 @@ namespace miata {
     // 待たずに起動する(pl_spawn_shell_command)。起動の要求を出せたらtrue。起動できなかったとき、と、あとで非0の
     // 終了コードで終わったときは、whatを見出し(省略・nilなら「コマンドが失敗しました」)にして、ダイアログで知らせる
     // (終了コードと、標準エラーの先頭)。権限の案内は付けない(エディタが失敗したのは、Miataの権限の問題ではない)。
-    // %f を "$@" に置き換える仕事と、検査は、呼ぶ側の Lua(edit)の仕事: これは、できあがったコマンドを起動するだけ。
+    // %f を "$@" に置き換える仕事と、その検査は、呼ぶ側の Lua(edit)の仕事: これは、できあがったコマンドを起動するだけ
+    // (ここで見るのは、文字列か・空でないか・NUL を含まないか、だけ)。
     int Application::lua_private_spawn_shell(lua_State* L)
     {
         auto& app = Application::Instance();
-        Script::CheckArgType(L, 1, LUA_TSTRING);
-        size_t length = 0;
-        const char* raw = lua_tolstring(L, 1, &length);
-        // luaL_errorの前なので、std::stringを作らない(NULを含むと、シェルには、その手前までしか届かない)
-        if (length == 0 || std::strlen(raw) != length) {
-            luaL_error(L, "spawn_shell: expected a non-empty command line without NUL characters");
-            return 0;
-        }
+        const std::string_view command_arg = CheckCommandLineArg(L, 1, "spawn_shell");
         CheckPathArray(L, 2, "spawn_shell");
         const bool has_what = lua_gettop(L) >= 3 && !lua_isnil(L, 3);
         if (has_what) Script::CheckArgType(L, 3, LUA_TSTRING);
 
         // ここから先はluaL_errorを呼ばない(std::stringなどを作るため)
-        const std::string command(raw, length);
+        const std::string command(command_arg);
         std::vector<std::string> arguments;
         for (const auto& path : ReadPathArray(L, 2)) arguments.push_back(path.string());
         std::string what = "コマンドが失敗しました";
@@ -2101,6 +2143,53 @@ namespace miata {
             lua_pushboolean(L, false);
             return 1;
         }
+        lua_pushboolean(L, true);
+        return 1;
+    }
+
+    // Miata._private.run_shell(command, paths, label) -> boolean
+    // spawn_shell と同じ起動のしかた(/bin/sh -c。paths は位置パラメータ)で、待たずに起動して、標準出力・標準エラーを、
+    // コンソールに流す(ShellJobManager。標準出力は通常の行、標準エラーは赤い行。毎ティック、読める分だけ読む)。
+    // label(文字列)は、コンソールに出す「実行した行」: 起動できたら「$ label」を 1 行足し、非 0 で終わったら、
+    // 赤い行「終了コード N: label」を出す。**ダイアログにはしない**(出力もエラーも、コンソールにある。grep の「一致なし」の
+    // ような、失敗ではない非 0 でも、キー入力を奪わない)。0 で終わったら、何も出さない。
+    // 起動できなかったとき(posix_spawn の失敗など)だけ、ダイアログで知らせて false。
+    // cd の前置きを付けるのと、「空白だけ」の検査は、呼ぶ側の Lua(shell)の仕事: これは、できあがったコマンドを起動するだけ
+    // (ここで見るのは、文字列か・空でないか・NUL を含まないか、だけ)。
+    int Application::lua_private_run_shell(lua_State* L)
+    {
+        auto& app = Application::Instance();
+        const std::string_view command_arg = CheckCommandLineArg(L, 1, "run_shell");
+        CheckPathArray(L, 2, "run_shell");
+        if (lua_type(L, 3) != LUA_TSTRING) {
+            luaL_error(L, "run_shell: label must be a string");
+            return 0;
+        }
+
+        // ここから先はluaL_errorを呼ばない(std::stringなどを作るため)
+        const std::string command(command_arg);
+        std::vector<std::string> arguments;
+        for (const auto& path : ReadPathArray(L, 2)) arguments.push_back(path.string());
+        size_t label_length = 0;
+        const char* label_raw = lua_tolstring(L, 3, &label_length);
+        std::string label(label_raw, label_length);
+        // 1 行にする(複数行のコマンドでも、エコーと、終了の知らせは、1 行ずつ)。LogError は、改行で行が分かれる
+        for (char& c : label) {
+            if (c == '\n' || c == '\r') c = ' ';
+        }
+
+        auto result = app.shell_jobs_.Start(command, arguments, [label](int exit_code) {
+            // メインスレッドで、Update(毎ティック)の中から呼ばれる。そのコマンドの出力の行は、もう足されている
+            if (exit_code != 0) LogError(std::format("終了コード {}: {}", exit_code, label));
+        });
+        if (!result) {
+            app.view_->ReportFileError("コマンドを起動できませんでした", FileError{.message = result.error()});
+            lua_pushboolean(L, false);
+            return 1;
+        }
+        // 実行した行。出力の行と同じ入口(AppendLine)で足す: 標準出力の書きかけの行(print の途中)と、つながらない。
+        // 出力を読むのは、次のティックからなので、必ず、出力の行より前になる
+        models::ConsoleLog::Instance().AppendLine(models::LogKind::Normal, "$ " + label);
         lua_pushboolean(L, true);
         return 1;
     }
@@ -2149,14 +2238,18 @@ namespace miata {
             return 1;
         }
         else if (type_string == "inputtext") {
-            auto message = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "message", "");
-            auto initial_text = Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "initial_text", "");
+            const views::TextCaret caret = CheckInputTextOptions(L, 2); // 検証してから、std::string を作る
+            // 文字列は、UTF-8 として不正なバイトを U+FFFD に置き換える(そのままだと NSString にできず、ラベルの作成で例外になる。
+            // message には、フォルダのパスなど、ファイルシステムから来た文字列が入りうる)
+            auto message = RepairUtf8(Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "message", ""));
+            auto initial_text = RepairUtf8(Script::GetTableField<std::string, LUA_TSTRING>(L, 2, "initial_text", ""));
 
             auto dialog = std::make_shared<views::InputTextDialog>(
                 [](views::IDialog&) {},
                 views::InputTextDialog::arguments{
                     .message_ = message,
                     .initial_text_ = initial_text,
+                    .caret_ = caret,
                 }
             );
             auto dialog_ptr = Script::PushSharedUserdata<views::InputTextDialog>(L, dialog);

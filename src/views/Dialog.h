@@ -16,6 +16,12 @@ namespace miata::views {
         float height = 0;
     };
 
+    // 1 行の入力欄(DialogPanel::AddInputField)を開いた直後の、キャレットと選択
+    enum class TextCaret {
+        SelectAll, // 全部を選択する(打つと、初めの値を置き換える)
+        Start,     // 先頭にキャレットを置き、何も選択しない(初めの値の前に、打ち足す)
+    };
+
     // ダイアログの背景パネルと、方向キーでフォーカス移動できるコントロール群を管理する。
     // NSView操作の実体はDialog.mmに閉じ込め、ヘッダはAppKit型に依存しない。
     class DialogPanel {
@@ -45,6 +51,14 @@ namespace miata::views {
         // 直前にAddTextFieldで作ったフィールドにdelegateを設定する
         // (id<NSTextFieldDelegate>を(__bridge void*)で渡す。ヘッダをAppKit非依存に保つため)。
         void SetTextFieldDelegate(void* delegate);
+        // 1 行の入力欄(InputTextDialog 用)。AddTextField との違い:
+        //  - 折り返さず、横にスクロールする(長い文字列でも 1 行のまま)。Option+Return の改行と、Tab は受け付けない
+        //    (改行は、欄を何行にも伸ばす。Tab は、欄の文字を全部選択して、次の 1 打で消してしまう)
+        //  - Enter は enter_id、Esc は escape_id の項目(AddButton の戻り値)を選んだことになる(on_button_ に、次のランループで
+        //    届く)。入力欄が first responder の間、キーは MiataRootView に届かず、Dialog モードのキーバインド(<enter> / <esc>)が
+        //    効かないので、欄の側で受ける。IME の変換中の Enter / Esc は、IME が受ける(ここには来ない)
+        //  - 開いた直後(Layout)のキャレットは caret
+        void AddInputField(const std::string& initial, TextCaret caret, int enter_id, int escape_id);
         // 任意のNSView(void*で受け渡す)を積み上げレイアウトに埋め込む。
         // AddButton等の定型コントロールに当てはまらない用途向けの最小限のエスケープハッチ。
         // フォーカス可能リストには入れない(埋め込んだビュー自身がキー入力を処理する想定)。
@@ -132,11 +146,13 @@ namespace miata::views {
         int no_id_ = -1;
     };
 
+    // 1 行の入力欄と、「キャンセル」「OK」のボタン。Enter は OK、Esc はキャンセル(DialogPanel::AddInputField)
     class InputTextDialog : public IDialog {
     public:
         struct arguments {
             std::string message_;
             std::string initial_text_;
+            TextCaret caret_ = TextCaret::SelectAll; // 開いた直後のキャレット
         };
         InputTextDialog(std::function<void(IDialog&)> on_close, const arguments& args);
         // キャンセル時は nullopt
@@ -149,6 +165,7 @@ namespace miata::views {
         arguments args_;
         std::optional<std::string> result_;
         int ok_id_ = -1;
+        int cancel_id_ = -1;
     };
 
     class CustomDialog : public IDialog {

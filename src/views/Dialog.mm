@@ -32,6 +32,46 @@
 }
 @end
 
+// 1 行の入力欄(DialogPanel::AddInputField)の delegate。Enter / Esc を、ボタンを選んだことにして、Tab を握りつぶす。
+// 入力欄が first responder の間、キーは MiataRootView::keyDown: に届かない(Dialog モードの <enter> / <esc> の
+// キーバインドが効かない)ので、欄の側で受ける。doCommandBySelector: は、IME の変換中は呼ばれない(変換の確定の Enter や、
+// 取り消しの Esc は、IME が受ける。FilterListDialog.mm・QueryBar.mm と同じ作法)。
+@interface _MiataInputFieldDelegate : NSObject <NSTextFieldDelegate>
+// DialogPanel::Impl が持つ。パネルを隠したら nullptr にする(次のランループに逃がしたブロックが、隠した後に呼ぶのを防ぐ)
+@property (nonatomic, assign) miata::views::DialogPanel* panel;
+@property (nonatomic, assign) int enterId;
+@property (nonatomic, assign) int escapeId;
+@end
+@implementation _MiataInputFieldDelegate
+// control_id の項目を選んだことにする。確定・取り消しは、ダイアログを閉じる(入力欄と、この delegate を手放す)ので、
+// doCommandBySelector: の呼び出しの中では行わず、次のランループへ逃がす(_MiataControlTarget::fire: と同じ理由)。
+// OK ボタンの keyEquivalent(Return)と重なって 2 回届いても、2 回目は IDialog が捨てる(閉じた後の通知)
+- (void)choose:(int)control_id
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        auto* panel = self.panel;
+        if (panel && panel->on_button_) panel->on_button_(control_id);
+    });
+}
+- (BOOL)control:(NSControl*)control textView:(NSTextView*)textView doCommandBySelector:(SEL)commandSelector
+{
+    if (commandSelector == @selector(insertNewline:)) {
+        [self choose:self.enterId];
+        return YES;
+    }
+    if (commandSelector == @selector(cancelOperation:)) {
+        [self choose:self.escapeId];
+        return YES;
+    }
+    // Tab / Shift-Tab: 既定では、欄の文字を全部選択する(次の 1 打で、全部消える)。
+    // (Option+Return / Ctrl+Return の改行は、欄の 1 行の設定(usesSingleLineMode)が、入れさせない)
+    if (commandSelector == @selector(insertTab:) || commandSelector == @selector(insertBacktab:)) {
+        return YES;
+    }
+    return NO;
+}
+@end
+
 // 選択リストの行の、文字の左右の余白。ObjC のクラスは C++ の名前空間の外に置くので、定数もここに置く
 static const CGFloat kSelectRowTextInset = 8;
 
@@ -161,6 +201,9 @@ struct DialogPanel::Impl {
     NSMutableArray<NSButton*>* buttons = nil;
     NSMutableArray<_MiataControlTarget*>* targets = nil; // ARCでretainさせるための保持
     NSTextField* text_field = nil;
+    // AddInputField の入力欄の delegate(NSTextField の delegate は weak 参照なので、ここで持つ)と、開いた直後のキャレット
+    _MiataInputFieldDelegate* input_delegate = nil;
+    TextCaret caret = TextCaret::SelectAll;
 
     struct Focusable {
         NSView* view;
@@ -350,6 +393,10 @@ void DialogPanel::Hide()
     impl_->focusables.clear();
     impl_->buttons = nil;
     impl_->targets = nil;
+    // 入力欄の delegate は、次のランループに逃がしたブロックが、まだ持っていることがある: パネルを指さないようにしてから手放す
+    impl_->input_delegate.panel = nullptr;
+    impl_->input_delegate = nil;
+    impl_->caret = TextCaret::SelectAll;
     impl_->text_field = nil;
     impl_->focus_index = -1;
     impl_->initial_focus_id = -1;
@@ -439,7 +486,7 @@ void DialogPanel::AddTextField(const std::string& initial)
     impl_->EnsureBackground();
     CGFloat avail = impl_->panel_width - kPadding * 2;
     NSTextField* field = [[NSTextField alloc] initWithFrame:NSMakeRect(kPadding, impl_->cursor_y, avail, kRowHeight)];
-    field.stringValue = @(initial.c_str());
+    field.stringValue = @(initial.c_str()); // UTF-8 として正しい前提(Lua からの文字列は、Application.cc が修復する)
     [impl_->background addSubview:field];
     impl_->cursor_y += kRowHeight + kRowSpacing;
     impl_->text_field = field;
@@ -449,6 +496,25 @@ void DialogPanel::SetTextFieldDelegate(void* delegate)
 {
     if (!impl_->text_field) return;
     impl_->text_field.delegate = (__bridge id<NSTextFieldDelegate>)delegate;
+}
+
+void DialogPanel::AddInputField(const std::string& initial, TextCaret caret, int enter_id, int escape_id)
+{
+    AddTextField(initial);
+    NSTextField* field = impl_->text_field;
+    // 1 行のまま、横にスクロールする。既定では、欄の幅を超えた文字は、欄の中で折り返して、2 行目から先が見えなくなり、
+    // Option+Return / Ctrl+Return で、欄に改行が入る。スクロールにすると、折り返しは止まる(wraps と lineBreakMode も、
+    // それに合わせて変わる)。1 行のモードは、改行を入れさせない
+    [field.cell setScrollable:YES];
+    [field.cell setUsesSingleLineMode:YES];
+
+    _MiataInputFieldDelegate* delegate = [[_MiataInputFieldDelegate alloc] init];
+    delegate.panel = this;
+    delegate.enterId = enter_id;
+    delegate.escapeId = escape_id;
+    field.delegate = delegate;
+    impl_->input_delegate = delegate;
+    impl_->caret = caret;
 }
 
 void DialogPanel::AddCustomView(void* native_view, float height)
@@ -527,6 +593,12 @@ void DialogPanel::Layout()
 
     if (impl_->text_field) {
         [content.window makeFirstResponder:impl_->text_field];
+        // first responder にした時点で、AppKit が、欄の文字を全部選択する(TextCaret::SelectAll は、そのまま)。
+        // 先頭に置くなら、その後で、欄のエディタの選択を書き換える(前に書いても、全選択で上書きされる。エディタが付くのも、
+        // first responder にした後)。ウィンドウに載っていないなどで、エディタが無ければ(nil)、何も起きない
+        if (impl_->caret == TextCaret::Start) {
+            impl_->text_field.currentEditor.selectedRange = NSMakeRange(0, 0);
+        }
     } else if (!impl_->focusables.empty()) {
         // 指定が無ければ(initial_focus_id が -1)先頭
         impl_->focus_index = impl_->FocusIndexOf(impl_->initial_focus_id);
@@ -630,14 +702,20 @@ InputTextDialog::InputTextDialog(std::function<void(IDialog&)> on_close, const a
 void InputTextDialog::OnOpen()
 {
     panel_.Show("", args_.message_, GetIdealSize());
-    panel_.AddTextField(args_.initial_text_);
+    // ボタンは、登録した順に、左から並ぶ(「キャンセル」「OK」。OK が右で、既定)。画面では、入力欄の下
+    // (ボタンの行は、Layout が最後に置く)。入力欄より先に作るのは、欄の Enter / Esc に、ボタンの ID を渡すため
+    cancel_id_ = panel_.AddButton("キャンセル", false);
     ok_id_ = panel_.AddButton("OK", true);
+    panel_.AddInputField(args_.initial_text_, args_.caret_, ok_id_, cancel_id_);
 }
 void InputTextDialog::OnButton(int button_id)
 {
     if (button_id == ok_id_) {
         result_ = panel_.GetTextFieldValue();
         CloseDialog();
+    }
+    else if (button_id == cancel_id_) {
+        OnCancel();
     }
 }
 void InputTextDialog::OnCancel()

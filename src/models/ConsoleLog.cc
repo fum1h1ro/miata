@@ -107,16 +107,21 @@ namespace miata::models {
         partial.truncated = true;
     }
 
-    void ConsoleLog::CommitLocked(LogKind kind)
+    void ConsoleLog::PushLineLocked(LogKind kind, std::string text)
     {
-        Partial& partial = partials_[static_cast<size_t>(kind)];
-        LogLine line{next_seq_, kind, SanitizeLine(partial.raw, partial.truncated)};
-        partial.raw.clear();
-        partial.truncated = false;
-        lines_.push_back(std::move(line));
+        lines_.push_back(LogLine{next_seq_, kind, std::move(text)});
         ++next_seq_;
         // 1 行ずつ捨てる(1 回の Write が巨大でも、上限を超えて膨らまない)
         while (lines_.size() > limit_) lines_.pop_front();
+    }
+
+    void ConsoleLog::CommitLocked(LogKind kind)
+    {
+        Partial& partial = partials_[static_cast<size_t>(kind)];
+        std::string text = SanitizeLine(partial.raw, partial.truncated);
+        partial.raw.clear();
+        partial.truncated = false;
+        PushLineLocked(kind, std::move(text));
     }
 
     bool ConsoleLog::HasPendingLocked(LogKind kind) const
@@ -150,6 +155,18 @@ namespace miata::models {
                 bytes.remove_prefix(newline + 1);
             }
             if (committed) epoch_.fetch_add(1, std::memory_order_release);
+        }
+        catch (...) {
+        }
+    }
+
+    void ConsoleLog::AppendLine(LogKind kind, std::string_view raw, bool truncated) noexcept
+    {
+        try {
+            std::string text = SanitizeLine(raw, truncated); // 整形は、ロックの外(未完の行を見ないので、順序に関わらない)
+            std::lock_guard<std::mutex> lock(mutex_);
+            PushLineLocked(kind, std::move(text));
+            epoch_.fetch_add(1, std::memory_order_release);
         }
         catch (...) {
         }
